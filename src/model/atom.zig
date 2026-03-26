@@ -21,7 +21,7 @@ pub const Atom = struct {
     serial: u32 = 0,
 
     pub fn nameSlice(self: *const Atom) []const u8 {
-        return self.name[0..self.name_len];
+        return self.name[0..@min(@as(usize, self.name_len), 4)];
     }
 
     pub fn setName(self: *Atom, name: []const u8) void {

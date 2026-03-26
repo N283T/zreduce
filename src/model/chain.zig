@@ -12,7 +12,7 @@ pub const Chain = struct {
     residue_end: u32 = 0,
 
     pub fn labelSlice(self: *const Chain) []const u8 {
-        return self.label_asym_id[0..self.label_asym_id_len];
+        return self.label_asym_id[0..@min(@as(usize, self.label_asym_id_len), 4)];
     }
 
     pub fn setLabelAsymId(self: *Chain, id: []const u8) void {
@@ -23,7 +23,7 @@ pub const Chain = struct {
     }
 
     pub fn authSlice(self: *const Chain) []const u8 {
-        return self.auth_asym_id[0..self.auth_asym_id_len];
+        return self.auth_asym_id[0..@min(@as(usize, self.auth_asym_id_len), 4)];
     }
 
     pub fn setAuthAsymId(self: *Chain, id: []const u8) void {

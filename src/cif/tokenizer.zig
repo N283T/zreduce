@@ -9,6 +9,7 @@ pub const TokenType = enum {
     value, // unquoted, single-quoted, double-quoted, or semicolon-delimited
     save_begin, // save_FRAMENAME
     save_end, // save_
+    invalid, // unterminated quoted string or text field
     eof,
 };
 
@@ -64,17 +65,16 @@ pub const Tokenizer = struct {
             return .{ .type = .loop, .start = start, .end = end };
         }
 
-        if (word.len > 5 and std.ascii.startsWithIgnoreCase(word, "data_")) {
+        if (word.len >= 5 and std.ascii.startsWithIgnoreCase(word, "data_")) {
             return .{ .type = .data, .start = start, .end = end };
         }
 
-        if (word.len > 5 and std.ascii.startsWithIgnoreCase(word, "save_")) {
+        if (word.len >= 5 and std.ascii.startsWithIgnoreCase(word, "save_")) {
+            // Bare "save_" (length 5) marks end of save frame; longer is save_begin
+            if (word.len == 5) {
+                return .{ .type = .save_end, .start = start, .end = end };
+            }
             return .{ .type = .save_begin, .start = start, .end = end };
-        }
-
-        // Bare "save_" with nothing after it marks end of save frame
-        if (std.ascii.eqlIgnoreCase(word, "save_")) {
-            return .{ .type = .save_end, .start = start, .end = end };
         }
 
         return .{ .type = .value, .start = start, .end = end };
@@ -132,8 +132,8 @@ pub const Tokenizer = struct {
             self.pos += 1;
         }
 
-        // Unterminated text field — return what we have
-        return .{ .type = .value, .start = content_start, .end = self.pos };
+        // Unterminated text field
+        return .{ .type = .invalid, .start = content_start, .end = self.pos };
     }
 
     /// Read a single- or double-quoted string.
@@ -160,7 +160,7 @@ pub const Tokenizer = struct {
         }
 
         // Unterminated quoted string
-        return .{ .type = .value, .start = content_start, .end = self.pos };
+        return .{ .type = .invalid, .start = content_start, .end = self.pos };
     }
 
     fn readTag(self: *Tokenizer) Token {
@@ -257,4 +257,36 @@ test "skip comments" {
 
     const t3 = tok.next();
     try std.testing.expectEqual(TokenType.eof, t3.type);
+}
+
+test "tokenize save frame" {
+    const source = "save_myframe\n_tag val\nsave_\n";
+    var tok = Tokenizer.init(source);
+
+    const t0 = tok.next();
+    try std.testing.expectEqual(TokenType.save_begin, t0.type);
+    try std.testing.expectEqualStrings("save_myframe", t0.text(source));
+
+    _ = tok.next(); // _tag
+    _ = tok.next(); // val
+
+    const t3 = tok.next();
+    try std.testing.expectEqual(TokenType.save_end, t3.type);
+    try std.testing.expectEqualStrings("save_", t3.text(source));
+}
+
+test "unterminated quoted string returns invalid" {
+    const source = "'hello world";
+    var tok = Tokenizer.init(source);
+
+    const t0 = tok.next();
+    try std.testing.expectEqual(TokenType.invalid, t0.type);
+}
+
+test "unterminated text field returns invalid" {
+    const source = ";\nsome text without closing\n";
+    var tok = Tokenizer.init(source);
+
+    const t0 = tok.next();
+    try std.testing.expectEqual(TokenType.invalid, t0.type);
 }

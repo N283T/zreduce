@@ -15,6 +15,8 @@ const Chain = model_mod.Chain;
 pub const MmcifError = error{
     NoAtomSiteLoop,
     MissingCoordinateField,
+    InvalidCoordinateValue,
+    CifParseError,
     OutOfMemory,
 };
 
@@ -38,7 +40,10 @@ const AtomSiteColumns = struct {
 
 /// Parse an mmCIF source string and extract all _atom_site records into a Model.
 pub fn parseModel(allocator: Allocator, source: []const u8) MmcifError!Model {
-    var doc = cif.readString(allocator, source) catch return MmcifError.OutOfMemory;
+    var doc = cif.readString(allocator, source) catch |err| switch (err) {
+        error.OutOfMemory => return MmcifError.OutOfMemory,
+        else => return MmcifError.CifParseError,
+    };
     defer doc.deinit();
 
     if (doc.blocks.items.len == 0) return MmcifError.NoAtomSiteLoop;
@@ -82,13 +87,13 @@ pub fn parseModel(allocator: Allocator, source: []const u8) MmcifError!Model {
     var in_residue = false;
 
     for (0..nrows) |row| {
-        const x_str = loop.val(row, cols.cartn_x.?) orelse "0";
-        const y_str = loop.val(row, cols.cartn_y.?) orelse "0";
-        const z_str = loop.val(row, cols.cartn_z.?) orelse "0";
+        const x_str = loop.val(row, cols.cartn_x.?) orelse return MmcifError.InvalidCoordinateValue;
+        const y_str = loop.val(row, cols.cartn_y.?) orelse return MmcifError.InvalidCoordinateValue;
+        const z_str = loop.val(row, cols.cartn_z.?) orelse return MmcifError.InvalidCoordinateValue;
 
-        const x = cif.asFloatOr(x_str, 0.0);
-        const y = cif.asFloatOr(y_str, 0.0);
-        const z = cif.asFloatOr(z_str, 0.0);
+        const x = cif.asFloat(x_str) orelse return MmcifError.InvalidCoordinateValue;
+        const y = cif.asFloat(y_str) orelse return MmcifError.InvalidCoordinateValue;
+        const z = cif.asFloat(z_str) orelse return MmcifError.InvalidCoordinateValue;
 
         // Get string fields
         const type_sym = if (cols.type_symbol) |c| cif.asString(loop.val(row, c) orelse ".") else "";
@@ -207,4 +212,76 @@ test "parse tiny mmCIF" {
     try testing.expectApproxEqAbs(mdl.atoms.items[0].pos.x, 1.0, 1e-3);
     try testing.expectApproxEqAbs(mdl.atoms.items[0].pos.y, 2.0, 1e-3);
     try testing.expectEqualStrings("ALA", mdl.residues.items[0].compIdSlice());
+}
+
+test "parse multi-chain multi-residue mmCIF" {
+    const source = @embedFile("test_data/multi_chain.cif");
+    var mdl = try parseModel(testing.allocator, source);
+    defer mdl.deinit();
+
+    // 11 atoms total
+    try testing.expectEqual(@as(usize, 11), mdl.atoms.items.len);
+    // 3 residues: ALA(A/1), GLY(A/2), VAL(B/1)
+    try testing.expectEqual(@as(usize, 3), mdl.residues.items.len);
+    // 2 chains: A and B
+    try testing.expectEqual(@as(usize, 2), mdl.chains.items.len);
+
+    // Chain A: residues 0-1, atoms 0-7
+    try testing.expectEqualStrings("A", mdl.chains.items[0].labelSlice());
+    try testing.expectEqual(@as(u32, 0), mdl.chains.items[0].residue_start);
+    try testing.expectEqual(@as(u32, 2), mdl.chains.items[0].residue_end);
+
+    // Chain B: residue 2, atoms 8-10
+    try testing.expectEqualStrings("B", mdl.chains.items[1].labelSlice());
+    try testing.expectEqual(@as(u32, 2), mdl.chains.items[1].residue_start);
+    try testing.expectEqual(@as(u32, 3), mdl.chains.items[1].residue_end);
+
+    // Residue 0: ALA, atoms 0-3
+    try testing.expectEqualStrings("ALA", mdl.residues.items[0].compIdSlice());
+    try testing.expectEqual(@as(u32, 0), mdl.residues.items[0].atom_start);
+    try testing.expectEqual(@as(u32, 4), mdl.residues.items[0].atom_end);
+
+    // Residue 1: GLY, atoms 4-7
+    try testing.expectEqualStrings("GLY", mdl.residues.items[1].compIdSlice());
+    try testing.expectEqual(@as(u32, 4), mdl.residues.items[1].atom_start);
+    try testing.expectEqual(@as(u32, 8), mdl.residues.items[1].atom_end);
+
+    // Residue 2: VAL, atoms 8-10
+    try testing.expectEqualStrings("VAL", mdl.residues.items[2].compIdSlice());
+    try testing.expectEqual(@as(u32, 8), mdl.residues.items[2].atom_start);
+    try testing.expectEqual(@as(u32, 11), mdl.residues.items[2].atom_end);
+
+    // Last atom coordinate check
+    try testing.expectApproxEqAbs(mdl.atoms.items[10].pos.x, 13.0, 1e-3);
+}
+
+test "error: no atom_site loop" {
+    const source = "data_EMPTY\n_entry.id EMPTY\n";
+    const result = parseModel(testing.allocator, source);
+    try testing.expectError(MmcifError.NoAtomSiteLoop, result);
+}
+
+test "error: missing coordinate field" {
+    const source =
+        \\data_BAD
+        \\loop_
+        \\_atom_site.label_atom_id
+        \\CA
+    ;
+    const result = parseModel(testing.allocator, source);
+    // No Cartn_x → NoAtomSiteLoop (findLoop won't find it)
+    try testing.expectError(MmcifError.NoAtomSiteLoop, result);
+}
+
+test "error: invalid coordinate value" {
+    const source =
+        \\data_BAD
+        \\loop_
+        \\_atom_site.Cartn_x
+        \\_atom_site.Cartn_y
+        \\_atom_site.Cartn_z
+        \\1.0 2.0 abc
+    ;
+    const result = parseModel(testing.allocator, source);
+    try testing.expectError(MmcifError.InvalidCoordinateValue, result);
 }

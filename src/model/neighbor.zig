@@ -65,10 +65,11 @@ pub const CellList = struct {
         const ny: u32 = @max(1, @as(u32, @intFromFloat(@ceil((y_max - y_min) / cell_size))));
         const nz: u32 = @max(1, @as(u32, @intFromFloat(@ceil((z_max - z_min) / cell_size))));
 
-        const total_cells = nx * ny * nz;
+        const total_cells = std.math.mul(u32, nx, ny) catch return error.GridTooLarge;
+        const total_cells_3d = std.math.mul(u32, total_cells, nz) catch return error.GridTooLarge;
 
         // Count atoms per cell (counting sort phase 1).
-        const counts = try allocator.alloc(u32, total_cells);
+        const counts = try allocator.alloc(u32, total_cells_3d);
         defer allocator.free(counts);
         @memset(counts, 0);
 
@@ -77,10 +78,10 @@ pub const CellList = struct {
             counts[cell] += 1;
         }
 
-        // Build prefix sum (offsets array has total_cells+1 entries).
-        const cell_offsets = try allocator.alloc(u32, total_cells + 1);
+        // Build prefix sum (offsets array has total_cells_3d+1 entries).
+        const cell_offsets = try allocator.alloc(u32, total_cells_3d + 1);
         cell_offsets[0] = 0;
-        for (0..total_cells) |i| {
+        for (0..total_cells_3d) |i| {
             cell_offsets[i + 1] = cell_offsets[i] + counts[i];
         }
 
@@ -161,9 +162,8 @@ pub const CellList = struct {
                     const end = self.cell_offsets[cell + 1];
 
                     for (self.atom_indices[start..end]) |idx| {
-                        const p = positions[idx];
-                        const dist2 = query.distance(p) * query.distance(p);
-                        if (dist2 <= r2) {
+                        const diff = query.sub(positions[idx]);
+                        if (diff.dot(diff) <= r2) {
                             try result.append(allocator, idx);
                         }
                     }

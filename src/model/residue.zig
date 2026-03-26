@@ -15,7 +15,7 @@ pub const Residue = struct {
     entity_type: EntityType = .unknown,
 
     pub fn compIdSlice(self: *const Residue) []const u8 {
-        return self.comp_id[0..self.comp_id_len];
+        return self.comp_id[0..@min(@as(usize, self.comp_id_len), 3)];
     }
 
     pub fn setCompId(self: *Residue, id: []const u8) void {

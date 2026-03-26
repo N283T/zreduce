@@ -93,11 +93,15 @@ pub fn readString(allocator: Allocator, source: []const u8) !Document {
                 try block.items.append(allocator, .{ .loop = loop });
             },
 
-            // save frames: skip for now
+            // save frames: skip for now (CIF dictionaries use these)
             .save_begin, .save_end => {},
 
+            // Unterminated quoted string or text field
+            .invalid => return error.UnterminatedValue,
+
             .value => {
-                // Bare value outside a loop/pair context — ignore (malformed CIF)
+                // Bare value outside a loop/pair context indicates malformed CIF
+                return error.UnexpectedValue;
             },
         }
     }
