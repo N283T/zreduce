@@ -10,6 +10,9 @@ pub const Orientation = mover.Orientation;
 pub const rotator = @import("rotator.zig");
 pub const flipper = @import("flipper.zig");
 pub const clique = @import("clique.zig");
+pub const optimizer = @import("optimizer.zig");
+pub const OptConfig = optimizer.OptConfig;
+pub const OptResult = optimizer.OptResult;
 
 test {
     @import("std").testing.refAllDecls(@This());

@@ -104,7 +104,7 @@ pub fn scoreAtom(
 /// Check if an overlap qualifies as an H-bond.
 /// Requires one atom to be a donor (H) and the other an acceptor,
 /// and the overlap must be within the H-bond gap threshold.
-fn isHBond(flags_a: element.AtomFlags, flags_b: element.AtomFlags, gap: f32, params: ScoringParams) bool {
+pub fn isHBond(flags_a: element.AtomFlags, flags_b: element.AtomFlags, gap: f32, params: ScoringParams) bool {
     const a_donor = flags_a.donor;
     const b_donor = flags_b.donor;
     const a_acc = flags_a.acceptor;
