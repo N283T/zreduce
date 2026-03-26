@@ -9,6 +9,7 @@ pub const MoverKind = mover.MoverKind;
 pub const Orientation = mover.Orientation;
 pub const rotator = @import("rotator.zig");
 pub const flipper = @import("flipper.zig");
+pub const clique = @import("clique.zig");
 
 test {
     @import("std").testing.refAllDecls(@This());
