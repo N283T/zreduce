@@ -1,0 +1,119 @@
+//! Mover interface and types for hydrogen optimization.
+//! A Mover controls one or more atoms and provides a set of discrete orientations.
+
+const std = @import("std");
+const math_mod = @import("../math.zig");
+const model_mod = @import("../model.zig");
+const Vec3 = math_mod.Vec3;
+const Atom = model_mod.Atom;
+
+pub const MoverKind = enum(u4) {
+    single_h_rotator, // OH, SH, SeH — 12 orientations at 30° intervals
+    nh3_rotator, // NH3+ — 3 orientations (120° spacing)
+    methyl_rotator, // CH3 — 3 orientations (60° stagger from initial)
+    aromatic_methyl, // Aromatic CH3 — same as methyl
+    amide_flip, // Asn/Gln — 2 orientations (original + O↔N swap)
+    his_flip, // His — 6 orientations (2 flip × 3 protonation)
+};
+
+pub const Orientation = struct {
+    positions: []Vec3(f32), // atom positions for this orientation
+    penalty: f32 = 0.0,
+};
+
+pub const Mover = struct {
+    kind: MoverKind,
+    residue_idx: u32,
+    atom_indices: []u32, // indices into model.atoms that this mover controls
+    orientations: []Orientation,
+    best_orientation: u16 = 0,
+    current_orientation: u16 = 0,
+    allocator: std.mem.Allocator,
+
+    pub fn deinit(self: *Mover) void {
+        for (self.orientations) |o| {
+            self.allocator.free(o.positions);
+        }
+        self.allocator.free(self.orientations);
+        self.allocator.free(self.atom_indices);
+    }
+
+    /// Apply the given orientation: update atom positions in the model.
+    pub fn applyOrientation(self: *const Mover, atoms: []Atom, idx: u16) void {
+        const orient = self.orientations[idx];
+        for (self.atom_indices, 0..) |ai, i| {
+            atoms[ai].pos = orient.positions[i];
+        }
+    }
+
+    /// Get the penalty for a given orientation.
+    pub fn orientationPenalty(self: *const Mover, idx: u16) f32 {
+        return self.orientations[idx].penalty;
+    }
+
+    pub fn nOrientations(self: *const Mover) u16 {
+        return @intCast(self.orientations.len);
+    }
+};
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+const testing = std.testing;
+
+test "Mover applyOrientation updates atom positions" {
+    const allocator = testing.allocator;
+
+    var atoms = [_]Atom{
+        .{ .pos = .{ .x = 2.0, .y = 0.0, .z = 0.0 } },
+    };
+
+    const positions = try allocator.alloc(Vec3(f32), 1);
+    positions[0] = .{ .x = 0.0, .y = 2.0, .z = 0.0 };
+
+    const orientations = try allocator.alloc(Orientation, 1);
+    orientations[0] = .{ .positions = positions, .penalty = 0.0 };
+
+    const atom_indices = try allocator.alloc(u32, 1);
+    atom_indices[0] = 0;
+
+    var mover = Mover{
+        .kind = .single_h_rotator,
+        .residue_idx = 0,
+        .atom_indices = atom_indices,
+        .orientations = orientations,
+        .allocator = allocator,
+    };
+    defer mover.deinit();
+
+    mover.applyOrientation(&atoms, 0);
+    try testing.expectApproxEqAbs(@as(f32, 0.0), atoms[0].pos.x, 0.001);
+    try testing.expectApproxEqAbs(@as(f32, 2.0), atoms[0].pos.y, 0.001);
+}
+
+test "Mover nOrientations" {
+    const allocator = testing.allocator;
+
+    const pos0 = try allocator.alloc(Vec3(f32), 1);
+    pos0[0] = .{ .x = 1.0, .y = 0.0, .z = 0.0 };
+    const pos1 = try allocator.alloc(Vec3(f32), 1);
+    pos1[0] = .{ .x = 0.0, .y = 1.0, .z = 0.0 };
+
+    const orientations = try allocator.alloc(Orientation, 2);
+    orientations[0] = .{ .positions = pos0, .penalty = 0.0 };
+    orientations[1] = .{ .positions = pos1, .penalty = 0.5 };
+
+    const atom_indices = try allocator.alloc(u32, 1);
+    atom_indices[0] = 0;
+
+    var mover = Mover{
+        .kind = .single_h_rotator,
+        .residue_idx = 0,
+        .atom_indices = atom_indices,
+        .orientations = orientations,
+        .allocator = allocator,
+    };
+    defer mover.deinit();
+
+    try testing.expectEqual(@as(u16, 2), mover.nOrientations());
+    try testing.expectApproxEqAbs(@as(f32, 0.5), mover.orientationPenalty(1), 0.001);
+}
