@@ -229,7 +229,8 @@ pub fn parseComponentDict(allocator: Allocator, source: []const u8) !ComponentDi
             .data => {
                 try builder.flush(&dict);
                 builder.reset();
-                builder.comp_id = token.text(source)[5..];
+                const text = token.text(source);
+                builder.comp_id = if (text.len > 5) text[5..] else "";
             },
 
             .tag => {

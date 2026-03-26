@@ -49,8 +49,9 @@ pub fn addHydrogens(
             result.n_residues += 1;
         } else if (ccd_dict) |dict| {
             if (dict.get(comp_id)) |component| {
-                const existing = collectAtomNames(mdl, res);
-                const plans = het.derivePlans(mdl.allocator, &component, existing) catch continue;
+                const existing = collectAtomNames(mdl.allocator, mdl, res) catch continue;
+                defer mdl.allocator.free(existing);
+                const plans = try het.derivePlans(mdl.allocator, &component, existing);
                 defer mdl.allocator.free(plans);
 
                 for (plans) |plan| {
@@ -286,18 +287,14 @@ fn findAtomBetween(mdl: *const Model, res: Residue, name1: [4]u8, name2: [4]u8) 
 }
 
 /// Collect existing atom names in a residue as [4]u8 arrays.
-fn collectAtomNames(mdl: *const Model, res: Residue) []const [4]u8 {
-    const max_atoms = 256;
-    const S = struct {
-        var buf: [max_atoms][4]u8 = undefined;
-    };
-
+/// Caller must free the returned slice with the provided allocator.
+fn collectAtomNames(allocator: std.mem.Allocator, mdl: *const Model, res: Residue) ![][4]u8 {
     const atoms = mdl.atoms.items[res.atom_start..res.atom_end];
-    const count = @min(atoms.len, max_atoms);
-    for (0..count) |i| {
-        S.buf[i] = atoms[i].name;
+    const result = try allocator.alloc([4]u8, atoms.len);
+    for (atoms, 0..) |a, i| {
+        result[i] = a.name;
     }
-    return S.buf[0..count];
+    return result;
 }
 
 /// Append a new hydrogen atom to the model.

@@ -154,3 +154,24 @@ test "type6 HXY bond length preserved" {
     const h = placeHXY(center, neighbor, 1.08);
     try testing.expectApproxEqAbs(h.distance(center), 1.08, 1e-6);
 }
+
+test "type2 H2XR2 bond length and distinct positions" {
+    const center = Vec3(f64){ .x = 0.0, .y = 0.0, .z = 0.0 };
+    const n1 = Vec3(f64){ .x = 1.5, .y = 0.0, .z = 0.0 };
+    const n2 = Vec3(f64){ .x = 0.0, .y = 1.5, .z = 0.0 };
+    const h1 = placeH2XR2(center, n1, n2, 1.10, 109.5, 120.0);
+    const h2 = placeH2XR2(center, n1, n2, 1.10, 109.5, -120.0);
+    // Both should have correct bond length
+    try testing.expectApproxEqAbs(h1.distance(center), 1.10, 0.05);
+    try testing.expectApproxEqAbs(h2.distance(center), 1.10, 0.05);
+    // Different dihedrals should produce distinct positions
+    try testing.expect(h1.distance(h2) > 0.1);
+}
+
+test "type5 HXR2Frac bond length" {
+    const a1 = Vec3(f64){ .x = 0.0, .y = 0.0, .z = 0.0 };
+    const a2 = Vec3(f64){ .x = 1.5, .y = 0.0, .z = 0.0 };
+    const a3 = Vec3(f64){ .x = 0.0, .y = 1.5, .z = 0.0 };
+    const h = placeHXR2Frac(a1, a2, a3, 1.02, 0.5);
+    try testing.expectApproxEqAbs(h.distance(a1), 1.02, 0.05);
+}

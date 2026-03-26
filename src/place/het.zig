@@ -338,28 +338,24 @@ fn findSecondReference(component: *const ccd.Component, heavy_idx: u16, first_re
 }
 
 /// Estimate dihedral angle for H placement from ideal coordinates.
+/// TODO: Implement actual dihedral computation from CCD ideal coordinates.
+/// Currently returns a fixed heuristic value (120.0 degrees).
 fn estimateDihedral(component: *const ccd.Component, h_atom: ccd.CompAtom, heavy_idx: u16, ref_name: [4]u8) f32 {
     _ = component;
+    _ = h_atom;
     _ = heavy_idx;
     _ = ref_name;
-    // Use ideal coordinates if available, otherwise use standard values
-    if (h_atom.ideal_x != 0.0 or h_atom.ideal_y != 0.0 or h_atom.ideal_z != 0.0) {
-        // Approximate from ideal coords — for now, use a simple heuristic
-        return 120.0;
-    }
     return 120.0;
 }
 
 /// Estimate dihedral from ideal coordinates of the H and heavy atoms.
+/// TODO: Implement actual dihedral computation from CCD ideal coordinates.
+/// Currently returns a fixed heuristic value (180.0 degrees).
 fn estimateDihedralFromIdeal(component: *const ccd.Component, h_atom: ccd.CompAtom, heavy_atom: ccd.CompAtom, ref_name: [4]u8) f32 {
-    // Try to compute actual dihedral from ideal coordinates
     _ = component;
+    _ = h_atom;
+    _ = heavy_atom;
     _ = ref_name;
-    if ((h_atom.ideal_x != 0.0 or h_atom.ideal_y != 0.0 or h_atom.ideal_z != 0.0) and
-        (heavy_atom.ideal_x != 0.0 or heavy_atom.ideal_y != 0.0 or heavy_atom.ideal_z != 0.0))
-    {
-        return 180.0;
-    }
     return 180.0;
 }
 
