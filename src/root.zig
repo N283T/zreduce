@@ -8,7 +8,9 @@ pub const mmcif = @import("mmcif.zig");
 pub const place = @import("place.zig");
 pub const ccd = @import("ccd.zig");
 pub const optimize = @import("optimize/optimize.zig");
+pub const writer = @import("writer.zig");
 
 test {
     @import("std").testing.refAllDecls(@This());
+    _ = @import("integration_test.zig");
 }
