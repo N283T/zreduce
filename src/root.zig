@@ -12,4 +12,5 @@ pub const writer = @import("writer.zig");
 
 test {
     @import("std").testing.refAllDecls(@This());
+    _ = @import("integration_test.zig");
 }
