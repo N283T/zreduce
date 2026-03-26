@@ -100,8 +100,10 @@ pub fn findCliques(allocator: Allocator, graph: *const InteractionGraph) ![][]u3
         try queue.append(allocator, @intCast(i));
         visited[i] = true;
 
-        while (queue.items.len > 0) {
-            const node = queue.orderedRemove(0);
+        var read_idx: usize = 0;
+        while (read_idx < queue.items.len) {
+            const node = queue.items[read_idx];
+            read_idx += 1;
             try component.append(allocator, node);
             for (graph.adjacency[node]) |neighbor| {
                 if (!visited[neighbor]) {

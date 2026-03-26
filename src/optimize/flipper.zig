@@ -42,7 +42,6 @@ fn computeAmideNH2(n_pos: Vec3(f32), c_pos: Vec3(f32), o_pos: Vec3(f32)) [2]Vec3
 /// n_idx: index of the N atom (ND2 or NE2)
 /// h1_idx, h2_idx: indices of the two H atoms on N
 /// c_idx: index of the C atom (CG or CD) for H recalculation
-/// cb_idx: index of the reference atom for plane definition (CB or CG)
 pub fn createAmideFlipper(
     allocator: std.mem.Allocator,
     atoms: []const Atom,
@@ -51,7 +50,6 @@ pub fn createAmideFlipper(
     h1_idx: u32,
     h2_idx: u32,
     c_idx: u32,
-    cb_idx: u32,
     residue_idx: u32,
 ) !Mover {
     const o_pos = atoms[o_idx].pos;
@@ -59,8 +57,6 @@ pub fn createAmideFlipper(
     const h1_pos = atoms[h1_idx].pos;
     const h2_pos = atoms[h2_idx].pos;
     const c_pos = atoms[c_idx].pos;
-    // cb_idx used as reference for plane definition (same role as o in geometry)
-    _ = cb_idx;
 
     // Orientation 0: original positions (O, N, H1, H2)
     const pos0 = try allocator.alloc(Vec3(f32), 4);
@@ -251,7 +247,7 @@ test "amide flipper has 2 orientations" {
         .{ .pos = .{ .x = -1.0, .y = -1.0, .z = 0.0 } }, // 5: CB
     };
 
-    var mover = try createAmideFlipper(allocator, &atoms, 0, 1, 2, 3, 4, 5, 7);
+    var mover = try createAmideFlipper(allocator, &atoms, 0, 1, 2, 3, 4, 7);
     defer mover.deinit();
 
     try testing.expectEqual(@as(usize, 2), mover.orientations.len);
@@ -271,7 +267,7 @@ test "amide flipper swaps O and N positions" {
         .{ .pos = .{ .x = -1.0, .y = -1.0, .z = 0.0 } }, // 5: CB
     };
 
-    var mover = try createAmideFlipper(allocator, &atoms, 0, 1, 2, 3, 4, 5, 0);
+    var mover = try createAmideFlipper(allocator, &atoms, 0, 1, 2, 3, 4, 0);
     defer mover.deinit();
 
     const orient0 = mover.orientations[0];

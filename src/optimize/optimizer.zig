@@ -62,9 +62,13 @@ pub fn optimize(
             result.n_singletons += 1;
         } else if (totalStates(movers, clq) <= config.brute_force_limit) {
             // Brute force: enumerate all combinations
-            optimizeBruteForce(allocator, movers, clq, model, config) catch {
-                // Fallback to greedy if allocation fails
-                for (clq) |mi| optimizeSingleton(movers, mi, model, config);
+            optimizeBruteForce(allocator, movers, clq, model, config) catch |err| switch (err) {
+                error.OutOfMemory => {
+                    // Fallback to greedy on allocation failure
+                    for (clq) |mi| optimizeSingleton(movers, mi, model, config);
+                    result.n_vertex_cut += 1;
+                    continue;
+                },
             };
             result.n_brute_force += 1;
         } else {
@@ -194,6 +198,7 @@ fn scoreMover(
     model: *const Model,
     config: OptConfig,
 ) f32 {
+    _ = movers;
     _ = mover_idx;
     var total: f32 = 0;
     const atoms = model.atoms.items;
@@ -211,7 +216,6 @@ fn scoreMover(
             if (dist2 < sum_r2) {
                 const dist = @sqrt(dist2);
                 const gap = dist - sum_r;
-                // Check H-bond
                 if (scorer_mod.isHBond(a.flags, other.flags, gap, config.scoring_params)) {
                     total += config.scoring_params.hb_weight * (-0.5 * gap);
                 } else {
@@ -220,36 +224,10 @@ fn scoreMover(
             } else {
                 const threshold = sum_r + 0.5;
                 if (dist2 < threshold * threshold) {
-                    // Contact region
                     const dist = @sqrt(dist2);
                     const gap = dist - sum_r;
                     const ratio = gap / config.scoring_params.gap_scale;
                     total += @exp(-ratio * ratio);
-                }
-            }
-        }
-    }
-    // Also check interactions with other movers' atoms
-    for (movers) |*other_m| {
-        if (@intFromPtr(other_m) == @intFromPtr(m)) continue;
-        for (m.atom_indices) |ai| {
-            const a = atoms[ai];
-            for (other_m.atom_indices) |bi| {
-                if (ai == bi) continue;
-                const b = atoms[bi];
-                const diff = a.pos.sub(b.pos);
-                const dist2 = diff.dot(diff);
-                const sum_r = a.vdw_radius + b.vdw_radius;
-                const sum_r2 = sum_r * sum_r;
-
-                if (dist2 < sum_r2) {
-                    const dist = @sqrt(dist2);
-                    const gap = dist - sum_r;
-                    if (scorer_mod.isHBond(a.flags, b.flags, gap, config.scoring_params)) {
-                        total += config.scoring_params.hb_weight * (-0.5 * gap);
-                    } else {
-                        total -= config.scoring_params.bump_weight * (-0.5 * gap);
-                    }
                 }
             }
         }
