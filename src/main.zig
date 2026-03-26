@@ -14,41 +14,43 @@ const Config = struct {
 };
 
 fn parseArgs() ?Config {
-    const args = std.process.argsAlloc(std.heap.page_allocator) catch return null;
-    // Note: we intentionally do not free args; they live for the process lifetime.
+    const args = std.process.argsAlloc(std.heap.page_allocator) catch {
+        std.debug.print("Fatal: cannot read process arguments\n", .{});
+        std.process.exit(2);
+    };
 
     var config = Config{ .input_path = undefined };
     var input_set = false;
-    var i: usize = 1; // skip program name
+    var i: usize = 1;
 
     while (i < args.len) : (i += 1) {
         const arg = args[i];
 
         if (std.mem.eql(u8, arg, "-h") or std.mem.eql(u8, arg, "--help")) {
             printUsage(args[0]);
-            return null;
+            return null; // exit 0
         } else if (std.mem.eql(u8, arg, "-V") or std.mem.eql(u8, arg, "--version")) {
             std.debug.print("zreduce {s}\n", .{build_options.version});
-            return null;
+            return null; // exit 0
         } else if (std.mem.eql(u8, arg, "-o") or std.mem.eql(u8, arg, "--output")) {
             i += 1;
             if (i >= args.len) {
                 std.debug.print("Error: {s} requires a path argument\n", .{arg});
-                return null;
+                std.process.exit(1);
             }
             config.output_path = args[i];
         } else if (std.mem.eql(u8, arg, "-d") or std.mem.eql(u8, arg, "--dict")) {
             i += 1;
             if (i >= args.len) {
                 std.debug.print("Error: {s} requires a path argument\n", .{arg});
-                return null;
+                std.process.exit(1);
             }
             config.dict_path = args[i];
         } else if (std.mem.eql(u8, arg, "--json")) {
             i += 1;
             if (i >= args.len) {
                 std.debug.print("Error: --json requires a path argument\n", .{});
-                return null;
+                std.process.exit(1);
             }
             config.json_path = args[i];
         } else if (std.mem.eql(u8, arg, "--no-opt")) {
@@ -57,11 +59,11 @@ fn parseArgs() ?Config {
             config.no_flip = true;
         } else if (arg.len > 0 and arg[0] == '-') {
             std.debug.print("Error: unknown option '{s}'\n", .{arg});
-            return null;
+            std.process.exit(1);
         } else {
             if (input_set) {
                 std.debug.print("Error: unexpected positional argument '{s}'\n", .{arg});
-                return null;
+                std.process.exit(1);
             }
             config.input_path = arg;
             input_set = true;
@@ -71,7 +73,7 @@ fn parseArgs() ?Config {
     if (!input_set) {
         std.debug.print("Error: missing input file\n", .{});
         printUsage(args[0]);
-        return null;
+        std.process.exit(1);
     }
 
     return config;

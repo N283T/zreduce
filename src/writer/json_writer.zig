@@ -16,8 +16,12 @@ pub fn writeLog(
     chains: []const model_mod.Chain,
 ) !void {
     try out_writer.writeAll("{\n");
-    try out_writer.print("  \"version\": \"{s}\",\n", .{version});
-    try out_writer.print("  \"input\": \"{s}\",\n", .{input_file});
+    try out_writer.writeAll("  \"version\": \"");
+    try writeJsonString(out_writer, version);
+    try out_writer.writeAll("\",\n");
+    try out_writer.writeAll("  \"input\": \"");
+    try writeJsonString(out_writer, input_file);
+    try out_writer.writeAll("\",\n");
     try out_writer.print("  \"hydrogens_added\": {d},\n", .{n_hydrogens});
     try out_writer.writeAll("  \"movers\": [\n");
 
@@ -39,6 +43,26 @@ pub fn writeLog(
     }
 
     try out_writer.writeAll("  ]\n}\n");
+}
+
+/// Write a JSON-escaped string (without surrounding quotes).
+fn writeJsonString(writer: anytype, s: []const u8) !void {
+    for (s) |c| {
+        switch (c) {
+            '"' => try writer.writeAll("\\\""),
+            '\\' => try writer.writeAll("\\\\"),
+            '\n' => try writer.writeAll("\\n"),
+            '\r' => try writer.writeAll("\\r"),
+            '\t' => try writer.writeAll("\\t"),
+            else => {
+                if (c < 0x20) {
+                    try writer.print("\\u{x:0>4}", .{c});
+                } else {
+                    try writer.writeByte(c);
+                }
+            },
+        }
+    }
 }
 
 fn moverKindStr(kind: mover_mod.MoverKind) []const u8 {

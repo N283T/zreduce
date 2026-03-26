@@ -87,7 +87,12 @@ fn writeAtomSite(writer: anytype, model: *const Model) !void {
         const res = model.residues.items[atom.residue_idx];
         const chain = model.chains.items[res.chain_idx];
 
-        const group = "ATOM";
+        // TODO: Store original group_PDB in Atom to preserve HETATM distinction.
+        // For now, infer from entity_type: water and non-polymer are HETATM.
+        const group = switch (res.entity_type) {
+            .water, .non_polymer => "HETATM",
+            else => "ATOM",
+        };
         const elem_str = elementSymbol(atom.element_type);
         const alt: [1]u8 = if (atom.altloc != ' ') [_]u8{atom.altloc} else [_]u8{'.'};
 
