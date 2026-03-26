@@ -5,6 +5,8 @@ pub const element = @import("element.zig");
 pub const cif = @import("cif.zig");
 pub const model = @import("model.zig");
 pub const mmcif = @import("mmcif.zig");
+pub const place = @import("place.zig");
+pub const ccd = @import("ccd.zig");
 
 test {
     @import("std").testing.refAllDecls(@This());
