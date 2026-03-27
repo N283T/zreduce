@@ -119,14 +119,21 @@ pub fn main() !void {
     };
     defer allocator.free(source);
 
-    // 3. Parse mmCIF into model
+    // 3. Parse CIF document (for preserving non-atom_site categories in output)
+    var doc = zreduce.cif.readString(allocator, source) catch |err| {
+        std.debug.print("Error: failed to parse CIF: {s}\n", .{@errorName(err)});
+        std.process.exit(1);
+    };
+    defer doc.deinit();
+
+    // 4. Extract model from CIF
     var mdl = zreduce.mmcif.parseModel(allocator, source) catch |err| {
         std.debug.print("Error: failed to parse mmCIF: {s}\n", .{@errorName(err)});
         std.process.exit(1);
     };
     defer mdl.deinit();
 
-    // 4. Load CCD dictionary (optional)
+    // 5. Load CCD dictionary (optional)
     var ccd_dict: ?zreduce.ccd.ComponentDict = null;
     if (config.dict_path) |dict_path| {
         const dict_source = readFile(allocator, dict_path) catch |err| {
@@ -141,7 +148,7 @@ pub fn main() !void {
     }
     defer if (ccd_dict) |*d| d.deinit();
 
-    // 5. Place hydrogens
+    // 6. Place hydrogens
     const initial_count = mdl.atoms.items.len;
     const place_result = zreduce.place.addHydrogens(&mdl, if (ccd_dict) |*d| d else null) catch |err| {
         std.debug.print("Error: hydrogen placement failed: {s}\n", .{@errorName(err)});
@@ -149,7 +156,7 @@ pub fn main() !void {
     };
     const n_added: u32 = @intCast(mdl.atoms.items.len - initial_count);
 
-    // 6. Optimize (unless --no-opt)
+    // 7. Optimize (unless --no-opt)
     // TODO: Build movers from placement hints, run optimizer.
     if (config.no_opt) {
         std.debug.print("Note: --no-opt has no effect (optimization not yet implemented)\n", .{});
@@ -158,7 +165,7 @@ pub fn main() !void {
         std.debug.print("Note: --no-flip has no effect (optimization not yet implemented)\n", .{});
     }
 
-    // 7. Write output
+    // 8. Write output (preserving original CIF categories)
     var out_buf: [4096]u8 = undefined;
     if (config.output_path) |out_path| {
         const file = std.fs.cwd().createFile(out_path, .{}) catch |err| {
@@ -167,16 +174,16 @@ pub fn main() !void {
         };
         defer file.close();
         var fw = file.writer(&out_buf);
-        try zreduce.writer.mmcif_writer.write(&fw.interface, &mdl, "ZREDUCE");
+        try zreduce.writer.mmcif_writer.writeWithDocument(&fw.interface, &mdl, &doc);
         try fw.interface.flush();
     } else {
         const stdout = std.fs.File.stdout();
         var sw = stdout.writer(&out_buf);
-        try zreduce.writer.mmcif_writer.write(&sw.interface, &mdl, "ZREDUCE");
+        try zreduce.writer.mmcif_writer.writeWithDocument(&sw.interface, &mdl, &doc);
         try sw.interface.flush();
     }
 
-    // 8. Write JSON log (optional)
+    // 9. Write JSON log (optional)
     if (config.json_path) |json_path| {
         var json_buf: [4096]u8 = undefined;
         const file = std.fs.cwd().createFile(json_path, .{}) catch |err| {
@@ -198,7 +205,7 @@ pub fn main() !void {
         try jw.interface.flush();
     }
 
-    // 9. Report summary to stderr
+    // 10. Report summary to stderr
     std.debug.print("zreduce: placed {d} H atoms on {d} residues ({d} skipped)\n", .{
         place_result.n_placed,
         place_result.n_residues,
