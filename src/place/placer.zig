@@ -53,6 +53,20 @@ pub fn addHydrogens(
                     result.n_skipped += 1;
                 }
             }
+
+            // N-terminal: place NH3+/NH2+ instead of single backbone H
+            if (is_nterm) {
+                if (std.mem.eql(u8, comp_id, "PRO")) {
+                    // PRO has secondary amine (CD bonded to N) → NH2+ (2 H)
+                    const placed = try placeNtermNH2Pro(mdl, res, @intCast(res_idx));
+                    result.n_placed += placed;
+                } else {
+                    // Standard NH3+ (3 H)
+                    const placed = try placeNtermNH3(mdl, res, @intCast(res_idx));
+                    result.n_placed += placed;
+                }
+            }
+
             result.n_residues += 1;
         } else if (ccd_dict) |dict| {
             if (dict.get(comp_id)) |component| {
@@ -306,6 +320,78 @@ fn isBackboneH(plan: *const standard.PlacementPlan) bool {
     return false;
 }
 
+/// Append an N-terminal H atom to the model.
+fn appendNtermH(mdl: *Model, h_pos: Vec3f32, name: []const u8, res_idx: u32) !void {
+    const hpol_info = element.AtomType.Hpol.info();
+    var atom = Atom{
+        .pos = h_pos,
+        .element_type = .Hpol,
+        .residue_idx = res_idx,
+        .is_hydrogen = true,
+        .is_added = true,
+        .vdw_radius = hpol_info.explicit_radius,
+        .occupancy = 1.0,
+        .b_factor = 0.0,
+        .flags = .{ .donor = true },
+    };
+    atom.setName(name);
+    try mdl.atoms.append(mdl.allocator, atom);
+}
+
+/// Place NH3+ hydrogens (H1, H2, H3) on the N-terminal residue.
+/// Uses h3xr (dihedral-controlled) placement around the N-CA bond.
+fn placeNtermNH3(mdl: *Model, res: Residue, res_idx: u32) !u32 {
+    const n_pos = findAtomPos(mdl, res, .{ ' ', 'N', ' ', ' ' }) orelse return 0;
+    const ca_pos = findAtomPos(mdl, res, .{ ' ', 'C', 'A', ' ' }) orelse return 0;
+    const c_pos = findAtomPos(mdl, res, .{ ' ', 'C', ' ', ' ' }) orelse return 0;
+
+    const n64 = math_mod.Vec3(f64){ .x = n_pos.x, .y = n_pos.y, .z = n_pos.z };
+    const ca64 = math_mod.Vec3(f64){ .x = ca_pos.x, .y = ca_pos.y, .z = ca_pos.z };
+    const c64 = math_mod.Vec3(f64){ .x = c_pos.x, .y = c_pos.y, .z = c_pos.z };
+
+    const bond_len: f64 = 1.02;
+    const angle_deg: f64 = 109.5;
+    const dihedrals = [3]f64{ 180.0, 60.0, -60.0 };
+    const names = [3][]const u8{ "H1", "H2", "H3" };
+
+    var placed: u32 = 0;
+    for (names, dihedrals) |name, dihedral| {
+        const h64 = geometry.placeH3XR(n64, ca64, c64, bond_len, angle_deg, dihedral);
+        const h_pos = Vec3f32{ .x = @floatCast(h64.x), .y = @floatCast(h64.y), .z = @floatCast(h64.z) };
+        try appendNtermH(mdl, h_pos, name, res_idx);
+        placed += 1;
+    }
+    return placed;
+}
+
+/// Place NH2+ hydrogens (H1, H2) on N-terminal PRO.
+/// PRO has CD bonded to N (secondary amine), so only 2 H positions.
+fn placeNtermNH2Pro(mdl: *Model, res: Residue, res_idx: u32) !u32 {
+    const n_pos = findAtomPos(mdl, res, .{ ' ', 'N', ' ', ' ' }) orelse return 0;
+    const ca_pos = findAtomPos(mdl, res, .{ ' ', 'C', 'A', ' ' }) orelse return 0;
+    const cd_pos = findAtomPos(mdl, res, .{ ' ', 'C', 'D', ' ' }) orelse return 0;
+
+    // PRO N is sp3 with 3 neighbors (CA, CD, and the 2 H).
+    // Use h2xr2 (two H on atom with 2 heavy neighbors).
+    const n64 = math_mod.Vec3(f64){ .x = n_pos.x, .y = n_pos.y, .z = n_pos.z };
+    const ca64 = math_mod.Vec3(f64){ .x = ca_pos.x, .y = ca_pos.y, .z = ca_pos.z };
+    const cd64 = math_mod.Vec3(f64){ .x = cd_pos.x, .y = cd_pos.y, .z = cd_pos.z };
+
+    const bond_len: f64 = 1.02;
+    const angle_deg: f64 = 109.5;
+    const names = [2][]const u8{ "H2", "H3" };
+    const dihedrals = [2]f64{ 120.0, -120.0 };
+
+    var placed: u32 = 0;
+    for (names, dihedrals) |name, dihedral| {
+        const h64 = geometry.placeH2XR2(n64, ca64, cd64, bond_len, angle_deg, dihedral);
+        const h_pos = Vec3f32{ .x = @floatCast(h64.x), .y = @floatCast(h64.y), .z = @floatCast(h64.z) };
+        try appendNtermH(mdl, h_pos, name, res_idx);
+        placed += 1;
+    }
+    return placed;
+}
+
 /// Collect existing atom names in a residue as [4]u8 arrays.
 /// Caller must free the returned slice with the provided allocator.
 fn collectAtomNames(allocator: std.mem.Allocator, mdl: *const Model, res: Residue) ![][4]u8 {
@@ -407,6 +493,6 @@ test "PlacementResult tracks counts" {
 
     const result = try addHydrogens(&mdl, null);
 
-    // ALA has 5 plans but backbone H is skipped on N-terminal residue, so 4
-    try testing.expectEqual(@as(u32, 4), result.n_placed + result.n_skipped);
+    // ALA has 5 plans; backbone H skipped on N-term but NH3+ (H1,H2,H3) added = 4+3=7
+    try testing.expectEqual(@as(u32, 7), result.n_placed + result.n_skipped);
 }
