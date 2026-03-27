@@ -38,8 +38,15 @@ pub fn addHydrogens(
         const res = mdl.residues.items[res_idx];
         const comp_id = res.compIdSlice();
 
+        // Detect N-terminal residue (first residue in its chain)
+        const chain = mdl.chains.items[res.chain_idx];
+        const is_nterm = (res_idx == chain.residue_start);
+
         if (standard.getPlans(comp_id)) |plans| {
             for (plans) |plan| {
+                // Skip backbone amide H on N-terminal residues (NH3+, not NH)
+                if (is_nterm and isBackboneH(&plan)) continue;
+
                 if (try executePlan(mdl, res, @intCast(res_idx), &plan)) {
                     result.n_placed += 1;
                 } else {
@@ -286,6 +293,19 @@ fn findAtomBetween(mdl: *const Model, res: Residue, name1: [4]u8, name2: [4]u8) 
     return null;
 }
 
+/// Check if a placement plan is for the backbone amide H.
+/// The backbone H has name " H  " and is bonded to N with dihedral ref to CA/C.
+fn isBackboneH(plan: *const standard.PlacementPlan) bool {
+    // Backbone amide H: name is "H" (padded), bonded to N
+    const h = plan.h_name;
+    if (h[0] == ' ' and h[1] == 'H' and h[2] == ' ' and h[3] == ' ') return true;
+    // Also check for "H1", "H2", "H3" style (some naming conventions)
+    if (h[0] == ' ' and h[1] == 'H' and h[2] == '1' and h[3] == ' ') return true;
+    if (h[0] == ' ' and h[1] == 'H' and h[2] == '2' and h[3] == ' ') return true;
+    if (h[0] == ' ' and h[1] == 'H' and h[2] == '3' and h[3] == ' ') return true;
+    return false;
+}
+
 /// Collect existing atom names in a residue as [4]u8 arrays.
 /// Caller must free the returned slice with the provided allocator.
 fn collectAtomNames(allocator: std.mem.Allocator, mdl: *const Model, res: Residue) ![][4]u8 {
@@ -387,6 +407,6 @@ test "PlacementResult tracks counts" {
 
     const result = try addHydrogens(&mdl, null);
 
-    // Total placed + skipped should equal number of plans for ALA (5)
-    try testing.expectEqual(@as(u32, 5), result.n_placed + result.n_skipped);
+    // ALA has 5 plans but backbone H is skipped on N-terminal residue, so 4
+    try testing.expectEqual(@as(u32, 4), result.n_placed + result.n_skipped);
 }
