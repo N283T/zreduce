@@ -49,7 +49,7 @@ pub fn addHydrogens(
             result.n_residues += 1;
         } else if (ccd_dict) |dict| {
             if (dict.get(comp_id)) |component| {
-                const existing = collectAtomNames(mdl.allocator, mdl, res) catch continue;
+                const existing = try collectAtomNames(mdl.allocator, mdl, res);
                 defer mdl.allocator.free(existing);
                 const plans = try het.derivePlans(mdl.allocator, &component, existing);
                 defer mdl.allocator.free(plans);
