@@ -82,40 +82,53 @@ fn writeAtomSite(writer: anytype, model: *const Model) !void {
         \\
     );
 
+    // Write atoms grouped by residue: heavy atoms first, then added H atoms.
+    // The placer appends H atoms at the end of model.atoms, so we need to
+    // reorder output so each residue's H atoms follow its heavy atoms.
     var serial: u32 = 1;
-    for (model.atoms.items) |atom| {
-        const res = model.residues.items[atom.residue_idx];
-        const chain = model.chains.items[res.chain_idx];
-
-        // TODO: Store original group_PDB in Atom to preserve HETATM distinction.
-        // For now, infer from entity_type: water and non-polymer are HETATM.
-        const group = switch (res.entity_type) {
-            .water, .non_polymer => "HETATM",
-            else => "ATOM",
-        };
-        const elem_str = elementSymbol(atom.element_type);
-        const alt: [1]u8 = if (atom.altloc != ' ') [_]u8{atom.altloc} else [_]u8{'.'};
-
-        try writer.print(
-            "{s} {d} {s} {s} {s} {s} {d} {d:.3} {d:.3} {d:.3} {d:.2} {d:.2} {s}\n",
-            .{
-                group,
-                serial,
-                elem_str,
-                atom.nameSlice(),
-                res.compIdSlice(),
-                chain.labelSlice(),
-                res.seq_id,
-                atom.pos.x,
-                atom.pos.y,
-                atom.pos.z,
-                atom.occupancy,
-                atom.b_factor,
-                &alt,
-            },
-        );
-        serial += 1;
+    for (model.residues.items, 0..) |res, res_idx| {
+        // First pass: original heavy atoms in this residue's range
+        for (model.atoms.items[res.atom_start..res.atom_end]) |atom| {
+            try writeAtomRow(writer, model, atom, res, serial);
+            serial += 1;
+        }
+        // Second pass: added H atoms belonging to this residue (appended at end)
+        for (model.atoms.items) |atom| {
+            if (!atom.is_added) continue;
+            if (atom.residue_idx != res_idx) continue;
+            try writeAtomRow(writer, model, atom, res, serial);
+            serial += 1;
+        }
     }
+}
+
+fn writeAtomRow(writer: anytype, model: *const Model, atom: Atom, res: Residue, serial: u32) !void {
+    const chain = model.chains.items[res.chain_idx];
+    const group = switch (res.entity_type) {
+        .water, .non_polymer => "HETATM",
+        else => "ATOM",
+    };
+    const elem_str = elementSymbol(atom.element_type);
+    const alt: [1]u8 = if (atom.altloc != ' ') [_]u8{atom.altloc} else [_]u8{'.'};
+
+    try writer.print(
+        "{s} {d} {s} {s} {s} {s} {d} {d:.3} {d:.3} {d:.3} {d:.2} {d:.2} {s}\n",
+        .{
+            group,
+            serial,
+            elem_str,
+            atom.nameSlice(),
+            res.compIdSlice(),
+            chain.labelSlice(),
+            res.seq_id,
+            atom.pos.x,
+            atom.pos.y,
+            atom.pos.z,
+            atom.occupancy,
+            atom.b_factor,
+            &alt,
+        },
+    );
 }
 
 /// Write optimization log as a custom mmCIF category.
