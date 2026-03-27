@@ -167,7 +167,10 @@ pub fn parseModel(allocator: Allocator, source: []const u8) MmcifError!Model {
         };
         atom.setName(atom_name);
         atom.element_type = element.elementFromSymbol(type_sym);
-        atom.is_hydrogen = type_sym.len > 0 and (type_sym[0] == 'H' or type_sym[0] == 'h');
+        atom.is_hydrogen = switch (atom.element_type) {
+            .H, .Har, .Hpol, .Ha_p, .HOd => true,
+            else => false,
+        };
         atom.occupancy = cif.asFloatOr(occ_str, 1.0);
         atom.b_factor = cif.asFloatOr(bfac_str, 0.0);
         atom.serial = @intCast(cif.value.asIntOr(u32, serial_str, 0));

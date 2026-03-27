@@ -151,10 +151,12 @@ pub fn main() !void {
 
     // 6. Optimize (unless --no-opt)
     // TODO: Build movers from placement hints, run optimizer.
-    // For now, optimization is a placeholder -- full mover building requires
-    // identifying which atoms are rotatable/flippable from placement plans.
-    _ = config.no_opt;
-    _ = config.no_flip;
+    if (config.no_opt) {
+        std.debug.print("Note: --no-opt has no effect (optimization not yet implemented)\n", .{});
+    }
+    if (config.no_flip) {
+        std.debug.print("Note: --no-flip has no effect (optimization not yet implemented)\n", .{});
+    }
 
     // 7. Write output
     var out_buf: [4096]u8 = undefined;
