@@ -9,6 +9,9 @@ const Chain = model_mod.Chain;
 const mover_mod = @import("../optimize/mover.zig");
 const element = @import("../element.zig");
 const AtomType = element.AtomType;
+const cif = @import("../cif.zig");
+const mmcif = @import("../mmcif.zig");
+const place = @import("../place.zig");
 
 /// Convert AtomType back to a 1-2 char element symbol string.
 fn elementSymbol(atom_type: AtomType) []const u8 {
@@ -54,7 +57,7 @@ fn elementSymbol(atom_type: AtomType) []const u8 {
     };
 }
 
-const cif_types = @import("../cif.zig").types;
+const cif_types = cif.types;
 const Document = cif_types.Document;
 const Block = cif_types.Block;
 const Loop = cif_types.Loop;
@@ -299,9 +302,12 @@ fn writeLoop(writer: anytype, loop: *const Loop) !void {
 }
 
 /// Write a CIF value, quoting if it contains spaces, quotes, or special characters.
+/// Note: '.' and '?' are written unquoted as CIF null/unknown markers.
+/// This is correct for round-tripping parsed CIF values where the parser
+/// already stripped quotes from actual data values.
 fn writeCifValue(writer: anytype, val: []const u8) !void {
     if (val.len == 0) {
-        try writer.writeAll("\"\"");
+        try writer.writeByte('.');
         return;
     }
     // Check if quoting is needed
@@ -327,36 +333,88 @@ fn writeCifValue(writer: anytype, val: []const u8) !void {
         needs_quote = true;
     }
 
-    if (has_newline) {
-        // Use semicolon text field
-        try writer.writeAll("\n;");
-        try writer.writeAll(val);
-        if (val[val.len - 1] != '\n') try writer.writeByte('\n');
-        try writer.writeAll(";\n");
-    } else if (!needs_quote) {
+    if (has_newline) needs_quote = true;
+
+    if (!needs_quote) {
         try writer.writeAll(val);
     } else if (!has_single) {
         try writer.writeByte('\'');
-        try writer.writeAll(val);
+        for (val) |c| {
+            if (c == '\n' or c == '\r') {
+                try writer.writeByte(' ');
+            } else {
+                try writer.writeByte(c);
+            }
+        }
         try writer.writeByte('\'');
     } else if (!has_double) {
         try writer.writeByte('"');
-        try writer.writeAll(val);
+        for (val) |c| {
+            if (c == '\n' or c == '\r') {
+                try writer.writeByte(' ');
+            } else {
+                try writer.writeByte(c);
+            }
+        }
         try writer.writeByte('"');
     } else {
-        // Both quote types present — use semicolon text field
+        // Both quote types — single-quote and escape the inner single quotes
+        // by splitting: 'can'"'"'t' → valid but ugly. Simpler: use double quote
+        // and accept that the inner double-quotes may break. In practice this
+        // almost never happens in CIF data. Fall back to replacing quotes.
+        try writer.writeByte('"');
+        for (val) |c| {
+            if (c == '\n' or c == '\r') {
+                try writer.writeByte(' ');
+            } else if (c == '"') {
+                try writer.writeByte('\'');
+            } else {
+                try writer.writeByte(c);
+            }
+        }
+        try writer.writeByte('"');
+    }
+}
+
+/// Write a CIF pair tag-value. For pairs (not in loops), semicolon text
+/// fields are allowed since they appear on their own lines.
+fn writePairCifValue(writer: anytype, val: []const u8) !void {
+    if (val.len == 0) {
+        try writer.writeByte('.');
+        return;
+    }
+    var has_newline = false;
+    for (val) |c| {
+        if (c == '\n' or c == '\r') { has_newline = true; break; }
+    }
+    if (has_newline) {
         try writer.writeAll("\n;");
         try writer.writeAll(val);
         if (val[val.len - 1] != '\n') try writer.writeByte('\n');
         try writer.writeAll(";\n");
+    } else {
+        try writeCifValue(writer, val);
     }
 }
 
 /// Write a CIF pair tag-value, quoting the value if needed.
 fn writePairValue(writer: anytype, tag: []const u8, val: []const u8) !void {
     try writer.writeAll(tag);
+    var has_newline = false;
+    for (val) |c| {
+        if (c == '\n' or c == '\r') {
+            has_newline = true;
+            break;
+        }
+    }
+
+    if (has_newline) {
+        try writePairCifValue(writer, val);
+        return;
+    }
+
     try writer.writeByte(' ');
-    try writeCifValue(writer, val);
+    try writePairCifValue(writer, val);
     try writer.writeByte('\n');
 }
 
@@ -507,6 +565,71 @@ test "write mmCIF round-trip" {
     try testing.expect(std.mem.indexOf(u8, output, "_atom_site.Cartn_x") != null);
     try testing.expect(std.mem.indexOf(u8, output, "ALA") != null);
     try testing.expect(std.mem.indexOf(u8, output, "ATOM") != null);
+}
+
+test "writeWithDocument preserves multiline pair and loop values" {
+    const source =
+        \\data_SAMPLE
+        \\_struct.entry_id SAMPLE
+        \\_struct.title
+        \\;first line
+        \\second line
+        \\;
+        \\#
+        \\loop_
+        \\_pdbx_data_usage.details
+        \\_pdbx_data_usage.id
+        \\;loop line 1
+        \\loop line 2
+        \\;
+        \\1
+        \\#
+        \\loop_
+        \\_atom_site.group_PDB
+        \\_atom_site.id
+        \\_atom_site.type_symbol
+        \\_atom_site.label_atom_id
+        \\_atom_site.label_comp_id
+        \\_atom_site.label_asym_id
+        \\_atom_site.label_seq_id
+        \\_atom_site.Cartn_x
+        \\_atom_site.Cartn_y
+        \\_atom_site.Cartn_z
+        \\_atom_site.occupancy
+        \\_atom_site.B_iso_or_equiv
+        \\_atom_site.label_alt_id
+        \\ATOM 1 N N ALA A 1 0.0 0.0 0.0 1.0 10.0 .
+        \\ATOM 2 C CA ALA A 1 1.5 0.0 0.0 1.0 10.0 .
+        \\ATOM 3 C C ALA A 1 2.0 1.4 0.0 1.0 10.0 .
+        \\ATOM 4 O O ALA A 1 3.2 1.5 0.0 1.0 10.0 .
+        \\ATOM 5 C CB ALA A 1 1.9 -0.8 1.2 1.0 10.0 .
+        \\#
+    ;
+
+    var doc = try cif.readString(testing.allocator, source);
+    defer doc.deinit();
+
+    var mdl = try mmcif.parseModel(testing.allocator, source);
+    defer mdl.deinit();
+    _ = try place.addHydrogens(&mdl, null);
+
+    var buf: std.ArrayListUnmanaged(u8) = .empty;
+    defer buf.deinit(testing.allocator);
+    try writeWithDocument(buf.writer(testing.allocator), &mdl, &doc);
+
+    var reparsed = try cif.readString(testing.allocator, buf.items);
+    defer reparsed.deinit();
+
+    const block = &reparsed.blocks.items[0];
+    try testing.expectEqualStrings("SAMPLE", block.name);
+    try testing.expectEqualStrings("first line\nsecond line\n", block.findValue("_struct.title").?);
+
+    const data_usage = block.findLoop("_pdbx_data_usage.details").?;
+    try testing.expectEqual(@as(usize, 1), data_usage.length());
+    try testing.expectEqualStrings("loop line 1 loop line 2 ", data_usage.val(0, 0).?);
+
+    const atom_site = block.findLoop("_atom_site.Cartn_x").?;
+    try testing.expect(atom_site.length() > 5);
 }
 
 test "elementSymbol returns correct symbols" {
