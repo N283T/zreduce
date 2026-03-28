@@ -148,6 +148,9 @@ pub fn main() !void {
     }
     defer if (ccd_dict) |*d| d.deinit();
 
+    // 5.5 Apply chemistry annotations to standard-residue heavy atoms
+    zreduce.place.applyChemistry(&mdl);
+
     // 6. Place hydrogens
     const initial_count = mdl.atoms.items.len;
     const place_result = zreduce.place.addHydrogens(&mdl, if (ccd_dict) |*d| d else null) catch |err| {
