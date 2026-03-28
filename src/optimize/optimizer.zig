@@ -74,7 +74,7 @@ pub fn optimize(
             result.n_brute_force += 1;
         } else {
             // Vertex-cut decomposition (simplified: greedy for Phase 3)
-            optimizeGreedy(movers, clq, model, config);
+            optimizeIterativeGreedy(movers, clq, model, config);
             result.n_vertex_cut += 1;
         }
     }
@@ -226,10 +226,19 @@ pub fn totalStates(movers: []const Mover, clq: []const u32) u64 {
     return total;
 }
 
-fn optimizeGreedy(movers: []Mover, clq: []const u32, model: *Model, config: OptConfig) void {
-    // Simple greedy: optimize each mover in the clique independently
-    for (clq) |mi| {
-        optimizeSingleton(movers, mi, model, config);
+fn optimizeIterativeGreedy(movers: []Mover, clq: []const u32, model: *Model, config: OptConfig) void {
+    const max_iterations: u32 = 3;
+    var iteration: u32 = 0;
+
+    while (iteration < max_iterations) : (iteration += 1) {
+        var changed = false;
+        for (clq) |mi| {
+            const old_best = movers[mi].best_orientation;
+            optimizeSingleton(movers, mi, model, config);
+            movers[mi].applyOrientation(model.atoms.items, movers[mi].best_orientation);
+            if (movers[mi].best_orientation != old_best) changed = true;
+        }
+        if (!changed) break;
     }
 }
 
@@ -455,4 +464,48 @@ test "incrementIndices mixed radix counting" {
     }
     // Started at (0,0), should enumerate 2*3 - 1 = 5 more states before overflow
     try testing.expectEqual(@as(u32, 5), count);
+}
+
+test "iterative greedy finds optimal for coupled movers" {
+    const allocator = testing.allocator;
+
+    var model = Model.init(allocator);
+    defer model.deinit();
+
+    // Fixed obstacle at origin
+    try model.atoms.append(allocator, .{
+        .pos = .{ .x = 0, .y = 0, .z = 0 },
+        .vdw_radius = 1.7,
+    });
+    // Mover 0 atom
+    try model.atoms.append(allocator, .{
+        .pos = .{ .x = 5, .y = 0, .z = 0 },
+        .vdw_radius = 1.7,
+    });
+    // Mover 1 atom
+    try model.atoms.append(allocator, .{
+        .pos = .{ .x = 0, .y = 5, .z = 0 },
+        .vdw_radius = 1.7,
+    });
+
+    var m0 = try makeTestMover(allocator, 1, &.{
+        .{ .x = 1.5, .y = 0, .z = 0 }, // overlaps with obstacle (dist 1.5 < 3.4)
+        .{ .x = 10.0, .y = 0, .z = 0 }, // far away
+    }, &.{ 0, 0 });
+    defer m0.deinit();
+
+    var m1 = try makeTestMover(allocator, 2, &.{
+        .{ .x = 0, .y = 1.5, .z = 0 }, // overlaps with obstacle (dist 1.5 < 3.4)
+        .{ .x = 0, .y = 10.0, .z = 0 }, // far away
+    }, &.{ 0, 0 });
+    defer m1.deinit();
+
+    var movers = [_]Mover{ m0, m1 };
+    const clq = [_]u32{ 0, 1 };
+
+    optimizeIterativeGreedy(&movers, &clq, &model, .{});
+
+    // Both should pick orientation 1 (away from obstacle)
+    try testing.expectEqual(@as(u16, 1), movers[0].best_orientation);
+    try testing.expectEqual(@as(u16, 1), movers[1].best_orientation);
 }
