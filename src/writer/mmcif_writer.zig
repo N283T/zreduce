@@ -219,7 +219,7 @@ fn writeAtomSitePreserving(writer: anytype, model: *const Model, orig_loop: *con
                 } else if (cm.type_symbol != null and col == cm.type_symbol.?) {
                     try writer.writeAll(elementSymbol(atom.element_type));
                 } else if (cm.label_atom_id != null and col == cm.label_atom_id.?) {
-                    try writeCifValue(writer, atom.nameSlice());
+                    try writeAtomName(writer, atom.nameSlice());
                 } else if (cm.label_alt_id != null and col == cm.label_alt_id.?) {
                     try writer.writeAll(".");
                 } else if (cm.label_comp_id != null and col == cm.label_comp_id.?) {
@@ -261,7 +261,7 @@ fn writeAtomSitePreserving(writer: anytype, model: *const Model, orig_loop: *con
                 } else if (cm.auth_asym_id != null and col == cm.auth_asym_id.?) {
                     try writer.writeAll(chain.authSlice());
                 } else if (cm.auth_atom_id != null and col == cm.auth_atom_id.?) {
-                    try writeCifValue(writer, atom.nameSlice());
+                    try writeAtomName(writer, atom.nameSlice());
                 } else if (cm.pdb_model_num != null and col == cm.pdb_model_num.?) {
                     try writer.writeAll("1");
                 } else {
@@ -299,6 +299,22 @@ fn writeLoop(writer: anytype, loop: *const Loop) !void {
         }
     }
     try writer.writeAll("#\n");
+}
+
+/// Write an atom name, trimming trailing spaces.
+/// Atom names in CIF are typically unquoted even when they contain leading spaces.
+fn writeAtomName(writer: anytype, name: []const u8) !void {
+    // Trim trailing spaces
+    var end = name.len;
+    while (end > 0 and name[end - 1] == ' ') end -= 1;
+    // Trim leading spaces
+    var start: usize = 0;
+    while (start < end and name[start] == ' ') start += 1;
+    if (start >= end) {
+        try writer.writeByte('.');
+    } else {
+        try writer.writeAll(name[start..end]);
+    }
 }
 
 /// Write a CIF value, quoting if it contains spaces, quotes, or special characters.
