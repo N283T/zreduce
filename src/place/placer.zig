@@ -95,17 +95,35 @@ pub fn addHydrogens(
 
 /// Apply residue/atom-specific chemical annotations to heavy atoms.
 /// Updates element_type, flags, and vdw_radius on standard-residue heavy atoms.
+/// Also applies terminal charge annotations (N-terminal positive, C-terminal negative).
 /// Should be called once after parsing, before hydrogen placement.
 pub fn applyChemistry(mdl: *Model) void {
-    for (mdl.residues.items) |res| {
+    const n_residues = mdl.residues.items.len;
+    for (0..n_residues) |res_idx| {
+        const res = mdl.residues.items[res_idx];
         const comp_id = res.compIdSlice();
+
+        // Detect terminal residues
+        const chain = mdl.chains.items[res.chain_idx];
+        const is_nterm = (res_idx == chain.residue_start);
+        const is_cterm = (res_idx == chain.residue_end - 1);
+
         const atoms = mdl.atoms.items[res.atom_start..res.atom_end];
         for (atoms) |*atom| {
             if (atom.is_hydrogen) continue;
+
+            // Apply standard residue annotations (replace)
             if (chemistry.getAnnotation(comp_id, atom.name)) |ann| {
                 atom.element_type = ann.atom_type;
                 atom.flags = ann.flags;
                 atom.vdw_radius = ann.atom_type.info().explicit_radius;
+            }
+
+            // Apply terminal annotations (merge flags via OR)
+            if (chemistry.getTerminalAnnotation(atom.name, is_nterm, is_cterm)) |term_ann| {
+                atom.element_type = term_ann.atom_type;
+                atom.flags = element.mergeFlags(atom.flags, term_ann.flags);
+                atom.vdw_radius = term_ann.atom_type.info().explicit_radius;
             }
         }
     }
@@ -923,4 +941,50 @@ test "placed H atoms have correct flags from element table" {
             try testing.expectEqual(type_flags.aromatic, atom.flags.aromatic);
         }
     }
+}
+
+test "applyChemistry adds positive flag to N-terminal N" {
+    const source = @embedFile("../test_data/tiny.cif");
+    var mdl = try mmcif.parseModel(testing.allocator, source);
+    defer mdl.deinit();
+
+    applyChemistry(&mdl);
+
+    // tiny.cif has single ALA — both N-term and C-term
+    // N atom (index 0) should have donor (standard) + positive (terminal)
+    try testing.expect(mdl.atoms.items[0].flags.donor);
+    try testing.expect(mdl.atoms.items[0].flags.positive);
+}
+
+test "applyChemistry adds negative flag to C-terminal O" {
+    const source = @embedFile("../test_data/tiny.cif");
+    var mdl = try mmcif.parseModel(testing.allocator, source);
+    defer mdl.deinit();
+
+    applyChemistry(&mdl);
+
+    // O atom (index 3) should have acceptor (standard) + negative (terminal)
+    try testing.expect(mdl.atoms.items[3].flags.acceptor);
+    try testing.expect(mdl.atoms.items[3].flags.negative);
+}
+
+test "applyChemistry annotates OXT as negative acceptor" {
+    const source = @embedFile("../test_data/ala_cterm.cif");
+    var mdl = try mmcif.parseModel(testing.allocator, source);
+    defer mdl.deinit();
+
+    applyChemistry(&mdl);
+
+    // Find OXT atom
+    var oxt_found = false;
+    for (mdl.atoms.items) |atom| {
+        if (std.mem.eql(u8, atom.nameSlice(), "OXT")) {
+            oxt_found = true;
+            try testing.expectEqual(element.AtomType.O, atom.element_type);
+            try testing.expect(atom.flags.negative);
+            try testing.expect(atom.flags.acceptor);
+            break;
+        }
+    }
+    try testing.expect(oxt_found);
 }
