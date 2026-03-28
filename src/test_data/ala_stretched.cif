@@ -1,0 +1,25 @@
+data_ALA_STRETCHED
+#
+_entry.id ALA_STRETCHED
+#
+loop_
+_atom_site.group_PDB
+_atom_site.id
+_atom_site.type_symbol
+_atom_site.label_atom_id
+_atom_site.label_comp_id
+_atom_site.label_asym_id
+_atom_site.label_seq_id
+_atom_site.Cartn_x
+_atom_site.Cartn_y
+_atom_site.Cartn_z
+_atom_site.occupancy
+_atom_site.B_iso_or_equiv
+_atom_site.label_alt_id
+_atom_site.auth_asym_id
+ATOM 1  N N   ALA A 1 1.458 0.000 0.000 1.00 10.0 . A
+ATOM 2  C CA  ALA A 1 0.000 0.000 0.000 1.00 10.0 . A
+ATOM 3  C C   ALA A 1 -0.523 1.413 0.000 1.00 10.0 . A
+ATOM 4  O O   ALA A 1 -1.742 1.560 0.000 1.00 10.0 . A
+ATOM 5  C CB  ALA A 1 -0.700 -1.100 1.800 1.00 10.0 . A
+#

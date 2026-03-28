@@ -825,3 +825,39 @@ test "findBondedAtomBetween finds atom bonded to both" {
     try testing.expectEqual(ca_pos.y, result.?.y);
     try testing.expectEqual(ca_pos.z, result.?.z);
 }
+
+test "bond-based query finds stretched CB that distance-based misses" {
+    const source = @embedFile("../test_data/ala_stretched.cif");
+    var mdl = try mmcif.parseModel(testing.allocator, source);
+    defer mdl.deinit();
+
+    const res = mdl.residues.items[0];
+    const bonds = topology.getBonds("ALA").?;
+
+    // Distance-based: CB is >1.9A from CA, should NOT be found
+    const dist_result = findThirdNeighbor(&mdl, res, .{ ' ', 'C', 'A', ' ' }, .{ ' ', 'N', ' ', ' ' }, .{ ' ', 'C', ' ', ' ' });
+    try testing.expect(dist_result == null);
+
+    // Bond-based: CB is bonded to CA in topology, SHOULD be found
+    const bond_result = findThirdBondedNeighbor(&mdl, res, bonds, .{ ' ', 'C', 'A', ' ' }, .{ ' ', 'N', ' ', ' ' }, .{ ' ', 'C', ' ', ' ' });
+    try testing.expect(bond_result != null);
+}
+
+test "placement succeeds on stretched geometry with bond topology" {
+    const source = @embedFile("../test_data/ala_stretched.cif");
+    var mdl = try mmcif.parseModel(testing.allocator, source);
+    defer mdl.deinit();
+
+    _ = try addHydrogens(&mdl, null);
+
+    // With bond topology, HA should be placed even though CB is >1.9A from CA
+    // (HA placement type is hxr3 which needs the 3rd neighbor = CB)
+    var found_ha = false;
+    for (mdl.atoms.items) |atom| {
+        if (std.mem.eql(u8, atom.nameSlice(), "HA")) {
+            found_ha = true;
+            break;
+        }
+    }
+    try testing.expect(found_ha);
+}
