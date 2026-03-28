@@ -48,6 +48,8 @@ pub fn createSingleHRotator(
         .atom_indices = atom_indices,
         .orientations = orientations,
         .allocator = allocator,
+        .center_idx = center_idx,
+        .axis_idx = axis_idx,
     };
 }
 
@@ -93,6 +95,8 @@ pub fn createNH3Rotator(
         .atom_indices = atom_indices,
         .orientations = orientations,
         .allocator = allocator,
+        .center_idx = center_idx,
+        .axis_idx = axis_idx,
     };
 }
 
@@ -136,6 +140,8 @@ pub fn createMethylRotator(
         .atom_indices = atom_indices,
         .orientations = orientations,
         .allocator = allocator,
+        .center_idx = center_idx,
+        .axis_idx = axis_idx,
     };
 }
 
