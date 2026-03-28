@@ -562,6 +562,15 @@ const his_plans = [_]PlacementPlan{
     planarH(" HD2", " CG ", "NE2 "),
     planarH(" HE1", "ND1 ", "NE2 "),
     PlacementPlan{
+        .h_name = n(" HD1"),
+        .placement_type = .hxr2_planar,
+        .connected = .{ n("CE1 "), n(" CG "), blank },
+        .n_connected = 2,
+        .bond_len = 1.02,
+        .atom_type = .Hpol,
+        .mover_hint = .flip_his,
+    },
+    PlacementPlan{
         .h_name = n(" HE2"),
         .placement_type = .hxr2_planar,
         .connected = .{ n("CE1 "), n("CD2 "), blank },
@@ -758,8 +767,8 @@ test "ARG plan count" {
 test "HIS plan count" {
     const plans = getPlans("HIS");
     try std.testing.expect(plans != null);
-    // HA + 2xHB + HD2 + HE1 + HE2 + H = 7
-    try std.testing.expectEqual(@as(usize, 7), plans.?.len);
+    // HA + 2xHB + HD2 + HE1 + HD1 + HE2 + H = 8
+    try std.testing.expectEqual(@as(usize, 8), plans.?.len);
 }
 
 test "unknown residue returns null" {
