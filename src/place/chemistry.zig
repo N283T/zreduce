@@ -21,8 +21,10 @@ pub const ChemAnnotation = struct {
 
 const A = element.AtomFlags{ .acceptor = true };
 const D = element.AtomFlags{ .donor = true };
+const DA = element.AtomFlags{ .donor = true, .acceptor = true };
 const ARA = element.AtomFlags{ .aromatic = true, .acceptor = true };
 const ARD = element.AtomFlags{ .aromatic = true, .donor = true };
+const ARDA = element.AtomFlags{ .aromatic = true, .donor = true, .acceptor = true };
 const NEG_A = element.AtomFlags{ .negative = true, .acceptor = true };
 const POS_D = element.AtomFlags{ .positive = true, .donor = true };
 const NONE = element.AtomFlags{};
@@ -128,11 +130,11 @@ const arg_sc = [_]AnnotEntry{
 };
 
 const ser_sc = [_]AnnotEntry{
-    a(" OG ", .O, A),
+    a(" OG ", .O, DA),
 };
 
 const thr_sc = [_]AnnotEntry{
-    a("OG1 ", .O, A),
+    a("OG1 ", .O, DA),
 };
 
 const cys_sc = [_]AnnotEntry{
@@ -144,7 +146,7 @@ const met_sc = [_]AnnotEntry{
 };
 
 const tyr_sc = [_]AnnotEntry{
-    a(" OH ", .O, A),
+    a(" OH ", .O, DA),
     a(" CG ", .Car, ARA),
     a("CD1 ", .Car, ARA),
     a("CD2 ", .Car, ARA),
@@ -178,8 +180,8 @@ const his_sc = [_]AnnotEntry{
     a(" CG ", .Car, ARA),
     a("CD2 ", .Car, ARA),
     a("CE1 ", .Car, ARA),
-    a("ND1 ", .Nacc, ARA),
-    a("NE2 ", .Nacc, ARA),
+    a("ND1 ", .Nacc, ARDA),  // donor+acceptor: protonation-dependent
+    a("NE2 ", .Nacc, ARDA),  // donor+acceptor: protonation-dependent
 };
 
 // ---------------------------------------------------------------------------
@@ -281,12 +283,13 @@ test "PHE CD1 is aromatic carbon" {
     try std.testing.expect(ann.?.flags.aromatic == true);
 }
 
-test "HIS NE2 is aromatic acceptor nitrogen" {
+test "HIS NE2 is aromatic donor/acceptor nitrogen" {
     const ann = getAnnotation("HIS", n("NE2 "));
     try std.testing.expect(ann != null);
     try std.testing.expectEqual(element.AtomType.Nacc, ann.?.atom_type);
     try std.testing.expect(ann.?.flags.aromatic == true);
     try std.testing.expect(ann.?.flags.acceptor == true);
+    try std.testing.expect(ann.?.flags.donor == true);
 }
 
 test "ALA CB has no annotation" {

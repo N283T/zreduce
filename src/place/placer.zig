@@ -18,6 +18,7 @@ const element = @import("../element.zig");
 
 const Vec3f32 = math_mod.Vec3(f32);
 const topology = @import("topology.zig");
+const chemistry = @import("chemistry.zig");
 
 pub const PlacementResult = struct {
     n_placed: u32 = 0,
@@ -91,8 +92,6 @@ pub fn addHydrogens(
 
     return result;
 }
-
-const chemistry = @import("chemistry.zig");
 
 /// Apply residue/atom-specific chemical annotations to heavy atoms.
 /// Updates element_type, flags, and vdw_radius on standard-residue heavy atoms.
