@@ -113,17 +113,21 @@ pub fn applyChemistry(mdl: *Model) void {
             if (atom.is_hydrogen) continue;
 
             // Apply standard residue annotations (replace)
-            if (chemistry.getAnnotation(comp_id, atom.name)) |ann| {
+            const has_std_ann = if (chemistry.getAnnotation(comp_id, atom.name)) |ann| blk: {
                 atom.element_type = ann.atom_type;
                 atom.flags = ann.flags;
                 atom.vdw_radius = ann.atom_type.info().explicit_radius;
-            }
+                break :blk true;
+            } else false;
 
             // Apply terminal annotations (merge flags via OR)
+            // Only set element_type/vdw_radius for atoms without standard annotation (e.g. OXT)
             if (chemistry.getTerminalAnnotation(atom.name, is_nterm, is_cterm)) |term_ann| {
-                atom.element_type = term_ann.atom_type;
                 atom.flags = element.mergeFlags(atom.flags, term_ann.flags);
-                atom.vdw_radius = term_ann.atom_type.info().explicit_radius;
+                if (!has_std_ann) {
+                    atom.element_type = term_ann.atom_type;
+                    atom.vdw_radius = term_ann.atom_type.info().explicit_radius;
+                }
             }
         }
     }
@@ -987,6 +991,32 @@ test "applyChemistry annotates OXT as negative acceptor" {
         }
     }
     try testing.expect(oxt_found);
+}
+
+test "multi-chain terminal detection is correct" {
+    const source = @embedFile("../test_data/multi_chain.cif");
+    var mdl = try mmcif.parseModel(testing.allocator, source);
+    defer mdl.deinit();
+
+    applyChemistry(&mdl);
+
+    // Chain A: ALA(N-term, res 0) + GLY(C-term, res 1)
+    // Chain B: VAL(both N-term and C-term, res 2)
+
+    // ALA N (atom 0): N-terminal → positive + donor
+    try testing.expect(mdl.atoms.items[0].flags.positive);
+    try testing.expect(mdl.atoms.items[0].flags.donor);
+
+    // GLY N (atom 4): internal-ish (C-terminal residue, but N is not annotated for C-term)
+    try testing.expect(!mdl.atoms.items[4].flags.positive);
+
+    // GLY O (atom 7): C-terminal → negative + acceptor
+    try testing.expect(mdl.atoms.items[7].flags.negative);
+    try testing.expect(mdl.atoms.items[7].flags.acceptor);
+
+    // VAL N (atom 8): N-terminal of chain B → positive + donor
+    try testing.expect(mdl.atoms.items[8].flags.positive);
+    try testing.expect(mdl.atoms.items[8].flags.donor);
 }
 
 test "OXT does not receive hydrogen atoms" {
