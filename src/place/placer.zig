@@ -260,6 +260,19 @@ fn findAtom(mdl: *const Model, res: Residue, name: [4]u8) ?Atom {
     return null;
 }
 
+/// Check if an atom with the given name and altloc already exists in a residue.
+/// Used to prevent duplicate hydrogen placement.
+/// altloc ' ' (blank) matches only blank; 'A' matches only 'A'.
+fn existsInResidue(mdl: *const Model, res: Residue, name: [4]u8, altloc: u8) bool {
+    const atoms = mdl.atoms.items[res.atom_start..res.atom_end];
+    for (atoms) |a| {
+        if (nameMatch(name, a.nameSlice()) and a.altloc == altloc) {
+            return true;
+        }
+    }
+    return false;
+}
+
 /// Find a heavy-atom neighbor of `center_name` that is NOT `exclude_name`.
 /// Uses distance-based bonding (within 1.9 A of center).
 fn findOtherNeighbor(mdl: *const Model, res: Residue, center_name: [4]u8, exclude_name: [4]u8) ?Vec3f32 {
@@ -526,4 +539,21 @@ test "findAtom returns full atom with metadata" {
     // Non-existent atom returns null
     const xx = findAtom(&mdl, res, .{ ' ', 'X', 'X', ' ' });
     try testing.expect(xx == null);
+}
+
+test "existsInResidue checks name and altloc" {
+    const source = @embedFile("../test_data/tiny.cif");
+    var mdl = try mmcif.parseModel(testing.allocator, source);
+    defer mdl.deinit();
+
+    const res = mdl.residues.items[0];
+
+    // "N" with altloc ' ' exists in tiny.cif
+    try testing.expect(existsInResidue(&mdl, res, .{ ' ', 'N', ' ', ' ' }, ' '));
+    // "CA" with altloc ' ' exists
+    try testing.expect(existsInResidue(&mdl, res, .{ ' ', 'C', 'A', ' ' }, ' '));
+    // "HA" does not exist
+    try testing.expect(!existsInResidue(&mdl, res, .{ ' ', 'H', 'A', ' ' }, ' '));
+    // "N" with altloc 'A' does not exist (tiny.cif has altloc='.')
+    try testing.expect(!existsInResidue(&mdl, res, .{ ' ', 'N', ' ', ' ' }, 'A'));
 }
