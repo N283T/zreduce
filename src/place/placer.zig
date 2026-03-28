@@ -599,6 +599,7 @@ fn appendHydrogen(mdl: *Model, pos: Vec3f32, plan: *const standard.PlacementPlan
         .is_hydrogen = true,
         .is_added = true,
         .vdw_radius = plan.atom_type.info().explicit_radius,
+        .flags = plan.atom_type.info().flags,
         .altloc = meta.altloc,
         .occupancy = meta.occupancy,
         .b_factor = meta.b_factor,
@@ -903,3 +904,24 @@ test "applyChemistry sets backbone N donor flag" {
     try testing.expect(mdl.atoms.items[0].flags.donor);
 }
 
+test "placed H atoms have correct flags from element table" {
+    const source = @embedFile("../test_data/tiny.cif");
+    var mdl = try mmcif.parseModel(testing.allocator, source);
+    defer mdl.deinit();
+
+    applyChemistry(&mdl);
+    _ = try addHydrogens(&mdl, null);
+
+    for (mdl.atoms.items) |atom| {
+        if (atom.is_added and atom.is_hydrogen) {
+            const type_flags = atom.element_type.info().flags;
+            // Hpol atoms should have donor flag
+            if (atom.element_type == .Hpol) {
+                try testing.expect(atom.flags.donor);
+            }
+            // All placed H flags should match their element_type flags
+            try testing.expectEqual(type_flags.donor, atom.flags.donor);
+            try testing.expectEqual(type_flags.aromatic, atom.flags.aromatic);
+        }
+    }
+}
