@@ -13,6 +13,10 @@ pub const AtomFlags = packed struct {
     _padding: u1 = 0,
 };
 
+pub fn mergeFlags(a: AtomFlags, b: AtomFlags) AtomFlags {
+    return @bitCast(@as(u8, @bitCast(a)) | @as(u8, @bitCast(b)));
+}
+
 pub const AtomTypeInfo = struct {
     explicit_radius: f32,
     implicit_radius: f32,
@@ -208,4 +212,14 @@ test "elementFromSymbol" {
     try std.testing.expectEqual(AtomType.Fe, elementFromSymbol("FE"));
     try std.testing.expectEqual(AtomType.Fe, elementFromSymbol("Fe"));
     try std.testing.expectEqual(AtomType.unknown, elementFromSymbol("Xx"));
+}
+
+test "mergeFlags combines flags via OR" {
+    const a = AtomFlags{ .donor = true };
+    const b = AtomFlags{ .acceptor = true, .negative = true };
+    const merged = mergeFlags(a, b);
+    try std.testing.expect(merged.donor);
+    try std.testing.expect(merged.acceptor);
+    try std.testing.expect(merged.negative);
+    try std.testing.expect(!merged.aromatic);
 }

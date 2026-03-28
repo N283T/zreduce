@@ -240,6 +240,26 @@ pub fn getAnnotation(comp_id: []const u8, atom_name: [4]u8) ?ChemAnnotation {
     return lookupName(&backbone_annotations, atom_name);
 }
 
+/// Returns terminal-specific annotation for an atom based on its terminal state.
+/// These annotations provide additional flags (charge) to be OR-merged with
+/// standard annotations, not used as replacements.
+pub fn getTerminalAnnotation(atom_name: [4]u8, is_nterm: bool, is_cterm: bool) ?ChemAnnotation {
+    if (is_nterm) {
+        if (nameEql(&atom_name, &n(" N  "))) {
+            return .{ .atom_type = .N, .flags = POS_D };
+        }
+    }
+    if (is_cterm) {
+        if (nameEql(&atom_name, &n("OXT ")) or nameEql(&atom_name, &n(" OXT"))) {
+            return .{ .atom_type = .O, .flags = NEG_A };
+        }
+        if (nameEql(&atom_name, &n(" O  "))) {
+            return .{ .atom_type = .O, .flags = NEG_A };
+        }
+    }
+    return null;
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -299,5 +319,35 @@ test "ALA CB has no annotation" {
 
 test "unknown residue returns null" {
     const ann = getAnnotation("XYZ", n(" C  "));
+    try std.testing.expect(ann == null);
+}
+
+test "N-terminal N gets positive flag" {
+    const ann = getTerminalAnnotation(n(" N  "), true, false);
+    try std.testing.expect(ann != null);
+    try std.testing.expect(ann.?.flags.positive);
+}
+
+test "C-terminal O gets negative flag" {
+    const ann = getTerminalAnnotation(n(" O  "), false, true);
+    try std.testing.expect(ann != null);
+    try std.testing.expect(ann.?.flags.negative);
+}
+
+test "OXT gets negative acceptor flags" {
+    const ann = getTerminalAnnotation(n("OXT "), false, true);
+    try std.testing.expect(ann != null);
+    try std.testing.expectEqual(element.AtomType.O, ann.?.atom_type);
+    try std.testing.expect(ann.?.flags.negative);
+    try std.testing.expect(ann.?.flags.acceptor);
+}
+
+test "internal residue atoms get no terminal annotation" {
+    const ann = getTerminalAnnotation(n(" N  "), false, false);
+    try std.testing.expect(ann == null);
+}
+
+test "C-terminal N gets no annotation" {
+    const ann = getTerminalAnnotation(n(" N  "), false, true);
     try std.testing.expect(ann == null);
 }
