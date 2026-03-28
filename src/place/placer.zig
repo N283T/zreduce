@@ -97,6 +97,14 @@ pub fn addHydrogens(
 /// Execute a single placement plan: find reference atoms, compute H position, add to model.
 /// Returns true if placed, false if skipped (missing reference atoms).
 fn executePlan(mdl: *Model, res: Residue, res_idx: u32, plan: *const standard.PlacementPlan) !bool {
+    // Resolve parent metadata from the base atom (connected[0])
+    const base_atom = findAtom(mdl, res, plan.connected[0]);
+    const meta = if (base_atom) |ba| ParentMeta{
+        .altloc = ba.altloc,
+        .occupancy = ba.occupancy,
+        .b_factor = ba.b_factor,
+    } else ParentMeta{};
+
     switch (plan.placement_type) {
         .hxr3 => {
             // connected[0]=center, connected[1..2]=two known neighbors
@@ -113,7 +121,7 @@ fn executePlan(mdl: *Model, res: Residue, res_idx: u32, plan: *const standard.Pl
                 n3_pos.cast(f64),
                 plan.bond_len,
             );
-            try appendHydrogen(mdl, h_pos.cast(f32), plan, res_idx);
+            try appendHydrogen(mdl, h_pos.cast(f32), plan, res_idx, meta);
             return true;
         },
 
@@ -131,7 +139,7 @@ fn executePlan(mdl: *Model, res: Residue, res_idx: u32, plan: *const standard.Pl
                 plan.angle,
                 plan.dihedral,
             );
-            try appendHydrogen(mdl, h_pos.cast(f32), plan, res_idx);
+            try appendHydrogen(mdl, h_pos.cast(f32), plan, res_idx, meta);
             return true;
         },
 
@@ -152,7 +160,7 @@ fn executePlan(mdl: *Model, res: Residue, res_idx: u32, plan: *const standard.Pl
                 plan.angle,
                 plan.dihedral,
             );
-            try appendHydrogen(mdl, h_pos.cast(f32), plan, res_idx);
+            try appendHydrogen(mdl, h_pos.cast(f32), plan, res_idx, meta);
             return true;
         },
 
@@ -169,7 +177,7 @@ fn executePlan(mdl: *Model, res: Residue, res_idx: u32, plan: *const standard.Pl
                 plan.bond_len,
                 plan.fudge,
             );
-            try appendHydrogen(mdl, h_pos.cast(f32), plan, res_idx);
+            try appendHydrogen(mdl, h_pos.cast(f32), plan, res_idx, meta);
             return true;
         },
 
@@ -185,7 +193,7 @@ fn executePlan(mdl: *Model, res: Residue, res_idx: u32, plan: *const standard.Pl
                 plan.bond_len,
                 plan.fudge,
             );
-            try appendHydrogen(mdl, h_pos.cast(f32), plan, res_idx);
+            try appendHydrogen(mdl, h_pos.cast(f32), plan, res_idx, meta);
             return true;
         },
 
@@ -198,7 +206,7 @@ fn executePlan(mdl: *Model, res: Residue, res_idx: u32, plan: *const standard.Pl
                 neighbor_pos.cast(f64),
                 plan.bond_len,
             );
-            try appendHydrogen(mdl, h_pos.cast(f32), plan, res_idx);
+            try appendHydrogen(mdl, h_pos.cast(f32), plan, res_idx, meta);
             return true;
         },
     }
@@ -332,6 +340,13 @@ fn findAtomBetween(mdl: *const Model, res: Residue, name1: [4]u8, name2: [4]u8) 
     return null;
 }
 
+/// Metadata inherited from the parent heavy atom.
+const ParentMeta = struct {
+    altloc: u8 = ' ',
+    occupancy: f32 = 1.0,
+    b_factor: f32 = 0.0,
+};
+
 /// Check if a placement plan is for the backbone amide H.
 /// The backbone H has name " H  " and is bonded to N with dihedral ref to CA/C.
 fn isBackboneH(plan: *const standard.PlacementPlan) bool {
@@ -346,7 +361,7 @@ fn isBackboneH(plan: *const standard.PlacementPlan) bool {
 }
 
 /// Append an N-terminal H atom to the model.
-fn appendNtermH(mdl: *Model, h_pos: Vec3f32, name: []const u8, res_idx: u32) !void {
+fn appendNtermH(mdl: *Model, h_pos: Vec3f32, name: []const u8, res_idx: u32, meta: ParentMeta) !void {
     const hpol_info = element.AtomType.Hpol.info();
     var atom = Atom{
         .pos = h_pos,
@@ -355,8 +370,9 @@ fn appendNtermH(mdl: *Model, h_pos: Vec3f32, name: []const u8, res_idx: u32) !vo
         .is_hydrogen = true,
         .is_added = true,
         .vdw_radius = hpol_info.explicit_radius,
-        .occupancy = 1.0,
-        .b_factor = 0.0,
+        .altloc = meta.altloc,
+        .occupancy = meta.occupancy,
+        .b_factor = meta.b_factor,
         .flags = .{ .donor = true },
     };
     atom.setName(name);
@@ -369,6 +385,13 @@ fn placeNtermNH3(mdl: *Model, res: Residue, res_idx: u32) !u32 {
     const n_pos = findAtomPos(mdl, res, .{ ' ', 'N', ' ', ' ' }) orelse return 0;
     const ca_pos = findAtomPos(mdl, res, .{ ' ', 'C', 'A', ' ' }) orelse return 0;
     const c_pos = findAtomPos(mdl, res, .{ ' ', 'C', ' ', ' ' }) orelse return 0;
+
+    const n_atom = findAtom(mdl, res, .{ ' ', 'N', ' ', ' ' });
+    const meta = if (n_atom) |na| ParentMeta{
+        .altloc = na.altloc,
+        .occupancy = na.occupancy,
+        .b_factor = na.b_factor,
+    } else ParentMeta{};
 
     const n64 = math_mod.Vec3(f64){ .x = n_pos.x, .y = n_pos.y, .z = n_pos.z };
     const ca64 = math_mod.Vec3(f64){ .x = ca_pos.x, .y = ca_pos.y, .z = ca_pos.z };
@@ -383,7 +406,7 @@ fn placeNtermNH3(mdl: *Model, res: Residue, res_idx: u32) !u32 {
     for (names, dihedrals) |name, dihedral| {
         const h64 = geometry.placeH3XR(n64, ca64, c64, bond_len, angle_deg, dihedral);
         const h_pos = Vec3f32{ .x = @floatCast(h64.x), .y = @floatCast(h64.y), .z = @floatCast(h64.z) };
-        try appendNtermH(mdl, h_pos, name, res_idx);
+        try appendNtermH(mdl, h_pos, name, res_idx, meta);
         placed += 1;
     }
     return placed;
@@ -395,6 +418,13 @@ fn placeNtermNH2Pro(mdl: *Model, res: Residue, res_idx: u32) !u32 {
     const n_pos = findAtomPos(mdl, res, .{ ' ', 'N', ' ', ' ' }) orelse return 0;
     const ca_pos = findAtomPos(mdl, res, .{ ' ', 'C', 'A', ' ' }) orelse return 0;
     const cd_pos = findAtomPos(mdl, res, .{ ' ', 'C', 'D', ' ' }) orelse return 0;
+
+    const n_atom = findAtom(mdl, res, .{ ' ', 'N', ' ', ' ' });
+    const meta = if (n_atom) |na| ParentMeta{
+        .altloc = na.altloc,
+        .occupancy = na.occupancy,
+        .b_factor = na.b_factor,
+    } else ParentMeta{};
 
     // PRO N is sp3 with 3 neighbors (CA, CD, and the 2 H).
     // Use h2xr2 (two H on atom with 2 heavy neighbors).
@@ -411,7 +441,7 @@ fn placeNtermNH2Pro(mdl: *Model, res: Residue, res_idx: u32) !u32 {
     for (names, dihedrals) |name, dihedral| {
         const h64 = geometry.placeH2XR2(n64, ca64, cd64, bond_len, angle_deg, dihedral);
         const h_pos = Vec3f32{ .x = @floatCast(h64.x), .y = @floatCast(h64.y), .z = @floatCast(h64.z) };
-        try appendNtermH(mdl, h_pos, name, res_idx);
+        try appendNtermH(mdl, h_pos, name, res_idx, meta);
         placed += 1;
     }
     return placed;
@@ -429,7 +459,7 @@ fn collectAtomNames(allocator: std.mem.Allocator, mdl: *const Model, res: Residu
 }
 
 /// Append a new hydrogen atom to the model.
-fn appendHydrogen(mdl: *Model, pos: Vec3f32, plan: *const standard.PlacementPlan, res_idx: u32) !void {
+fn appendHydrogen(mdl: *Model, pos: Vec3f32, plan: *const standard.PlacementPlan, res_idx: u32, meta: ParentMeta) !void {
     var atom = Atom{
         .pos = pos,
         .element_type = plan.atom_type,
@@ -437,6 +467,9 @@ fn appendHydrogen(mdl: *Model, pos: Vec3f32, plan: *const standard.PlacementPlan
         .is_hydrogen = true,
         .is_added = true,
         .vdw_radius = plan.atom_type.info().explicit_radius,
+        .altloc = meta.altloc,
+        .occupancy = meta.occupancy,
+        .b_factor = meta.b_factor,
     };
     // Set name from plan h_name (trimmed of spaces)
     var start: usize = 0;
@@ -539,6 +572,23 @@ test "findAtom returns full atom with metadata" {
     // Non-existent atom returns null
     const xx = findAtom(&mdl, res, .{ ' ', 'X', 'X', ' ' });
     try testing.expect(xx == null);
+}
+
+test "placed H inherits parent atom metadata" {
+    const source = @embedFile("../test_data/tiny.cif");
+    var mdl = try mmcif.parseModel(testing.allocator, source);
+    defer mdl.deinit();
+
+    // tiny.cif atoms have occupancy=1.0, b_factor=10.0, altloc=' '
+    _ = try addHydrogens(&mdl, null);
+
+    // All placed H atoms should inherit b_factor=10.0 from parent
+    for (mdl.atoms.items) |atom| {
+        if (atom.is_added and atom.is_hydrogen) {
+            try testing.expectEqual(@as(f32, 10.0), atom.b_factor);
+            try testing.expectEqual(@as(f32, 1.0), atom.occupancy);
+        }
+    }
 }
 
 test "existsInResidue checks name and altloc" {
