@@ -98,12 +98,7 @@ pub fn addHydrogens(
 /// Returns true if placed, false if skipped (missing reference atoms).
 fn executePlan(mdl: *Model, res: Residue, res_idx: u32, plan: *const standard.PlacementPlan) !bool {
     // Resolve parent metadata from the base atom (connected[0])
-    const base_atom = findAtom(mdl, res, plan.connected[0]);
-    const meta = if (base_atom) |ba| ParentMeta{
-        .altloc = ba.altloc,
-        .occupancy = ba.occupancy,
-        .b_factor = ba.b_factor,
-    } else ParentMeta{};
+    const meta = ParentMeta.fromAtom(findAtom(mdl, res, plan.connected[0]));
 
     // Skip if this hydrogen already exists in the residue
     if (existsInResidue(mdl, res, plan.h_name, meta.altloc)) return false;
@@ -348,7 +343,23 @@ const ParentMeta = struct {
     altloc: u8 = ' ',
     occupancy: f32 = 1.0,
     b_factor: f32 = 0.0,
+
+    /// Extract metadata from an atom, or return defaults if null.
+    fn fromAtom(atom: ?Atom) ParentMeta {
+        return if (atom) |a| ParentMeta{
+            .altloc = a.altloc,
+            .occupancy = a.occupancy,
+            .b_factor = a.b_factor,
+        } else ParentMeta{};
+    }
 };
+
+/// Pad a short atom name (e.g. "H1") to a 4-char PDB-padded name.
+fn padName(name: []const u8) [4]u8 {
+    var padded: [4]u8 = .{ ' ', ' ', ' ', ' ' };
+    for (name, 0..) |c, i| padded[i] = c;
+    return padded;
+}
 
 /// Check if a placement plan is for the backbone amide H.
 /// The backbone H has name " H  " and is bonded to N with dihedral ref to CA/C.
@@ -389,12 +400,7 @@ fn placeNtermNH3(mdl: *Model, res: Residue, res_idx: u32) !u32 {
     const ca_pos = findAtomPos(mdl, res, .{ ' ', 'C', 'A', ' ' }) orelse return 0;
     const c_pos = findAtomPos(mdl, res, .{ ' ', 'C', ' ', ' ' }) orelse return 0;
 
-    const n_atom = findAtom(mdl, res, .{ ' ', 'N', ' ', ' ' });
-    const meta = if (n_atom) |na| ParentMeta{
-        .altloc = na.altloc,
-        .occupancy = na.occupancy,
-        .b_factor = na.b_factor,
-    } else ParentMeta{};
+    const meta = ParentMeta.fromAtom(findAtom(mdl, res, .{ ' ', 'N', ' ', ' ' }));
 
     const n64 = math_mod.Vec3(f64){ .x = n_pos.x, .y = n_pos.y, .z = n_pos.z };
     const ca64 = math_mod.Vec3(f64){ .x = ca_pos.x, .y = ca_pos.y, .z = ca_pos.z };
@@ -407,10 +413,7 @@ fn placeNtermNH3(mdl: *Model, res: Residue, res_idx: u32) !u32 {
 
     var placed: u32 = 0;
     for (names, dihedrals) |name, dihedral| {
-        // Check for duplicate using padded name
-        var padded_name: [4]u8 = .{ ' ', ' ', ' ', ' ' };
-        for (name, 0..) |c, i| padded_name[i] = c;
-        if (existsInResidue(mdl, res, padded_name, meta.altloc)) continue;
+        if (existsInResidue(mdl, res, padName(name), meta.altloc)) continue;
 
         const h64 = geometry.placeH3XR(n64, ca64, c64, bond_len, angle_deg, dihedral);
         const h_pos = Vec3f32{ .x = @floatCast(h64.x), .y = @floatCast(h64.y), .z = @floatCast(h64.z) };
@@ -427,12 +430,7 @@ fn placeNtermNH2Pro(mdl: *Model, res: Residue, res_idx: u32) !u32 {
     const ca_pos = findAtomPos(mdl, res, .{ ' ', 'C', 'A', ' ' }) orelse return 0;
     const cd_pos = findAtomPos(mdl, res, .{ ' ', 'C', 'D', ' ' }) orelse return 0;
 
-    const n_atom = findAtom(mdl, res, .{ ' ', 'N', ' ', ' ' });
-    const meta = if (n_atom) |na| ParentMeta{
-        .altloc = na.altloc,
-        .occupancy = na.occupancy,
-        .b_factor = na.b_factor,
-    } else ParentMeta{};
+    const meta = ParentMeta.fromAtom(findAtom(mdl, res, .{ ' ', 'N', ' ', ' ' }));
 
     // PRO N is sp3 with 3 neighbors (CA, CD, and the 2 H).
     // Use h2xr2 (two H on atom with 2 heavy neighbors).
@@ -447,9 +445,7 @@ fn placeNtermNH2Pro(mdl: *Model, res: Residue, res_idx: u32) !u32 {
 
     var placed: u32 = 0;
     for (names, dihedrals) |name, dihedral| {
-        var padded_name: [4]u8 = .{ ' ', ' ', ' ', ' ' };
-        for (name, 0..) |c, i| padded_name[i] = c;
-        if (existsInResidue(mdl, res, padded_name, meta.altloc)) continue;
+        if (existsInResidue(mdl, res, padName(name), meta.altloc)) continue;
 
         const h64 = geometry.placeH2XR2(n64, ca64, cd64, bond_len, angle_deg, dihedral);
         const h_pos = Vec3f32{ .x = @floatCast(h64.x), .y = @floatCast(h64.y), .z = @floatCast(h64.z) };
