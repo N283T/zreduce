@@ -92,6 +92,26 @@ pub fn addHydrogens(
     return result;
 }
 
+const chemistry = @import("chemistry.zig");
+
+/// Apply residue/atom-specific chemical annotations to heavy atoms.
+/// Updates element_type, flags, and vdw_radius on standard-residue heavy atoms.
+/// Should be called once after parsing, before hydrogen placement.
+pub fn applyChemistry(mdl: *Model) void {
+    for (mdl.residues.items) |res| {
+        const comp_id = res.compIdSlice();
+        const atoms = mdl.atoms.items[res.atom_start..res.atom_end];
+        for (atoms) |*atom| {
+            if (atom.is_hydrogen) continue;
+            if (chemistry.getAnnotation(comp_id, atom.name)) |ann| {
+                atom.element_type = ann.atom_type;
+                atom.flags = ann.flags;
+                atom.vdw_radius = ann.atom_type.info().explicit_radius;
+            }
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Plan execution
 // ---------------------------------------------------------------------------
@@ -846,3 +866,40 @@ test "placement succeeds on stretched geometry with bond topology" {
     }
     try testing.expect(found_ha);
 }
+
+test "applyChemistry sets backbone C to C_eq_O" {
+    const source = @embedFile("../test_data/tiny.cif");
+    var mdl = try mmcif.parseModel(testing.allocator, source);
+    defer mdl.deinit();
+
+    // Before: C has generic element type
+    // tiny.cif atoms: N(0), CA(1), C(2), O(3), CB(4)
+    try testing.expectEqual(element.AtomType.C, mdl.atoms.items[2].element_type);
+
+    applyChemistry(&mdl);
+
+    // After: C has carbonyl type
+    try testing.expectEqual(element.AtomType.C_eq_O, mdl.atoms.items[2].element_type);
+    try testing.expectApproxEqAbs(@as(f32, 1.65), mdl.atoms.items[2].vdw_radius, 1e-6);
+}
+
+test "applyChemistry sets backbone O acceptor flag" {
+    const source = @embedFile("../test_data/tiny.cif");
+    var mdl = try mmcif.parseModel(testing.allocator, source);
+    defer mdl.deinit();
+
+    try testing.expect(!mdl.atoms.items[3].flags.acceptor);
+    applyChemistry(&mdl);
+    try testing.expect(mdl.atoms.items[3].flags.acceptor);
+}
+
+test "applyChemistry sets backbone N donor flag" {
+    const source = @embedFile("../test_data/tiny.cif");
+    var mdl = try mmcif.parseModel(testing.allocator, source);
+    defer mdl.deinit();
+
+    try testing.expect(!mdl.atoms.items[0].flags.donor);
+    applyChemistry(&mdl);
+    try testing.expect(mdl.atoms.items[0].flags.donor);
+}
+

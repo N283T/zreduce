@@ -49,9 +49,31 @@ fn a(comptime atom_name: []const u8, atom_type: element.AtomType, flags: element
     return .{ .name = n(atom_name), .ann = .{ .atom_type = atom_type, .flags = flags } };
 }
 
+/// Returns start and end indices of the non-space content in a 4-char name.
+fn trimBounds(name: *const [4]u8) struct { start: usize, end: usize } {
+    var start: usize = 0;
+    while (start < 4 and name[start] == ' ') start += 1;
+    var end: usize = 4;
+    while (end > start and name[end - 1] == ' ') end -= 1;
+    return .{ .start = start, .end = end };
+}
+
+/// Check whether two 4-char names match after trimming leading/trailing spaces.
+fn nameEql(x: *const [4]u8, y: *const [4]u8) bool {
+    const xb = trimBounds(x);
+    const yb = trimBounds(y);
+    const x_len = xb.end - xb.start;
+    const y_len = yb.end - yb.start;
+    if (x_len != y_len) return false;
+    for (0..x_len) |i| {
+        if (x[xb.start + i] != y[yb.start + i]) return false;
+    }
+    return true;
+}
+
 fn lookupName(entries: []const AnnotEntry, atom_name: [4]u8) ?ChemAnnotation {
-    for (entries) |entry| {
-        if (std.mem.eql(u8, &entry.name, &atom_name)) return entry.ann;
+    for (entries) |*entry| {
+        if (nameEql(&entry.name, &atom_name)) return entry.ann;
     }
     return null;
 }
