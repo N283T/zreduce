@@ -2,6 +2,7 @@
 
 const math = @import("../math.zig");
 const element = @import("../element.zig");
+const standard = @import("../place/standard.zig");
 
 pub const AtomFlags = element.AtomFlags;
 
@@ -19,6 +20,7 @@ pub const Atom = struct {
     vdw_radius: f32 = 1.70,
     flags: AtomFlags = .{},
     serial: u32 = 0,
+    mover_hint: standard.MoverHint = .none,
 
     pub fn nameSlice(self: *const Atom) []const u8 {
         return self.name[0..@min(@as(usize, self.name_len), 4)];

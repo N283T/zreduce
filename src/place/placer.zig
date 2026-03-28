@@ -676,6 +676,7 @@ fn appendHydrogen(mdl: *Model, pos: Vec3f32, plan: *const standard.PlacementPlan
         .altloc = meta.altloc,
         .occupancy = meta.occupancy,
         .b_factor = meta.b_factor,
+        .mover_hint = plan.mover_hint,
     };
     // Set name from plan h_name (trimmed of spaces)
     var start: usize = 0;
@@ -1155,4 +1156,23 @@ test "conformer A and B H atoms have different positions" {
     try testing.expect(ha_b_pos != null);
     const diff = ha_a_pos.?.distance(ha_b_pos.?);
     try testing.expect(diff > 0.01);
+}
+
+test "placed H atoms have correct mover_hint" {
+    const source = @embedFile("../test_data/tiny.cif");
+    var mdl = try mmcif.parseModel(testing.allocator, source);
+    defer mdl.deinit();
+
+    applyChemistry(&mdl);
+    _ = try addHydrogens(&mdl, null);
+
+    // ALA methyl H (HB1/HB2/HB3) should have rotate_methyl hint
+    var methyl_count: u32 = 0;
+    for (mdl.atoms.items) |atom| {
+        if (atom.is_added and atom.mover_hint == .rotate_methyl) {
+            methyl_count += 1;
+        }
+    }
+    // ALA has 3 methyl H on CB
+    try testing.expectEqual(@as(u32, 3), methyl_count);
 }
