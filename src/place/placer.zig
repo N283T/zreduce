@@ -357,7 +357,15 @@ fn findAtomBetween(mdl: *const Model, res: Residue, name1: [4]u8, name2: [4]u8) 
 // Bond-aware neighbor queries
 // ---------------------------------------------------------------------------
 
+/// Given a bond entry, return the partner of `atom_name`, or null if not involved.
+fn bondPartner(bond: topology.BondEntry, atom_name: [4]u8) ?[4]u8 {
+    if (std.mem.eql(u8, &bond.a1, &atom_name)) return bond.a2;
+    if (std.mem.eql(u8, &bond.a2, &atom_name)) return bond.a1;
+    return null;
+}
+
 /// Find a bonded neighbor of `center_name` that is NOT `exclude_name`, using topology.
+/// Returns the first match; result depends on bond table ordering.
 fn findBondedNeighbor(
     mdl: *const Model,
     res: Residue,
@@ -366,13 +374,7 @@ fn findBondedNeighbor(
     exclude_name: [4]u8,
 ) ?Vec3f32 {
     for (bonds) |bond| {
-        const partner = if (std.mem.eql(u8, &bond.a1, &center_name))
-            bond.a2
-        else if (std.mem.eql(u8, &bond.a2, &center_name))
-            bond.a1
-        else
-            continue;
-
+        const partner = bondPartner(bond, center_name) orelse continue;
         if (std.mem.eql(u8, &partner, &exclude_name)) continue;
         if (findAtomPos(mdl, res, partner)) |pos| return pos;
     }
@@ -389,13 +391,7 @@ fn findThirdBondedNeighbor(
     n2_name: [4]u8,
 ) ?Vec3f32 {
     for (bonds) |bond| {
-        const partner = if (std.mem.eql(u8, &bond.a1, &center_name))
-            bond.a2
-        else if (std.mem.eql(u8, &bond.a2, &center_name))
-            bond.a1
-        else
-            continue;
-
+        const partner = bondPartner(bond, center_name) orelse continue;
         if (std.mem.eql(u8, &partner, &n1_name)) continue;
         if (std.mem.eql(u8, &partner, &n2_name)) continue;
         if (findAtomPos(mdl, res, partner)) |pos| return pos;
@@ -411,17 +407,12 @@ fn findBondedAtomBetween(
     name1: [4]u8,
     name2: [4]u8,
 ) ?Vec3f32 {
-    // Collect atoms bonded to name1
+    // Collect atoms bonded to name1 (max 8 — no standard AA atom has more)
     var bonded_to_1: [8][4]u8 = undefined;
     var count_1: usize = 0;
     for (bonds) |bond| {
-        const partner = if (std.mem.eql(u8, &bond.a1, &name1))
-            bond.a2
-        else if (std.mem.eql(u8, &bond.a2, &name1))
-            bond.a1
-        else
-            continue;
-        if (count_1 < 8) {
+        const partner = bondPartner(bond, name1) orelse continue;
+        if (count_1 < bonded_to_1.len) {
             bonded_to_1[count_1] = partner;
             count_1 += 1;
         }
@@ -429,13 +420,7 @@ fn findBondedAtomBetween(
 
     // Check which are also bonded to name2
     for (bonds) |bond| {
-        const partner = if (std.mem.eql(u8, &bond.a1, &name2))
-            bond.a2
-        else if (std.mem.eql(u8, &bond.a2, &name2))
-            bond.a1
-        else
-            continue;
-
+        const partner = bondPartner(bond, name2) orelse continue;
         for (bonded_to_1[0..count_1]) |candidate| {
             if (std.mem.eql(u8, &partner, &candidate)) {
                 if (findAtomPos(mdl, res, partner)) |pos| return pos;
