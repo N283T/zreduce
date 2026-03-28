@@ -1,5 +1,6 @@
 //! Place module: hydrogen placement geometry and utilities.
 
+pub const chemistry = @import("place/chemistry.zig");
 pub const geometry = @import("place/geometry.zig");
 pub const standard = @import("place/standard.zig");
 pub const topology = @import("place/topology.zig");
