@@ -17,6 +17,7 @@ const math_mod = @import("../math.zig");
 const element = @import("../element.zig");
 
 const Vec3f32 = math_mod.Vec3(f32);
+const topology = @import("topology.zig");
 
 pub const PlacementResult = struct {
     n_placed: u32 = 0,
@@ -43,11 +44,13 @@ pub fn addHydrogens(
         const is_nterm = (res_idx == chain.residue_start);
 
         if (standard.getPlans(comp_id)) |plans| {
+            const bonds = topology.getBonds(comp_id);
+
             for (plans) |plan| {
                 // Skip backbone amide H on N-terminal residues (NH3+, not NH)
                 if (is_nterm and isBackboneH(&plan)) continue;
 
-                if (try executePlan(mdl, res, @intCast(res_idx), &plan)) {
+                if (try executePlan(mdl, res, @intCast(res_idx), &plan, bonds)) {
                     result.n_placed += 1;
                 } else {
                     result.n_skipped += 1;
@@ -75,7 +78,7 @@ pub fn addHydrogens(
                 defer mdl.allocator.free(plans);
 
                 for (plans) |plan| {
-                    if (try executePlan(mdl, res, @intCast(res_idx), &plan)) {
+                    if (try executePlan(mdl, res, @intCast(res_idx), &plan, null)) {
                         result.n_placed += 1;
                     } else {
                         result.n_skipped += 1;
@@ -95,7 +98,7 @@ pub fn addHydrogens(
 
 /// Execute a single placement plan: find reference atoms, compute H position, add to model.
 /// Returns true if placed, false if skipped (duplicate H or missing reference atoms).
-fn executePlan(mdl: *Model, res: Residue, res_idx: u32, plan: *const standard.PlacementPlan) !bool {
+fn executePlan(mdl: *Model, res: Residue, res_idx: u32, plan: *const standard.PlacementPlan, bonds: ?[]const topology.BondEntry) !bool {
     // Resolve parent heavy atom (connected[0]) for metadata and position
     const base_atom = findAtom(mdl, res, plan.connected[0]) orelse return false;
     const meta = ParentMeta.fromAtom(base_atom);
@@ -110,7 +113,10 @@ fn executePlan(mdl: *Model, res: Residue, res_idx: u32, plan: *const standard.Pl
             const center_pos = base_atom.pos;
             const n1_pos = findAtomPos(mdl, res, plan.connected[1]) orelse return false;
             const n2_pos = findAtomPos(mdl, res, plan.connected[2]) orelse return false;
-            const n3_pos = findThirdNeighbor(mdl, res, plan.connected[0], plan.connected[1], plan.connected[2]) orelse return false;
+            const n3_pos = (if (bonds) |b|
+                findThirdBondedNeighbor(mdl, res, b, plan.connected[0], plan.connected[1], plan.connected[2])
+            else
+                findThirdNeighbor(mdl, res, plan.connected[0], plan.connected[1], plan.connected[2])) orelse return false;
 
             const h_pos = geometry.placeHXR3(
                 center_pos.cast(f64),
@@ -127,7 +133,10 @@ fn executePlan(mdl: *Model, res: Residue, res_idx: u32, plan: *const standard.Pl
             // connected[0]=center, connected[1]=reference neighbor
             const center_pos = base_atom.pos;
             const n1_pos = findAtomPos(mdl, res, plan.connected[1]) orelse return false;
-            const n2_pos = findOtherNeighbor(mdl, res, plan.connected[0], plan.connected[1]) orelse return false;
+            const n2_pos = (if (bonds) |b|
+                findBondedNeighbor(mdl, res, b, plan.connected[0], plan.connected[1])
+            else
+                findOtherNeighbor(mdl, res, plan.connected[0], plan.connected[1])) orelse return false;
 
             const h_pos = geometry.placeH2XR2(
                 center_pos.cast(f64),
@@ -147,6 +156,8 @@ fn executePlan(mdl: *Model, res: Residue, res_idx: u32, plan: *const standard.Pl
             const a2_pos = findAtomPos(mdl, res, plan.connected[1]) orelse return false;
             const a3_pos = if (!isBlank(plan.connected[2]))
                 findAtomPos(mdl, res, plan.connected[2]) orelse return false
+            else if (bonds) |b|
+                findBondedNeighbor(mdl, res, b, plan.connected[1], plan.connected[0]) orelse return false
             else
                 findOtherNeighbor(mdl, res, plan.connected[1], plan.connected[0]) orelse return false;
 
@@ -166,7 +177,10 @@ fn executePlan(mdl: *Model, res: Residue, res_idx: u32, plan: *const standard.Pl
             // connected[0] and connected[1] are neighbors; center is the atom between them
             const n1_pos = base_atom.pos;
             const n2_pos = findAtomPos(mdl, res, plan.connected[1]) orelse return false;
-            const center_pos = findAtomBetween(mdl, res, plan.connected[0], plan.connected[1]) orelse return false;
+            const center_pos = (if (bonds) |b|
+                findBondedAtomBetween(mdl, res, b, plan.connected[0], plan.connected[1])
+            else
+                findAtomBetween(mdl, res, plan.connected[0], plan.connected[1])) orelse return false;
 
             const h_pos = geometry.placeHXR2Planar(
                 center_pos.cast(f64),
@@ -334,6 +348,83 @@ fn findAtomBetween(mdl: *const Model, res: Residue, name1: [4]u8, name2: [4]u8) 
         if (nameMatch(name2, aname)) continue;
         if (a.pos.distance(pos1) < bond_cutoff and a.pos.distance(pos2) < bond_cutoff) {
             return a.pos;
+        }
+    }
+    return null;
+}
+
+// ---------------------------------------------------------------------------
+// Bond-aware neighbor queries
+// ---------------------------------------------------------------------------
+
+/// Given a bond entry, return the partner of `atom_name`, or null if not involved.
+fn bondPartner(bond: topology.BondEntry, atom_name: [4]u8) ?[4]u8 {
+    if (std.mem.eql(u8, &bond.a1, &atom_name)) return bond.a2;
+    if (std.mem.eql(u8, &bond.a2, &atom_name)) return bond.a1;
+    return null;
+}
+
+/// Find a bonded neighbor of `center_name` that is NOT `exclude_name`, using topology.
+/// Returns the first match; result depends on bond table ordering.
+fn findBondedNeighbor(
+    mdl: *const Model,
+    res: Residue,
+    bonds: []const topology.BondEntry,
+    center_name: [4]u8,
+    exclude_name: [4]u8,
+) ?Vec3f32 {
+    for (bonds) |bond| {
+        const partner = bondPartner(bond, center_name) orelse continue;
+        if (std.mem.eql(u8, &partner, &exclude_name)) continue;
+        if (findAtomPos(mdl, res, partner)) |pos| return pos;
+    }
+    return null;
+}
+
+/// Find the 3rd bonded neighbor of `center_name`, excluding `n1_name` and `n2_name`.
+fn findThirdBondedNeighbor(
+    mdl: *const Model,
+    res: Residue,
+    bonds: []const topology.BondEntry,
+    center_name: [4]u8,
+    n1_name: [4]u8,
+    n2_name: [4]u8,
+) ?Vec3f32 {
+    for (bonds) |bond| {
+        const partner = bondPartner(bond, center_name) orelse continue;
+        if (std.mem.eql(u8, &partner, &n1_name)) continue;
+        if (std.mem.eql(u8, &partner, &n2_name)) continue;
+        if (findAtomPos(mdl, res, partner)) |pos| return pos;
+    }
+    return null;
+}
+
+/// Find an atom bonded to BOTH `name1` and `name2` using topology.
+fn findBondedAtomBetween(
+    mdl: *const Model,
+    res: Residue,
+    bonds: []const topology.BondEntry,
+    name1: [4]u8,
+    name2: [4]u8,
+) ?Vec3f32 {
+    // Collect atoms bonded to name1 (max 8 — no standard AA atom has more)
+    var bonded_to_1: [8][4]u8 = undefined;
+    var count_1: usize = 0;
+    for (bonds) |bond| {
+        const partner = bondPartner(bond, name1) orelse continue;
+        if (count_1 < bonded_to_1.len) {
+            bonded_to_1[count_1] = partner;
+            count_1 += 1;
+        }
+    }
+
+    // Check which are also bonded to name2
+    for (bonds) |bond| {
+        const partner = bondPartner(bond, name2) orelse continue;
+        for (bonded_to_1[0..count_1]) |candidate| {
+            if (std.mem.eql(u8, &partner, &candidate)) {
+                if (findAtomPos(mdl, res, partner)) |pos| return pos;
+            }
         }
     }
     return null;
@@ -663,4 +754,95 @@ test "PlacementResult counts duplicates as skipped" {
     // Total plans attempted should still be the same as clean ALA
     try testing.expect(result.n_skipped >= 1);
     try testing.expectEqual(@as(u32, 1), result.n_residues);
+}
+
+test "findBondedNeighbor returns correct neighbor from topology" {
+    const source = @embedFile("../test_data/tiny.cif");
+    var mdl = try mmcif.parseModel(testing.allocator, source);
+    defer mdl.deinit();
+
+    const res = mdl.residues.items[0];
+    const bonds = topology.getBonds("ALA").?;
+
+    // CA is bonded to N, C, CB. Excluding N, should find C or CB.
+    const result = findBondedNeighbor(&mdl, res, bonds, .{ ' ', 'C', 'A', ' ' }, .{ ' ', 'N', ' ', ' ' });
+    try testing.expect(result != null);
+
+    // Verify it's C or CB (both bonded to CA, excluding N)
+    const c_pos = findAtomPos(&mdl, res, .{ ' ', 'C', ' ', ' ' });
+    const cb_pos = findAtomPos(&mdl, res, .{ ' ', 'C', 'B', ' ' });
+    const pos = result.?;
+    const is_c = c_pos != null and pos.x == c_pos.?.x and pos.y == c_pos.?.y and pos.z == c_pos.?.z;
+    const is_cb = cb_pos != null and pos.x == cb_pos.?.x and pos.y == cb_pos.?.y and pos.z == cb_pos.?.z;
+    try testing.expect(is_c or is_cb);
+}
+
+test "findThirdBondedNeighbor finds the third bonded atom" {
+    const source = @embedFile("../test_data/tiny.cif");
+    var mdl = try mmcif.parseModel(testing.allocator, source);
+    defer mdl.deinit();
+
+    const res = mdl.residues.items[0];
+    const bonds = topology.getBonds("ALA").?;
+
+    // CA bonded to N, C, CB. Excluding N and C → CB.
+    const result = findThirdBondedNeighbor(&mdl, res, bonds, .{ ' ', 'C', 'A', ' ' }, .{ ' ', 'N', ' ', ' ' }, .{ ' ', 'C', ' ', ' ' });
+    try testing.expect(result != null);
+    const cb_pos = findAtomPos(&mdl, res, .{ ' ', 'C', 'B', ' ' }).?;
+    try testing.expectEqual(cb_pos.x, result.?.x);
+    try testing.expectEqual(cb_pos.y, result.?.y);
+    try testing.expectEqual(cb_pos.z, result.?.z);
+}
+
+test "findBondedAtomBetween finds atom bonded to both" {
+    const source = @embedFile("../test_data/tiny.cif");
+    var mdl = try mmcif.parseModel(testing.allocator, source);
+    defer mdl.deinit();
+
+    const res = mdl.residues.items[0];
+    const bonds = topology.getBonds("ALA").?;
+
+    // N and C are both bonded to CA
+    const result = findBondedAtomBetween(&mdl, res, bonds, .{ ' ', 'N', ' ', ' ' }, .{ ' ', 'C', ' ', ' ' });
+    try testing.expect(result != null);
+    const ca_pos = findAtomPos(&mdl, res, .{ ' ', 'C', 'A', ' ' }).?;
+    try testing.expectEqual(ca_pos.x, result.?.x);
+    try testing.expectEqual(ca_pos.y, result.?.y);
+    try testing.expectEqual(ca_pos.z, result.?.z);
+}
+
+test "bond-based query finds stretched CB that distance-based misses" {
+    const source = @embedFile("../test_data/ala_stretched.cif");
+    var mdl = try mmcif.parseModel(testing.allocator, source);
+    defer mdl.deinit();
+
+    const res = mdl.residues.items[0];
+    const bonds = topology.getBonds("ALA").?;
+
+    // Distance-based: CB is >1.9A from CA, should NOT be found
+    const dist_result = findThirdNeighbor(&mdl, res, .{ ' ', 'C', 'A', ' ' }, .{ ' ', 'N', ' ', ' ' }, .{ ' ', 'C', ' ', ' ' });
+    try testing.expect(dist_result == null);
+
+    // Bond-based: CB is bonded to CA in topology, SHOULD be found
+    const bond_result = findThirdBondedNeighbor(&mdl, res, bonds, .{ ' ', 'C', 'A', ' ' }, .{ ' ', 'N', ' ', ' ' }, .{ ' ', 'C', ' ', ' ' });
+    try testing.expect(bond_result != null);
+}
+
+test "placement succeeds on stretched geometry with bond topology" {
+    const source = @embedFile("../test_data/ala_stretched.cif");
+    var mdl = try mmcif.parseModel(testing.allocator, source);
+    defer mdl.deinit();
+
+    _ = try addHydrogens(&mdl, null);
+
+    // With bond topology, HA should be placed even though CB is >1.9A from CA
+    // (HA placement type is hxr3 which needs the 3rd neighbor = CB)
+    var found_ha = false;
+    for (mdl.atoms.items) |atom| {
+        if (std.mem.eql(u8, atom.nameSlice(), "HA")) {
+            found_ha = true;
+            break;
+        }
+    }
+    try testing.expect(found_ha);
 }

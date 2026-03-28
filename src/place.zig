@@ -2,6 +2,7 @@
 
 pub const geometry = @import("place/geometry.zig");
 pub const standard = @import("place/standard.zig");
+pub const topology = @import("place/topology.zig");
 pub const het = @import("place/het.zig");
 pub const placer = @import("place/placer.zig");
 
