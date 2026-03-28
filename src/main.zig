@@ -160,12 +160,31 @@ pub fn main() !void {
     const n_added: u32 = @intCast(mdl.atoms.items.len - initial_count);
 
     // 7. Optimize (unless --no-opt)
-    // TODO: Build movers from placement hints, run optimizer.
-    if (config.no_opt) {
-        std.debug.print("Note: --no-opt has no effect (optimization not yet implemented)\n", .{});
+    var movers: []zreduce.optimize.Mover = &.{};
+    defer {
+        for (movers) |*m| @constCast(m).deinit();
+        if (movers.len > 0) allocator.free(movers);
     }
-    if (config.no_flip) {
-        std.debug.print("Note: --no-flip has no effect (optimization not yet implemented)\n", .{});
+
+    if (!config.no_opt) {
+        movers = zreduce.optimize.generateMovers(allocator, &mdl) catch |err| {
+            std.debug.print("Error: mover generation failed: {s}\n", .{@errorName(err)});
+            std.process.exit(1);
+        };
+
+        if (movers.len > 0) {
+            const opt_config = zreduce.optimize.OptConfig{};
+            const opt_result = zreduce.optimize.optimizer.optimize(allocator, movers, &mdl, opt_config) catch |err| {
+                std.debug.print("Error: optimization failed: {s}\n", .{@errorName(err)});
+                std.process.exit(1);
+            };
+            std.debug.print("  Movers: {d} ({d} singletons, {d} brute-force, {d} greedy)\n", .{
+                movers.len,
+                opt_result.n_singletons,
+                opt_result.n_brute_force,
+                opt_result.n_vertex_cut,
+            });
+        }
     }
 
     // 8. Write output (preserving original CIF categories)
@@ -195,13 +214,12 @@ pub fn main() !void {
         };
         defer file.close();
         var jw = file.writer(&json_buf);
-        const empty_movers: []const zreduce.optimize.Mover = &.{};
         try zreduce.writer.json_writer.writeLog(
             &jw.interface,
             build_options.version,
             config.input_path,
             n_added,
-            empty_movers,
+            movers,
             mdl.residues.items,
             mdl.chains.items,
         );
