@@ -13,6 +13,7 @@ const mover_mod = @import("mover.zig");
 const Mover = mover_mod.Mover;
 const scorer_mod = @import("scorer.zig");
 const clique_mod = @import("clique.zig");
+const rotator_mod = @import("rotator.zig");
 const element = @import("../element.zig");
 
 pub const OptConfig = struct {
@@ -73,15 +74,20 @@ pub fn optimize(
             result.n_brute_force += 1;
         } else {
             // Vertex-cut decomposition (simplified: greedy for Phase 3)
-            optimizeGreedy(movers, clq, model, config);
+            optimizeIterativeGreedy(movers, clq, model, config);
             result.n_vertex_cut += 1;
         }
     }
 
-    // Apply best orientations
+    // Apply best coarse orientations
     for (movers) |*m| {
         m.applyOrientation(model.atoms.items, m.best_orientation);
         m.current_orientation = m.best_orientation;
+    }
+
+    // Fine search phase: refine each mover around its coarse best
+    for (0..movers.len) |mi| {
+        fineSearchMover(allocator, movers, @intCast(mi), model, config);
     }
 
     return result;
@@ -103,6 +109,53 @@ fn optimizeSingleton(movers: []Mover, mover_idx: u32, model: *Model, config: Opt
     }
 
     m.best_orientation = best_idx;
+}
+
+/// Refine a mover's best orientation with fine angular search.
+/// Directly updates atom positions if a fine position improves the score.
+fn fineSearchMover(
+    allocator: Allocator,
+    movers: []Mover,
+    mover_idx: u32,
+    model: *Model,
+    config: OptConfig,
+) void {
+    const m = &movers[mover_idx];
+    const atoms = model.atoms.items;
+
+    const fine = rotator_mod.generateFineOrientations(allocator, atoms, m, m.best_orientation) catch return;
+    defer {
+        for (fine) |o| allocator.free(o.positions);
+        allocator.free(fine);
+    }
+
+    if (fine.len == 0) return;
+
+    // Score current coarse best (already applied)
+    var best_score = scoreMover(m, mover_idx, movers, model, config) - m.orientationPenalty(m.best_orientation);
+
+    // Score fine orientations
+    var best_fine: ?usize = null;
+    for (fine, 0..) |orient, fi| {
+        for (m.atom_indices, 0..) |ai, j| {
+            atoms[ai].pos = orient.positions[j];
+        }
+        const score = scoreMover(m, mover_idx, movers, model, config) - orient.penalty;
+        if (score > best_score) {
+            best_score = score;
+            best_fine = fi;
+        }
+    }
+
+    if (best_fine) |fi| {
+        // Apply the best fine orientation
+        for (m.atom_indices, 0..) |ai, j| {
+            atoms[ai].pos = fine[fi].positions[j];
+        }
+    } else {
+        // Restore coarse best
+        m.applyOrientation(atoms, m.best_orientation);
+    }
 }
 
 fn optimizeBruteForce(
@@ -173,10 +226,19 @@ pub fn totalStates(movers: []const Mover, clq: []const u32) u64 {
     return total;
 }
 
-fn optimizeGreedy(movers: []Mover, clq: []const u32, model: *Model, config: OptConfig) void {
-    // Simple greedy: optimize each mover in the clique independently
-    for (clq) |mi| {
-        optimizeSingleton(movers, mi, model, config);
+fn optimizeIterativeGreedy(movers: []Mover, clq: []const u32, model: *Model, config: OptConfig) void {
+    const max_iterations: u32 = 3;
+    var iteration: u32 = 0;
+
+    while (iteration < max_iterations) : (iteration += 1) {
+        var changed = false;
+        for (clq) |mi| {
+            const old_best = movers[mi].best_orientation;
+            optimizeSingleton(movers, mi, model, config);
+            movers[mi].applyOrientation(model.atoms.items, movers[mi].best_orientation);
+            if (movers[mi].best_orientation != old_best) changed = true;
+        }
+        if (!changed) break;
     }
 }
 
@@ -402,4 +464,48 @@ test "incrementIndices mixed radix counting" {
     }
     // Started at (0,0), should enumerate 2*3 - 1 = 5 more states before overflow
     try testing.expectEqual(@as(u32, 5), count);
+}
+
+test "iterative greedy finds optimal for coupled movers" {
+    const allocator = testing.allocator;
+
+    var model = Model.init(allocator);
+    defer model.deinit();
+
+    // Fixed obstacle at origin
+    try model.atoms.append(allocator, .{
+        .pos = .{ .x = 0, .y = 0, .z = 0 },
+        .vdw_radius = 1.7,
+    });
+    // Mover 0 atom
+    try model.atoms.append(allocator, .{
+        .pos = .{ .x = 5, .y = 0, .z = 0 },
+        .vdw_radius = 1.7,
+    });
+    // Mover 1 atom
+    try model.atoms.append(allocator, .{
+        .pos = .{ .x = 0, .y = 5, .z = 0 },
+        .vdw_radius = 1.7,
+    });
+
+    var m0 = try makeTestMover(allocator, 1, &.{
+        .{ .x = 1.5, .y = 0, .z = 0 }, // overlaps with obstacle (dist 1.5 < 3.4)
+        .{ .x = 10.0, .y = 0, .z = 0 }, // far away
+    }, &.{ 0, 0 });
+    defer m0.deinit();
+
+    var m1 = try makeTestMover(allocator, 2, &.{
+        .{ .x = 0, .y = 1.5, .z = 0 }, // overlaps with obstacle (dist 1.5 < 3.4)
+        .{ .x = 0, .y = 10.0, .z = 0 }, // far away
+    }, &.{ 0, 0 });
+    defer m1.deinit();
+
+    var movers = [_]Mover{ m0, m1 };
+    const clq = [_]u32{ 0, 1 };
+
+    optimizeIterativeGreedy(&movers, &clq, &model, .{});
+
+    // Both should pick orientation 1 (away from obstacle)
+    try testing.expectEqual(@as(u16, 1), movers[0].best_orientation);
+    try testing.expectEqual(@as(u16, 1), movers[1].best_orientation);
 }

@@ -30,6 +30,10 @@ pub const Mover = struct {
     current_orientation: u16 = 0,
     allocator: std.mem.Allocator,
 
+    // Rotation axis geometry (for fine search, rotators only)
+    center_idx: ?u32 = null,
+    axis_idx: ?u32 = null,
+
     pub fn deinit(self: *Mover) void {
         for (self.orientations) |o| {
             self.allocator.free(o.positions);

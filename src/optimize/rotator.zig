@@ -48,6 +48,8 @@ pub fn createSingleHRotator(
         .atom_indices = atom_indices,
         .orientations = orientations,
         .allocator = allocator,
+        .center_idx = center_idx,
+        .axis_idx = axis_idx,
     };
 }
 
@@ -93,6 +95,8 @@ pub fn createNH3Rotator(
         .atom_indices = atom_indices,
         .orientations = orientations,
         .allocator = allocator,
+        .center_idx = center_idx,
+        .axis_idx = axis_idx,
     };
 }
 
@@ -136,7 +140,76 @@ pub fn createMethylRotator(
         .atom_indices = atom_indices,
         .orientations = orientations,
         .allocator = allocator,
+        .center_idx = center_idx,
+        .axis_idx = axis_idx,
     };
+}
+
+/// Generate fine angular orientations around a coarse best orientation.
+/// Returns empty slice if mover has no center_idx/axis_idx (non-rotator).
+pub fn generateFineOrientations(
+    allocator: std.mem.Allocator,
+    atoms: []const Atom,
+    m: *const Mover,
+    coarse_best_idx: u16,
+) ![]Orientation {
+    const ci = m.center_idx orelse return try allocator.alloc(Orientation, 0);
+    const ai = m.axis_idx orelse return try allocator.alloc(Orientation, 0);
+
+    const center_pos = atoms[ci].pos;
+    const axis_dir = center_pos.sub(atoms[ai].pos);
+
+    // Determine base angle from coarse_best_idx
+    const base_angle: f32 = switch (m.kind) {
+        .single_h_rotator => @as(f32, @floatFromInt(coarse_best_idx)) * 30.0,
+        .nh3_rotator, .methyl_rotator, .aromatic_methyl => blk: {
+            const offsets = [3]f32{ 0.0, 60.0, -60.0 };
+            break :blk offsets[coarse_best_idx];
+        },
+        else => return try allocator.alloc(Orientation, 0),
+    };
+
+    // Fine search parameters depend on kind
+    const half_range: f32 = switch (m.kind) {
+        .single_h_rotator => 15.0,
+        else => 30.0,
+    };
+    const step: f32 = switch (m.kind) {
+        .single_h_rotator => 5.0,
+        else => 10.0,
+    };
+
+    // Collect fine offsets, skipping 0 (the coarse position)
+    var offsets_buf: [12]f32 = undefined;
+    var n_offsets: usize = 0;
+    var off: f32 = -half_range;
+    while (off <= half_range + 0.001) : (off += step) {
+        if (@abs(off) < 0.001) continue; // skip 0 offset
+        offsets_buf[n_offsets] = off;
+        n_offsets += 1;
+    }
+
+    const n_atoms = m.orientations[0].positions.len;
+    const original_positions = m.orientations[0].positions;
+
+    const result = try allocator.alloc(Orientation, n_offsets);
+    var allocated: usize = 0;
+    errdefer {
+        for (result[0..allocated]) |o| allocator.free(o.positions);
+        allocator.free(result);
+    }
+
+    for (0..n_offsets) |i| {
+        const angle = base_angle + offsets_buf[i];
+        const positions = try allocator.alloc(Vec3(f32), n_atoms);
+        for (0..n_atoms) |j| {
+            positions[j] = math_mod.rotateAroundAxis(f32, original_positions[j], center_pos, axis_dir, angle);
+        }
+        result[i] = .{ .positions = positions, .penalty = 0.0 };
+        allocated += 1;
+    }
+
+    return result;
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -278,4 +351,53 @@ test "rotator atom distances preserved after rotation" {
         const d = o.positions[0].distance(center_pos);
         try testing.expectApproxEqAbs(@as(f32, 1.0), d, 0.01);
     }
+}
+
+test "generateFineOrientations produces 6 fine positions for single H" {
+    const allocator = testing.allocator;
+    const atoms = [_]Atom{
+        .{ .pos = .{ .x = 2.0, .y = 0.0, .z = 0.0 } },
+        .{ .pos = .{ .x = 1.0, .y = 0.0, .z = 0.0 } },
+        .{ .pos = .{ .x = 0.0, .y = 0.0, .z = 0.0 } },
+    };
+
+    var mover = try createSingleHRotator(allocator, &atoms, 0, 1, 2, 0);
+    defer mover.deinit();
+
+    const fine = try generateFineOrientations(allocator, &atoms, &mover, 0);
+    defer {
+        for (fine) |o| allocator.free(o.positions);
+        allocator.free(fine);
+    }
+
+    try testing.expectEqual(@as(usize, 6), fine.len);
+    // Distance to center preserved
+    const center_pos = atoms[1].pos;
+    for (fine) |o| {
+        const dist = o.positions[0].distance(center_pos);
+        try testing.expectApproxEqAbs(@as(f32, 1.0), dist, 0.01);
+    }
+}
+
+test "generateFineOrientations produces 6 fine positions for methyl" {
+    const allocator = testing.allocator;
+    const atoms = [_]Atom{
+        .{ .pos = .{ .x = 0.0, .y = 1.0, .z = 0.0 } },
+        .{ .pos = .{ .x = 0.866, .y = -0.5, .z = 0.0 } },
+        .{ .pos = .{ .x = -0.866, .y = -0.5, .z = 0.0 } },
+        .{ .pos = .{ .x = 0.0, .y = 0.0, .z = 0.0 } },
+        .{ .pos = .{ .x = -1.0, .y = 0.0, .z = 0.0 } },
+    };
+
+    var mover = try createMethylRotator(allocator, &atoms, .{ 0, 1, 2 }, 3, 4, 0);
+    defer mover.deinit();
+
+    const fine = try generateFineOrientations(allocator, &atoms, &mover, 0);
+    defer {
+        for (fine) |o| allocator.free(o.positions);
+        allocator.free(fine);
+    }
+
+    try testing.expectEqual(@as(usize, 6), fine.len);
+    try testing.expectEqual(@as(usize, 3), fine[0].positions.len);
 }
