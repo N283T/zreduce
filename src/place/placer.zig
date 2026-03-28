@@ -51,7 +51,7 @@ pub fn addHydrogens(
                 // Skip backbone amide H on N-terminal residues (NH3+, not NH)
                 if (is_nterm and isBackboneH(&plan)) continue;
 
-                if (try executePlan(mdl, res, @intCast(res_idx), &plan, bonds)) {
+                if (try executePlan(mdl, res, @intCast(res_idx), &plan, bonds, ' ')) {
                     result.n_placed += 1;
                 } else {
                     result.n_skipped += 1;
@@ -62,10 +62,10 @@ pub fn addHydrogens(
             if (is_nterm) {
                 const nterm = if (std.mem.eql(u8, comp_id, "PRO"))
                     // PRO has secondary amine (CD bonded to N) → NH2+ (2 H)
-                    try placeNtermNH2Pro(mdl, res, @intCast(res_idx))
+                    try placeNtermNH2Pro(mdl, res, @intCast(res_idx), ' ')
                 else
                     // Standard NH3+ (3 H)
-                    try placeNtermNH3(mdl, res, @intCast(res_idx));
+                    try placeNtermNH3(mdl, res, @intCast(res_idx), ' ');
                 result.n_placed += nterm.placed;
                 result.n_skipped += nterm.skipped;
             }
@@ -79,7 +79,7 @@ pub fn addHydrogens(
                 defer mdl.allocator.free(plans);
 
                 for (plans) |plan| {
-                    if (try executePlan(mdl, res, @intCast(res_idx), &plan, null)) {
+                    if (try executePlan(mdl, res, @intCast(res_idx), &plan, null, ' ')) {
                         result.n_placed += 1;
                     } else {
                         result.n_skipped += 1;
@@ -139,9 +139,9 @@ pub fn applyChemistry(mdl: *Model) void {
 
 /// Execute a single placement plan: find reference atoms, compute H position, add to model.
 /// Returns true if placed, false if skipped (duplicate H or missing reference atoms).
-fn executePlan(mdl: *Model, res: Residue, res_idx: u32, plan: *const standard.PlacementPlan, bonds: ?[]const topology.BondEntry) !bool {
+fn executePlan(mdl: *Model, res: Residue, res_idx: u32, plan: *const standard.PlacementPlan, bonds: ?[]const topology.BondEntry, target_altloc: u8) !bool {
     // Resolve parent heavy atom (connected[0]) for metadata and position
-    const base_atom = findAtom(mdl, res, plan.connected[0], ' ') orelse return false;
+    const base_atom = findAtom(mdl, res, plan.connected[0], target_altloc) orelse return false;
     const meta = ParentMeta.fromAtom(base_atom);
 
     // Skip if this hydrogen already exists in the residue
@@ -152,12 +152,12 @@ fn executePlan(mdl: *Model, res: Residue, res_idx: u32, plan: *const standard.Pl
             // connected[0]=center, connected[1..2]=two known neighbors
             // Need to find 3rd heavy-atom neighbor of center
             const center_pos = base_atom.pos;
-            const n1_pos = findAtomPos(mdl, res, plan.connected[1], ' ') orelse return false;
-            const n2_pos = findAtomPos(mdl, res, plan.connected[2], ' ') orelse return false;
+            const n1_pos = findAtomPos(mdl, res, plan.connected[1], target_altloc) orelse return false;
+            const n2_pos = findAtomPos(mdl, res, plan.connected[2], target_altloc) orelse return false;
             const n3_pos = (if (bonds) |b|
-                findThirdBondedNeighbor(mdl, res, b, plan.connected[0], plan.connected[1], plan.connected[2], ' ')
+                findThirdBondedNeighbor(mdl, res, b, plan.connected[0], plan.connected[1], plan.connected[2], target_altloc)
             else
-                findThirdNeighbor(mdl, res, plan.connected[0], plan.connected[1], plan.connected[2], ' ')) orelse return false;
+                findThirdNeighbor(mdl, res, plan.connected[0], plan.connected[1], plan.connected[2], target_altloc)) orelse return false;
 
             const h_pos = geometry.placeHXR3(
                 center_pos.cast(f64),
@@ -173,11 +173,11 @@ fn executePlan(mdl: *Model, res: Residue, res_idx: u32, plan: *const standard.Pl
         .h2xr2 => {
             // connected[0]=center, connected[1]=reference neighbor
             const center_pos = base_atom.pos;
-            const n1_pos = findAtomPos(mdl, res, plan.connected[1], ' ') orelse return false;
+            const n1_pos = findAtomPos(mdl, res, plan.connected[1], target_altloc) orelse return false;
             const n2_pos = (if (bonds) |b|
-                findBondedNeighbor(mdl, res, b, plan.connected[0], plan.connected[1], ' ')
+                findBondedNeighbor(mdl, res, b, plan.connected[0], plan.connected[1], target_altloc)
             else
-                findOtherNeighbor(mdl, res, plan.connected[0], plan.connected[1], ' ')) orelse return false;
+                findOtherNeighbor(mdl, res, plan.connected[0], plan.connected[1], target_altloc)) orelse return false;
 
             const h_pos = geometry.placeH2XR2(
                 center_pos.cast(f64),
@@ -194,13 +194,13 @@ fn executePlan(mdl: *Model, res: Residue, res_idx: u32, plan: *const standard.Pl
         .h3xr => {
             // connected[0]=a1 (center), connected[1]=a2, connected[2]=a3
             const a1_pos = base_atom.pos;
-            const a2_pos = findAtomPos(mdl, res, plan.connected[1], ' ') orelse return false;
+            const a2_pos = findAtomPos(mdl, res, plan.connected[1], target_altloc) orelse return false;
             const a3_pos = if (!isBlank(plan.connected[2]))
-                findAtomPos(mdl, res, plan.connected[2], ' ') orelse return false
+                findAtomPos(mdl, res, plan.connected[2], target_altloc) orelse return false
             else if (bonds) |b|
-                findBondedNeighbor(mdl, res, b, plan.connected[1], plan.connected[0], ' ') orelse return false
+                findBondedNeighbor(mdl, res, b, plan.connected[1], plan.connected[0], target_altloc) orelse return false
             else
-                findOtherNeighbor(mdl, res, plan.connected[1], plan.connected[0], ' ') orelse return false;
+                findOtherNeighbor(mdl, res, plan.connected[1], plan.connected[0], target_altloc) orelse return false;
 
             const h_pos = geometry.placeH3XR(
                 a1_pos.cast(f64),
@@ -217,11 +217,11 @@ fn executePlan(mdl: *Model, res: Residue, res_idx: u32, plan: *const standard.Pl
         .hxr2_planar => {
             // connected[0] and connected[1] are neighbors; center is the atom between them
             const n1_pos = base_atom.pos;
-            const n2_pos = findAtomPos(mdl, res, plan.connected[1], ' ') orelse return false;
+            const n2_pos = findAtomPos(mdl, res, plan.connected[1], target_altloc) orelse return false;
             const center_pos = (if (bonds) |b|
-                findBondedAtomBetween(mdl, res, b, plan.connected[0], plan.connected[1], ' ')
+                findBondedAtomBetween(mdl, res, b, plan.connected[0], plan.connected[1], target_altloc)
             else
-                findAtomBetween(mdl, res, plan.connected[0], plan.connected[1], ' ')) orelse return false;
+                findAtomBetween(mdl, res, plan.connected[0], plan.connected[1], target_altloc)) orelse return false;
 
             const h_pos = geometry.placeHXR2Planar(
                 center_pos.cast(f64),
@@ -236,8 +236,8 @@ fn executePlan(mdl: *Model, res: Residue, res_idx: u32, plan: *const standard.Pl
 
         .hxr2_frac => {
             const a1_pos = base_atom.pos;
-            const a2_pos = findAtomPos(mdl, res, plan.connected[1], ' ') orelse return false;
-            const a3_pos = findAtomPos(mdl, res, plan.connected[2], ' ') orelse return false;
+            const a2_pos = findAtomPos(mdl, res, plan.connected[1], target_altloc) orelse return false;
+            const a3_pos = findAtomPos(mdl, res, plan.connected[2], target_altloc) orelse return false;
 
             const h_pos = geometry.placeHXR2Frac(
                 a1_pos.cast(f64),
@@ -252,7 +252,7 @@ fn executePlan(mdl: *Model, res: Residue, res_idx: u32, plan: *const standard.Pl
 
         .hxy => {
             const center_pos = base_atom.pos;
-            const neighbor_pos = findAtomPos(mdl, res, plan.connected[1], ' ') orelse return false;
+            const neighbor_pos = findAtomPos(mdl, res, plan.connected[1], target_altloc) orelse return false;
 
             const h_pos = geometry.placeHXY(
                 center_pos.cast(f64),
@@ -546,10 +546,10 @@ const NtermResult = struct { placed: u32, skipped: u32 };
 
 /// Place NH3+ hydrogens (H1, H2, H3) on the N-terminal residue.
 /// Uses h3xr (dihedral-controlled) placement around the N-CA bond.
-fn placeNtermNH3(mdl: *Model, res: Residue, res_idx: u32) !NtermResult {
-    const n_atom = findAtom(mdl, res, .{ ' ', 'N', ' ', ' ' }, ' ') orelse return .{ .placed = 0, .skipped = 0 };
-    const ca_pos = findAtomPos(mdl, res, .{ ' ', 'C', 'A', ' ' }, ' ') orelse return .{ .placed = 0, .skipped = 0 };
-    const c_pos = findAtomPos(mdl, res, .{ ' ', 'C', ' ', ' ' }, ' ') orelse return .{ .placed = 0, .skipped = 0 };
+fn placeNtermNH3(mdl: *Model, res: Residue, res_idx: u32, target_altloc: u8) !NtermResult {
+    const n_atom = findAtom(mdl, res, .{ ' ', 'N', ' ', ' ' }, target_altloc) orelse return .{ .placed = 0, .skipped = 0 };
+    const ca_pos = findAtomPos(mdl, res, .{ ' ', 'C', 'A', ' ' }, target_altloc) orelse return .{ .placed = 0, .skipped = 0 };
+    const c_pos = findAtomPos(mdl, res, .{ ' ', 'C', ' ', ' ' }, target_altloc) orelse return .{ .placed = 0, .skipped = 0 };
 
     const meta = ParentMeta.fromAtom(n_atom);
 
@@ -580,10 +580,10 @@ fn placeNtermNH3(mdl: *Model, res: Residue, res_idx: u32) !NtermResult {
 
 /// Place NH2+ hydrogens (H2, H3) on N-terminal PRO.
 /// PRO has CD bonded to N (secondary amine), so only 2 H positions.
-fn placeNtermNH2Pro(mdl: *Model, res: Residue, res_idx: u32) !NtermResult {
-    const n_atom = findAtom(mdl, res, .{ ' ', 'N', ' ', ' ' }, ' ') orelse return .{ .placed = 0, .skipped = 0 };
-    const ca_pos = findAtomPos(mdl, res, .{ ' ', 'C', 'A', ' ' }, ' ') orelse return .{ .placed = 0, .skipped = 0 };
-    const cd_pos = findAtomPos(mdl, res, .{ ' ', 'C', 'D', ' ' }, ' ') orelse return .{ .placed = 0, .skipped = 0 };
+fn placeNtermNH2Pro(mdl: *Model, res: Residue, res_idx: u32, target_altloc: u8) !NtermResult {
+    const n_atom = findAtom(mdl, res, .{ ' ', 'N', ' ', ' ' }, target_altloc) orelse return .{ .placed = 0, .skipped = 0 };
+    const ca_pos = findAtomPos(mdl, res, .{ ' ', 'C', 'A', ' ' }, target_altloc) orelse return .{ .placed = 0, .skipped = 0 };
+    const cd_pos = findAtomPos(mdl, res, .{ ' ', 'C', 'D', ' ' }, target_altloc) orelse return .{ .placed = 0, .skipped = 0 };
 
     const meta = ParentMeta.fromAtom(n_atom);
 
