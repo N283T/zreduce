@@ -161,16 +161,23 @@ pub fn main() !void {
 
     // 7. Optimize (unless --no-opt)
     var movers: []zreduce.optimize.Mover = &.{};
+    var movers_owned = false;
     defer {
-        for (movers) |*m| @constCast(m).deinit();
-        if (movers.len > 0) allocator.free(movers);
+        for (0..movers.len) |i| movers[i].deinit();
+        if (movers_owned) allocator.free(movers);
     }
 
     if (!config.no_opt) {
-        movers = zreduce.optimize.generateMovers(allocator, &mdl) catch |err| {
+        const gen_result = zreduce.optimize.generateMovers(allocator, &mdl) catch |err| {
             std.debug.print("Error: mover generation failed: {s}\n", .{@errorName(err)});
             std.process.exit(1);
         };
+        movers = gen_result.movers;
+        movers_owned = true;
+
+        if (gen_result.n_skipped > 0) {
+            std.debug.print("  Mover generation: {d} skipped (missing atoms or incomplete groups)\n", .{gen_result.n_skipped});
+        }
 
         if (movers.len > 0) {
             const opt_config = zreduce.optimize.OptConfig{};
