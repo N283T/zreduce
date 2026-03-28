@@ -9,6 +9,7 @@ pub const placer = @import("place/placer.zig");
 
 // Convenience re-exports
 pub const addHydrogens = placer.addHydrogens;
+pub const applyChemistry = placer.applyChemistry;
 pub const PlacementResult = placer.PlacementResult;
 pub const derivePlans = het.derivePlans;
 
