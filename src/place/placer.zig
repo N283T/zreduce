@@ -174,7 +174,11 @@ pub fn applyChemistry(mdl: *Model) void {
 fn executePlan(mdl: *Model, res: Residue, res_idx: u32, plan: *const standard.PlacementPlan, bonds: ?[]const topology.BondEntry, target_altloc: u8) !bool {
     // Resolve parent heavy atom (connected[0]) for metadata and position
     const base_atom = findAtom(mdl, res, plan.connected[0], target_altloc) orelse return false;
-    const meta = ParentMeta.fromAtom(base_atom);
+    var meta = ParentMeta.fromAtom(base_atom);
+    // Override altloc when iterating conformers: if parent has blank altloc
+    // (shared backbone) but we're targeting a specific conformer, the placed H
+    // should inherit the target conformer's altloc, not blank.
+    if (target_altloc != ' ') meta.altloc = target_altloc;
 
     // Skip if this hydrogen already exists in the residue
     if (existsInResidue(mdl, res, plan.h_name, meta.altloc)) return false;
@@ -583,7 +587,8 @@ fn placeNtermNH3(mdl: *Model, res: Residue, res_idx: u32, target_altloc: u8) !Nt
     const ca_pos = findAtomPos(mdl, res, .{ ' ', 'C', 'A', ' ' }, target_altloc) orelse return .{ .placed = 0, .skipped = 0 };
     const c_pos = findAtomPos(mdl, res, .{ ' ', 'C', ' ', ' ' }, target_altloc) orelse return .{ .placed = 0, .skipped = 0 };
 
-    const meta = ParentMeta.fromAtom(n_atom);
+    var meta = ParentMeta.fromAtom(n_atom);
+    if (target_altloc != ' ') meta.altloc = target_altloc;
 
     const n64 = n_atom.pos.cast(f64);
     const ca64 = math_mod.Vec3(f64){ .x = ca_pos.x, .y = ca_pos.y, .z = ca_pos.z };
@@ -617,7 +622,8 @@ fn placeNtermNH2Pro(mdl: *Model, res: Residue, res_idx: u32, target_altloc: u8) 
     const ca_pos = findAtomPos(mdl, res, .{ ' ', 'C', 'A', ' ' }, target_altloc) orelse return .{ .placed = 0, .skipped = 0 };
     const cd_pos = findAtomPos(mdl, res, .{ ' ', 'C', 'D', ' ' }, target_altloc) orelse return .{ .placed = 0, .skipped = 0 };
 
-    const meta = ParentMeta.fromAtom(n_atom);
+    var meta = ParentMeta.fromAtom(n_atom);
+    if (target_altloc != ' ') meta.altloc = target_altloc;
 
     // PRO N is sp3 with 2 heavy-atom neighbors (CA, CD) and 2 H.
     // Use h2xr2 (two H on atom with 2 heavy neighbors).
