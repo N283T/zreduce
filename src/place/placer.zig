@@ -26,6 +26,29 @@ pub const PlacementResult = struct {
     n_residues: u32 = 0,
 };
 
+const AltlocSet = struct { locs: [10]u8, count: usize };
+
+/// Collect distinct non-blank altloc values from a residue's atoms.
+fn collectAltlocs(mdl: *const Model, res: Residue) AltlocSet {
+    var result: AltlocSet = .{ .locs = .{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }, .count = 0 };
+    const atoms = mdl.atoms.items[res.atom_start..res.atom_end];
+    for (atoms) |a| {
+        if (a.altloc == ' ') continue;
+        var found = false;
+        for (result.locs[0..result.count]) |existing| {
+            if (existing == a.altloc) {
+                found = true;
+                break;
+            }
+        }
+        if (!found and result.count < 10) {
+            result.locs[result.count] = a.altloc;
+            result.count += 1;
+        }
+    }
+    return result;
+}
+
 /// Add hydrogens to the model.
 /// Uses standard plans for known residues (20 AA), CCD-derived plans for HET groups.
 /// New atoms are appended to the end of model.atoms. Each new atom carries its residue_idx.
@@ -46,28 +69,37 @@ pub fn addHydrogens(
 
         if (standard.getPlans(comp_id)) |plans| {
             const bonds = topology.getBonds(comp_id);
+            const altlocs = collectAltlocs(mdl, res);
 
-            for (plans) |plan| {
-                // Skip backbone amide H on N-terminal residues (NH3+, not NH)
-                if (is_nterm and isBackboneH(&plan)) continue;
+            // Determine conformer targets: either blank-only or per-conformer
+            const targets: []const u8 = if (altlocs.count == 0)
+                &[_]u8{' '}
+            else
+                altlocs.locs[0..altlocs.count];
 
-                if (try executePlan(mdl, res, @intCast(res_idx), &plan, bonds, ' ')) {
-                    result.n_placed += 1;
-                } else {
-                    result.n_skipped += 1;
+            for (targets) |alt| {
+                for (plans) |plan| {
+                    // Skip backbone amide H on N-terminal residues (NH3+, not NH)
+                    if (is_nterm and isBackboneH(&plan)) continue;
+
+                    if (try executePlan(mdl, res, @intCast(res_idx), &plan, bonds, alt)) {
+                        result.n_placed += 1;
+                    } else {
+                        result.n_skipped += 1;
+                    }
                 }
-            }
 
-            // N-terminal: place NH3+/NH2+ instead of single backbone H
-            if (is_nterm) {
-                const nterm = if (std.mem.eql(u8, comp_id, "PRO"))
-                    // PRO has secondary amine (CD bonded to N) → NH2+ (2 H)
-                    try placeNtermNH2Pro(mdl, res, @intCast(res_idx), ' ')
-                else
-                    // Standard NH3+ (3 H)
-                    try placeNtermNH3(mdl, res, @intCast(res_idx), ' ');
-                result.n_placed += nterm.placed;
-                result.n_skipped += nterm.skipped;
+                // N-terminal: place NH3+/NH2+ instead of single backbone H
+                if (is_nterm) {
+                    const nterm = if (std.mem.eql(u8, comp_id, "PRO"))
+                        // PRO has secondary amine (CD bonded to N) -> NH2+ (2 H)
+                        try placeNtermNH2Pro(mdl, res, @intCast(res_idx), alt)
+                    else
+                        // Standard NH3+ (3 H)
+                        try placeNtermNH3(mdl, res, @intCast(res_idx), alt);
+                    result.n_placed += nterm.placed;
+                    result.n_skipped += nterm.skipped;
+                }
             }
 
             result.n_residues += 1;
@@ -1073,4 +1105,48 @@ test "findAtomPos with altloc prefers matching conformer" {
     const n_b = findAtomPos(&mdl, res, .{ ' ', 'N', ' ', ' ' }, 'B');
     try testing.expect(n_b != null);
     try testing.expectApproxEqAbs(n_a.?.x, n_b.?.x, 1e-6);
+}
+
+test "multi-conformer residue places H per conformer" {
+    const source = @embedFile("../test_data/ala_altloc.cif");
+    var mdl = try mmcif.parseModel(testing.allocator, source);
+    defer mdl.deinit();
+
+    applyChemistry(&mdl);
+    const result = try addHydrogens(&mdl, null);
+
+    // Should place H for both conformers A and B
+    var ha_a_count: u32 = 0;
+    var ha_b_count: u32 = 0;
+    for (mdl.atoms.items) |atom| {
+        if (atom.is_added and std.mem.eql(u8, atom.nameSlice(), "HA")) {
+            if (atom.altloc == 'A') ha_a_count += 1;
+            if (atom.altloc == 'B') ha_b_count += 1;
+        }
+    }
+    try testing.expectEqual(@as(u32, 1), ha_a_count);
+    try testing.expectEqual(@as(u32, 1), ha_b_count);
+    try testing.expect(result.n_placed > 0);
+}
+
+test "conformer A and B H atoms have different positions" {
+    const source = @embedFile("../test_data/ala_altloc.cif");
+    var mdl = try mmcif.parseModel(testing.allocator, source);
+    defer mdl.deinit();
+
+    applyChemistry(&mdl);
+    _ = try addHydrogens(&mdl, null);
+
+    var ha_a_pos: ?Vec3f32 = null;
+    var ha_b_pos: ?Vec3f32 = null;
+    for (mdl.atoms.items) |atom| {
+        if (atom.is_added and std.mem.eql(u8, atom.nameSlice(), "HA")) {
+            if (atom.altloc == 'A') ha_a_pos = atom.pos;
+            if (atom.altloc == 'B') ha_b_pos = atom.pos;
+        }
+    }
+    try testing.expect(ha_a_pos != null);
+    try testing.expect(ha_b_pos != null);
+    const diff = ha_a_pos.?.distance(ha_b_pos.?);
+    try testing.expect(diff > 0.01);
 }
