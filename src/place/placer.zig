@@ -642,3 +642,16 @@ test "existsInResidue checks name and altloc" {
     // "N" with altloc 'A' does not exist (tiny.cif has altloc='.')
     try testing.expect(!existsInResidue(&mdl, res, .{ ' ', 'N', ' ', ' ' }, 'A'));
 }
+
+test "PlacementResult counts duplicates as skipped" {
+    const source = @embedFile("../test_data/ala_with_h.cif");
+    var mdl = try mmcif.parseModel(testing.allocator, source);
+    defer mdl.deinit();
+
+    const result = try addHydrogens(&mdl, null);
+
+    // HA was pre-existing so should be counted as skipped
+    // Total plans attempted should still be the same as clean ALA
+    try testing.expect(result.n_skipped >= 1);
+    try testing.expectEqual(@as(u32, 1), result.n_residues);
+}
