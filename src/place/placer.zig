@@ -248,6 +248,18 @@ fn findAtomPos(mdl: *const Model, res: Residue, name: [4]u8) ?Vec3f32 {
     return null;
 }
 
+/// Find an atom by 4-char PDB name within a residue. Returns the full Atom.
+fn findAtom(mdl: *const Model, res: Residue, name: [4]u8) ?Atom {
+    if (isBlank(name)) return null;
+    const atoms = mdl.atoms.items[res.atom_start..res.atom_end];
+    for (atoms) |a| {
+        if (nameMatch(name, a.nameSlice())) {
+            return a;
+        }
+    }
+    return null;
+}
+
 /// Find a heavy-atom neighbor of `center_name` that is NOT `exclude_name`.
 /// Uses distance-based bonding (within 1.9 A of center).
 fn findOtherNeighbor(mdl: *const Model, res: Residue, center_name: [4]u8, exclude_name: [4]u8) ?Vec3f32 {
@@ -495,4 +507,23 @@ test "PlacementResult tracks counts" {
 
     // ALA has 5 plans; backbone H skipped on N-term but NH3+ (H1,H2,H3) added = 4+3=7
     try testing.expectEqual(@as(u32, 7), result.n_placed + result.n_skipped);
+}
+
+test "findAtom returns full atom with metadata" {
+    const source = @embedFile("../test_data/tiny.cif");
+    var mdl = try mmcif.parseModel(testing.allocator, source);
+    defer mdl.deinit();
+
+    const res = mdl.residues.items[0];
+
+    // CA should be found with correct metadata
+    const ca = findAtom(&mdl, res, .{ ' ', 'C', 'A', ' ' });
+    try testing.expect(ca != null);
+    try testing.expectEqual(@as(f32, 1.0), ca.?.occupancy);
+    try testing.expectEqual(@as(f32, 10.0), ca.?.b_factor);
+    try testing.expectEqual(@as(u8, ' '), ca.?.altloc);
+
+    // Non-existent atom returns null
+    const xx = findAtom(&mdl, res, .{ ' ', 'X', 'X', ' ' });
+    try testing.expect(xx == null);
 }
