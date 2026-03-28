@@ -193,8 +193,9 @@ pub fn generateFineOrientations(
     const original_positions = m.orientations[0].positions;
 
     const result = try allocator.alloc(Orientation, n_offsets);
+    var allocated: usize = 0;
     errdefer {
-        for (result[0..n_offsets]) |o| allocator.free(o.positions);
+        for (result[0..allocated]) |o| allocator.free(o.positions);
         allocator.free(result);
     }
 
@@ -205,6 +206,7 @@ pub fn generateFineOrientations(
             positions[j] = math_mod.rotateAroundAxis(f32, original_positions[j], center_pos, axis_dir, angle);
         }
         result[i] = .{ .positions = positions, .penalty = 0.0 };
+        allocated += 1;
     }
 
     return result;
