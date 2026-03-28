@@ -105,6 +105,9 @@ fn executePlan(mdl: *Model, res: Residue, res_idx: u32, plan: *const standard.Pl
         .b_factor = ba.b_factor,
     } else ParentMeta{};
 
+    // Skip if this hydrogen already exists in the residue
+    if (existsInResidue(mdl, res, plan.h_name, meta.altloc)) return false;
+
     switch (plan.placement_type) {
         .hxr3 => {
             // connected[0]=center, connected[1..2]=two known neighbors
@@ -404,6 +407,11 @@ fn placeNtermNH3(mdl: *Model, res: Residue, res_idx: u32) !u32 {
 
     var placed: u32 = 0;
     for (names, dihedrals) |name, dihedral| {
+        // Check for duplicate using padded name
+        var padded_name: [4]u8 = .{ ' ', ' ', ' ', ' ' };
+        for (name, 0..) |c, i| padded_name[i] = c;
+        if (existsInResidue(mdl, res, padded_name, meta.altloc)) continue;
+
         const h64 = geometry.placeH3XR(n64, ca64, c64, bond_len, angle_deg, dihedral);
         const h_pos = Vec3f32{ .x = @floatCast(h64.x), .y = @floatCast(h64.y), .z = @floatCast(h64.z) };
         try appendNtermH(mdl, h_pos, name, res_idx, meta);
@@ -439,6 +447,10 @@ fn placeNtermNH2Pro(mdl: *Model, res: Residue, res_idx: u32) !u32 {
 
     var placed: u32 = 0;
     for (names, dihedrals) |name, dihedral| {
+        var padded_name: [4]u8 = .{ ' ', ' ', ' ', ' ' };
+        for (name, 0..) |c, i| padded_name[i] = c;
+        if (existsInResidue(mdl, res, padded_name, meta.altloc)) continue;
+
         const h64 = geometry.placeH2XR2(n64, ca64, cd64, bond_len, angle_deg, dihedral);
         const h_pos = Vec3f32{ .x = @floatCast(h64.x), .y = @floatCast(h64.y), .z = @floatCast(h64.z) };
         try appendNtermH(mdl, h_pos, name, res_idx, meta);
@@ -587,6 +599,29 @@ test "placed H inherits parent atom metadata" {
         if (atom.is_added and atom.is_hydrogen) {
             try testing.expectEqual(@as(f32, 10.0), atom.b_factor);
             try testing.expectEqual(@as(f32, 1.0), atom.occupancy);
+        }
+    }
+}
+
+test "duplicate H atoms are not placed" {
+    const source = @embedFile("../test_data/ala_with_h.cif");
+    var mdl = try mmcif.parseModel(testing.allocator, source);
+    defer mdl.deinit();
+
+    _ = try addHydrogens(&mdl, null);
+
+    // Count HA atoms — should be exactly 1 (the pre-existing one)
+    var ha_count: u32 = 0;
+    for (mdl.atoms.items) |atom| {
+        if (std.mem.eql(u8, atom.nameSlice(), "HA")) ha_count += 1;
+    }
+    try testing.expectEqual(@as(u32, 1), ha_count);
+
+    // The original HA should NOT be overwritten (b_factor should remain 12.0)
+    for (mdl.atoms.items) |atom| {
+        if (std.mem.eql(u8, atom.nameSlice(), "HA")) {
+            try testing.expectEqual(@as(f32, 12.0), atom.b_factor);
+            break;
         }
     }
 }
