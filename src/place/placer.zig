@@ -17,6 +17,7 @@ const math_mod = @import("../math.zig");
 const element = @import("../element.zig");
 
 const Vec3f32 = math_mod.Vec3(f32);
+const topology = @import("topology.zig");
 
 pub const PlacementResult = struct {
     n_placed: u32 = 0,
@@ -334,6 +335,98 @@ fn findAtomBetween(mdl: *const Model, res: Residue, name1: [4]u8, name2: [4]u8) 
         if (nameMatch(name2, aname)) continue;
         if (a.pos.distance(pos1) < bond_cutoff and a.pos.distance(pos2) < bond_cutoff) {
             return a.pos;
+        }
+    }
+    return null;
+}
+
+// ---------------------------------------------------------------------------
+// Bond-aware neighbor queries
+// ---------------------------------------------------------------------------
+
+/// Find a bonded neighbor of `center_name` that is NOT `exclude_name`, using topology.
+fn findBondedNeighbor(
+    mdl: *const Model,
+    res: Residue,
+    bonds: []const topology.BondEntry,
+    center_name: [4]u8,
+    exclude_name: [4]u8,
+) ?Vec3f32 {
+    for (bonds) |bond| {
+        const partner = if (std.mem.eql(u8, &bond.a1, &center_name))
+            bond.a2
+        else if (std.mem.eql(u8, &bond.a2, &center_name))
+            bond.a1
+        else
+            continue;
+
+        if (std.mem.eql(u8, &partner, &exclude_name)) continue;
+        if (findAtomPos(mdl, res, partner)) |pos| return pos;
+    }
+    return null;
+}
+
+/// Find the 3rd bonded neighbor of `center_name`, excluding `n1_name` and `n2_name`.
+fn findThirdBondedNeighbor(
+    mdl: *const Model,
+    res: Residue,
+    bonds: []const topology.BondEntry,
+    center_name: [4]u8,
+    n1_name: [4]u8,
+    n2_name: [4]u8,
+) ?Vec3f32 {
+    for (bonds) |bond| {
+        const partner = if (std.mem.eql(u8, &bond.a1, &center_name))
+            bond.a2
+        else if (std.mem.eql(u8, &bond.a2, &center_name))
+            bond.a1
+        else
+            continue;
+
+        if (std.mem.eql(u8, &partner, &n1_name)) continue;
+        if (std.mem.eql(u8, &partner, &n2_name)) continue;
+        if (findAtomPos(mdl, res, partner)) |pos| return pos;
+    }
+    return null;
+}
+
+/// Find an atom bonded to BOTH `name1` and `name2` using topology.
+fn findBondedAtomBetween(
+    mdl: *const Model,
+    res: Residue,
+    bonds: []const topology.BondEntry,
+    name1: [4]u8,
+    name2: [4]u8,
+) ?Vec3f32 {
+    // Collect atoms bonded to name1
+    var bonded_to_1: [8][4]u8 = undefined;
+    var count_1: usize = 0;
+    for (bonds) |bond| {
+        const partner = if (std.mem.eql(u8, &bond.a1, &name1))
+            bond.a2
+        else if (std.mem.eql(u8, &bond.a2, &name1))
+            bond.a1
+        else
+            continue;
+        if (count_1 < 8) {
+            bonded_to_1[count_1] = partner;
+            count_1 += 1;
+        }
+    }
+
+    // Check which are also bonded to name2
+    for (bonds) |bond| {
+        const partner = if (std.mem.eql(u8, &bond.a1, &name2))
+            bond.a2
+        else if (std.mem.eql(u8, &bond.a2, &name2))
+            bond.a1
+        else
+            continue;
+
+        for (bonded_to_1[0..count_1]) |candidate| {
+            if (std.mem.eql(u8, &partner, &candidate)) {
+                if (findAtomPos(mdl, res, partner)) |pos| return pos;
+            }
         }
     }
     return null;
@@ -663,4 +756,59 @@ test "PlacementResult counts duplicates as skipped" {
     // Total plans attempted should still be the same as clean ALA
     try testing.expect(result.n_skipped >= 1);
     try testing.expectEqual(@as(u32, 1), result.n_residues);
+}
+
+test "findBondedNeighbor returns correct neighbor from topology" {
+    const source = @embedFile("../test_data/tiny.cif");
+    var mdl = try mmcif.parseModel(testing.allocator, source);
+    defer mdl.deinit();
+
+    const res = mdl.residues.items[0];
+    const bonds = topology.getBonds("ALA").?;
+
+    // CA is bonded to N, C, CB. Excluding N, should find C or CB.
+    const result = findBondedNeighbor(&mdl, res, bonds, .{ ' ', 'C', 'A', ' ' }, .{ ' ', 'N', ' ', ' ' });
+    try testing.expect(result != null);
+
+    // Verify it's C or CB (both bonded to CA, excluding N)
+    const c_pos = findAtomPos(&mdl, res, .{ ' ', 'C', ' ', ' ' });
+    const cb_pos = findAtomPos(&mdl, res, .{ ' ', 'C', 'B', ' ' });
+    const pos = result.?;
+    const is_c = c_pos != null and pos.x == c_pos.?.x and pos.y == c_pos.?.y and pos.z == c_pos.?.z;
+    const is_cb = cb_pos != null and pos.x == cb_pos.?.x and pos.y == cb_pos.?.y and pos.z == cb_pos.?.z;
+    try testing.expect(is_c or is_cb);
+}
+
+test "findThirdBondedNeighbor finds the third bonded atom" {
+    const source = @embedFile("../test_data/tiny.cif");
+    var mdl = try mmcif.parseModel(testing.allocator, source);
+    defer mdl.deinit();
+
+    const res = mdl.residues.items[0];
+    const bonds = topology.getBonds("ALA").?;
+
+    // CA bonded to N, C, CB. Excluding N and C → CB.
+    const result = findThirdBondedNeighbor(&mdl, res, bonds, .{ ' ', 'C', 'A', ' ' }, .{ ' ', 'N', ' ', ' ' }, .{ ' ', 'C', ' ', ' ' });
+    try testing.expect(result != null);
+    const cb_pos = findAtomPos(&mdl, res, .{ ' ', 'C', 'B', ' ' }).?;
+    try testing.expectEqual(cb_pos.x, result.?.x);
+    try testing.expectEqual(cb_pos.y, result.?.y);
+    try testing.expectEqual(cb_pos.z, result.?.z);
+}
+
+test "findBondedAtomBetween finds atom bonded to both" {
+    const source = @embedFile("../test_data/tiny.cif");
+    var mdl = try mmcif.parseModel(testing.allocator, source);
+    defer mdl.deinit();
+
+    const res = mdl.residues.items[0];
+    const bonds = topology.getBonds("ALA").?;
+
+    // N and C are both bonded to CA
+    const result = findBondedAtomBetween(&mdl, res, bonds, .{ ' ', 'N', ' ', ' ' }, .{ ' ', 'C', ' ', ' ' });
+    try testing.expect(result != null);
+    const ca_pos = findAtomPos(&mdl, res, .{ ' ', 'C', 'A', ' ' }).?;
+    try testing.expectEqual(ca_pos.x, result.?.x);
+    try testing.expectEqual(ca_pos.y, result.?.y);
+    try testing.expectEqual(ca_pos.z, result.?.z);
 }
