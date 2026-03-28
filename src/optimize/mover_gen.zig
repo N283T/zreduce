@@ -62,7 +62,7 @@ pub const MoverGenResult = struct {
 /// Scan all placed H atoms in the model and create Mover instances for
 /// optimization. Caller owns the returned movers slice and must call
 /// `deinit()` on each Mover, then free the slice with the same allocator.
-pub fn generateMovers(allocator: std.mem.Allocator, mdl: *const Model) !MoverGenResult {
+pub fn generateMovers(allocator: std.mem.Allocator, mdl: *const Model, no_flip: bool) !MoverGenResult {
     var movers: std.ArrayListUnmanaged(Mover) = .empty;
     errdefer {
         for (movers.items) |*m| m.deinit();
@@ -187,7 +187,8 @@ pub fn generateMovers(allocator: std.mem.Allocator, mdl: *const Model) !MoverGen
                 try movers.append(allocator, mover);
             },
             .flip_amide, .flip_his => {
-                // Deferred to Issue #17.
+                if (no_flip) continue;
+                // TODO: Implement in Tasks 3 and 4
                 continue;
             },
             .none => unreachable,
@@ -241,7 +242,7 @@ test "generateMovers creates methyl rotator for ALA" {
     placer.applyChemistry(&mdl);
     _ = try placer.addHydrogens(&mdl, null);
 
-    const gen_result = try generateMovers(testing.allocator, &mdl);
+    const gen_result = try generateMovers(testing.allocator, &mdl, false);
     const movers = gen_result.movers;
     defer {
         for (0..movers.len) |i| @constCast(&movers[i]).deinit();
@@ -264,7 +265,7 @@ test "generateMovers total count for ALA" {
     placer.applyChemistry(&mdl);
     _ = try placer.addHydrogens(&mdl, null);
 
-    const gen_result = try generateMovers(testing.allocator, &mdl);
+    const gen_result = try generateMovers(testing.allocator, &mdl, false);
     const movers = gen_result.movers;
     defer {
         for (0..movers.len) |i| @constCast(&movers[i]).deinit();
@@ -287,7 +288,7 @@ test "optimizer pipeline runs without error on ALA" {
     placer.applyChemistry(&mdl);
     _ = try placer.addHydrogens(&mdl, null);
 
-    const gen_result = try generateMovers(testing.allocator, &mdl);
+    const gen_result = try generateMovers(testing.allocator, &mdl, false);
     const movers = gen_result.movers;
     defer {
         for (0..movers.len) |i| @constCast(&movers[i]).deinit();
@@ -309,7 +310,7 @@ test "methyl rotator controls 3 atoms" {
     placer.applyChemistry(&mdl);
     _ = try placer.addHydrogens(&mdl, null);
 
-    const gen_result = try generateMovers(testing.allocator, &mdl);
+    const gen_result = try generateMovers(testing.allocator, &mdl, false);
     const movers = gen_result.movers;
     defer {
         for (0..movers.len) |i| @constCast(&movers[i]).deinit();
