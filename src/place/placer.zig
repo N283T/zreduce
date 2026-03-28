@@ -988,3 +988,20 @@ test "applyChemistry annotates OXT as negative acceptor" {
     }
     try testing.expect(oxt_found);
 }
+
+test "OXT does not receive hydrogen atoms" {
+    const source = @embedFile("../test_data/ala_cterm.cif");
+    var mdl = try mmcif.parseModel(testing.allocator, source);
+    defer mdl.deinit();
+
+    applyChemistry(&mdl);
+    _ = try addHydrogens(&mdl, null);
+
+    // No hydrogen should be bonded to OXT
+    for (mdl.atoms.items) |atom| {
+        if (atom.is_added and atom.is_hydrogen) {
+            const name = atom.nameSlice();
+            try testing.expect(!std.mem.eql(u8, name, "HOXT"));
+        }
+    }
+}
