@@ -13,6 +13,7 @@ const mover_mod = @import("mover.zig");
 const Mover = mover_mod.Mover;
 const scorer_mod = @import("scorer.zig");
 const clique_mod = @import("clique.zig");
+const rotator_mod = @import("rotator.zig");
 const element = @import("../element.zig");
 
 pub const OptConfig = struct {
@@ -78,10 +79,15 @@ pub fn optimize(
         }
     }
 
-    // Apply best orientations
+    // Apply best coarse orientations
     for (movers) |*m| {
         m.applyOrientation(model.atoms.items, m.best_orientation);
         m.current_orientation = m.best_orientation;
+    }
+
+    // Fine search phase: refine each mover around its coarse best
+    for (0..movers.len) |mi| {
+        fineSearchMover(allocator, movers, @intCast(mi), model, config);
     }
 
     return result;
@@ -103,6 +109,53 @@ fn optimizeSingleton(movers: []Mover, mover_idx: u32, model: *Model, config: Opt
     }
 
     m.best_orientation = best_idx;
+}
+
+/// Refine a mover's best orientation with fine angular search.
+/// Directly updates atom positions if a fine position improves the score.
+fn fineSearchMover(
+    allocator: Allocator,
+    movers: []Mover,
+    mover_idx: u32,
+    model: *Model,
+    config: OptConfig,
+) void {
+    const m = &movers[mover_idx];
+    const atoms = model.atoms.items;
+
+    const fine = rotator_mod.generateFineOrientations(allocator, atoms, m, m.best_orientation) catch return;
+    defer {
+        for (fine) |o| allocator.free(o.positions);
+        allocator.free(fine);
+    }
+
+    if (fine.len == 0) return;
+
+    // Score current coarse best (already applied)
+    var best_score = scoreMover(m, mover_idx, movers, model, config) - m.orientationPenalty(m.best_orientation);
+
+    // Score fine orientations
+    var best_fine: ?usize = null;
+    for (fine, 0..) |orient, fi| {
+        for (m.atom_indices, 0..) |ai, j| {
+            atoms[ai].pos = orient.positions[j];
+        }
+        const score = scoreMover(m, mover_idx, movers, model, config) - orient.penalty;
+        if (score > best_score) {
+            best_score = score;
+            best_fine = fi;
+        }
+    }
+
+    if (best_fine) |fi| {
+        // Apply the best fine orientation
+        for (m.atom_indices, 0..) |ai, j| {
+            atoms[ai].pos = fine[fi].positions[j];
+        }
+    } else {
+        // Restore coarse best
+        m.applyOrientation(atoms, m.best_orientation);
+    }
 }
 
 fn optimizeBruteForce(
