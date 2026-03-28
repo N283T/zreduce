@@ -2,8 +2,8 @@
 //!
 //! Inspects `mover_hint` on each added hydrogen atom, resolves axis/center
 //! atoms from placement plans, and delegates to rotator constructors.
-//! Currently supports single-H rotators, methyl rotators, and NH3 rotators.
-//! Flip movers (amide, His) are deferred to Issue #17.
+//! Supports single-H rotators, methyl rotators, NH3 rotators,
+//! amide flippers (ASN/GLN), and histidine ring flippers.
 
 const std = @import("std");
 const log = std.log.scoped(.mover_gen);
@@ -14,6 +14,7 @@ const Residue = model_mod.Residue;
 const mover_mod = @import("mover.zig");
 const Mover = mover_mod.Mover;
 const rotator = @import("rotator.zig");
+const flipper = @import("flipper.zig");
 const standard = @import("../place/standard.zig");
 
 // ---------------------------------------------------------------------------
@@ -62,7 +63,7 @@ pub const MoverGenResult = struct {
 /// Scan all placed H atoms in the model and create Mover instances for
 /// optimization. Caller owns the returned movers slice and must call
 /// `deinit()` on each Mover, then free the slice with the same allocator.
-pub fn generateMovers(allocator: std.mem.Allocator, mdl: *const Model) !MoverGenResult {
+pub fn generateMovers(allocator: std.mem.Allocator, mdl: *const Model, no_flip: bool) !MoverGenResult {
     var movers: std.ArrayListUnmanaged(Mover) = .empty;
     errdefer {
         for (movers.items) |*m| m.deinit();
@@ -186,9 +187,121 @@ pub fn generateMovers(allocator: std.mem.Allocator, mdl: *const Model) !MoverGen
                 };
                 try movers.append(allocator, mover);
             },
-            .flip_amide, .flip_his => {
-                // Deferred to Issue #17.
-                continue;
+            .flip_amide => {
+                if (no_flip) continue;
+
+                // Deduplicate: one amide flipper per residue
+                const group_key = packGroupKey(residue_idx, .{ 'A', 'M', 'D', ' ' });
+                const gop = try seen_groups.getOrPut(allocator, group_key);
+                if (gop.found_existing) continue;
+
+                const plan = findPlanForH(comp_id, h_name) orelse {
+                    log.warn("no plan for flip H '{s}' in {s} (res {d}), skipping", .{ h_name, comp_id, residue_idx });
+                    n_skipped += 1;
+                    continue;
+                };
+
+                // N atom = connected[0] (ND2 for ASN, NE2 for GLN)
+                const n_name = trimName(&plan.connected[0]);
+                // C atom = connected[1] (CG for ASN, CD for GLN)
+                const c_name = trimName(&plan.connected[1]);
+                // O atom: OD1 for ASN, OE1 for GLN
+                const o_name: []const u8 = if (std.mem.eql(u8, comp_id, "ASN")) "OD1" else "OE1";
+
+                const n_at_idx = findAtomIdx(atoms, residue_idx, n_name) orelse {
+                    log.warn("N atom '{s}' not found for amide flip in {s} (res {d})", .{ n_name, comp_id, residue_idx });
+                    n_skipped += 1;
+                    continue;
+                };
+                const o_at_idx = findAtomIdx(atoms, residue_idx, o_name) orelse {
+                    log.warn("O atom '{s}' not found for amide flip in {s} (res {d})", .{ o_name, comp_id, residue_idx });
+                    n_skipped += 1;
+                    continue;
+                };
+                const c_at_idx = findAtomIdx(atoms, residue_idx, c_name) orelse {
+                    log.warn("C atom '{s}' not found for amide flip in {s} (res {d})", .{ c_name, comp_id, residue_idx });
+                    n_skipped += 1;
+                    continue;
+                };
+
+                // Find the two H atoms for this amide group
+                var h_indices: [2]u32 = undefined;
+                var h_count: u32 = 0;
+                const all_plans = standard.getPlans(comp_id) orelse continue;
+                for (all_plans) |*p| {
+                    if (p.mover_hint != .flip_amide) continue;
+                    const p_h_name = trimName(&p.h_name);
+                    if (findAtomIdx(atoms, residue_idx, p_h_name)) |hi| {
+                        if (h_count < 2) {
+                            h_indices[h_count] = hi;
+                            h_count += 1;
+                        }
+                    }
+                }
+                if (h_count != 2) {
+                    log.warn("expected 2 H for amide flip in {s} (res {d}), found {d}", .{ comp_id, residue_idx, h_count });
+                    n_skipped += 1;
+                    continue;
+                }
+
+                const m = try flipper.createAmideFlipper(
+                    allocator,
+                    atoms,
+                    o_at_idx,
+                    n_at_idx,
+                    h_indices[0],
+                    h_indices[1],
+                    c_at_idx,
+                    residue_idx,
+                );
+                try movers.append(allocator, m);
+            },
+            .flip_his => {
+                if (no_flip) continue;
+
+                // Deduplicate: one His flipper per residue
+                const group_key = packGroupKey(residue_idx, .{ 'H', 'I', 'S', ' ' });
+                const gop = try seen_groups.getOrPut(allocator, group_key);
+                if (gop.found_existing) continue;
+
+                // Find ring heavy atoms by name
+                const nd1_idx = findAtomIdx(atoms, residue_idx, "ND1") orelse {
+                    log.warn("ND1 not found for His flip (res {d})", .{residue_idx});
+                    n_skipped += 1;
+                    continue;
+                };
+                const cd2_idx = findAtomIdx(atoms, residue_idx, "CD2") orelse {
+                    log.warn("CD2 not found for His flip (res {d})", .{residue_idx});
+                    n_skipped += 1;
+                    continue;
+                };
+                const ce1_idx = findAtomIdx(atoms, residue_idx, "CE1") orelse {
+                    log.warn("CE1 not found for His flip (res {d})", .{residue_idx});
+                    n_skipped += 1;
+                    continue;
+                };
+                const ne2_idx = findAtomIdx(atoms, residue_idx, "NE2") orelse {
+                    log.warn("NE2 not found for His flip (res {d})", .{residue_idx});
+                    n_skipped += 1;
+                    continue;
+                };
+
+                // H atoms are optional
+                const hd1_idx = findAtomIdx(atoms, residue_idx, "HD1");
+                const he2_idx = findAtomIdx(atoms, residue_idx, "HE2");
+
+                const m = try flipper.createHisFlipper(
+                    allocator,
+                    atoms,
+                    nd1_idx,
+                    cd2_idx,
+                    ce1_idx,
+                    ne2_idx,
+                    hd1_idx,
+                    he2_idx,
+                    residue_idx,
+                );
+                try movers.append(allocator, m);
             },
             .none => unreachable,
         }
@@ -241,7 +354,7 @@ test "generateMovers creates methyl rotator for ALA" {
     placer.applyChemistry(&mdl);
     _ = try placer.addHydrogens(&mdl, null);
 
-    const gen_result = try generateMovers(testing.allocator, &mdl);
+    const gen_result = try generateMovers(testing.allocator, &mdl, false);
     const movers = gen_result.movers;
     defer {
         for (0..movers.len) |i| @constCast(&movers[i]).deinit();
@@ -264,7 +377,7 @@ test "generateMovers total count for ALA" {
     placer.applyChemistry(&mdl);
     _ = try placer.addHydrogens(&mdl, null);
 
-    const gen_result = try generateMovers(testing.allocator, &mdl);
+    const gen_result = try generateMovers(testing.allocator, &mdl, false);
     const movers = gen_result.movers;
     defer {
         for (0..movers.len) |i| @constCast(&movers[i]).deinit();
@@ -287,7 +400,7 @@ test "optimizer pipeline runs without error on ALA" {
     placer.applyChemistry(&mdl);
     _ = try placer.addHydrogens(&mdl, null);
 
-    const gen_result = try generateMovers(testing.allocator, &mdl);
+    const gen_result = try generateMovers(testing.allocator, &mdl, false);
     const movers = gen_result.movers;
     defer {
         for (0..movers.len) |i| @constCast(&movers[i]).deinit();
@@ -309,7 +422,7 @@ test "methyl rotator controls 3 atoms" {
     placer.applyChemistry(&mdl);
     _ = try placer.addHydrogens(&mdl, null);
 
-    const gen_result = try generateMovers(testing.allocator, &mdl);
+    const gen_result = try generateMovers(testing.allocator, &mdl, false);
     const movers = gen_result.movers;
     defer {
         for (0..movers.len) |i| @constCast(&movers[i]).deinit();
@@ -322,4 +435,72 @@ test "methyl rotator controls 3 atoms" {
             try testing.expectEqual(@as(usize, 3), m.orientations.len);
         }
     }
+}
+
+test "generateMovers creates amide flipper for ASN" {
+    const source = @embedFile("../test_data/asn.cif");
+    var mdl = try mmcif.parseModel(testing.allocator, source);
+    defer mdl.deinit();
+
+    placer.applyChemistry(&mdl);
+    _ = try placer.addHydrogens(&mdl, null);
+
+    const gen_result = try generateMovers(testing.allocator, &mdl, false);
+    const movers = gen_result.movers;
+    defer {
+        for (0..movers.len) |i| @constCast(&movers[i]).deinit();
+        testing.allocator.free(movers);
+    }
+
+    var amide_count: u32 = 0;
+    for (movers) |m| {
+        if (m.kind == .amide_flip) amide_count += 1;
+    }
+    try testing.expectEqual(@as(u32, 1), amide_count);
+}
+
+test "no_flip suppresses flip movers" {
+    const source = @embedFile("../test_data/asn.cif");
+    var mdl = try mmcif.parseModel(testing.allocator, source);
+    defer mdl.deinit();
+
+    placer.applyChemistry(&mdl);
+    _ = try placer.addHydrogens(&mdl, null);
+
+    const gen_result = try generateMovers(testing.allocator, &mdl, true);
+    const movers = gen_result.movers;
+    defer {
+        for (0..movers.len) |i| @constCast(&movers[i]).deinit();
+        testing.allocator.free(movers);
+    }
+
+    for (movers) |m| {
+        try testing.expect(m.kind != .amide_flip);
+        try testing.expect(m.kind != .his_flip);
+    }
+}
+
+test "generateMovers creates His flipper" {
+    const source = @embedFile("../test_data/his.cif");
+    var mdl = try mmcif.parseModel(testing.allocator, source);
+    defer mdl.deinit();
+
+    placer.applyChemistry(&mdl);
+    _ = try placer.addHydrogens(&mdl, null);
+
+    const gen_result = try generateMovers(testing.allocator, &mdl, false);
+    const movers = gen_result.movers;
+    defer {
+        for (0..movers.len) |i| @constCast(&movers[i]).deinit();
+        testing.allocator.free(movers);
+    }
+
+    var his_count: u32 = 0;
+    for (movers) |m| {
+        if (m.kind == .his_flip) {
+            his_count += 1;
+            try testing.expectEqual(@as(usize, 6), m.orientations.len);
+        }
+    }
+    try testing.expectEqual(@as(u32, 1), his_count);
 }
