@@ -34,11 +34,17 @@ const ScoreContext = struct {
     cell_list: ?CellList,
     static_positions: []math_mod.Vec3(f32),
     static_atom_indices: []u32,
+    /// Mean position of each mover's atoms across all its orientations.
+    mover_centroids: []math_mod.Vec3(f32),
+    /// Bounding radius of each mover: max distance from centroid to any orientation position.
+    mover_radii: []f32,
 
     fn deinit(self: *ScoreContext, allocator: Allocator) void {
         if (self.cell_list) |*cl| cl.deinit();
         allocator.free(self.static_positions);
         allocator.free(self.static_atom_indices);
+        allocator.free(self.mover_centroids);
+        allocator.free(self.mover_radii);
     }
 };
 
@@ -311,6 +317,12 @@ fn scoreMover(
     const atoms = model.atoms.items;
     const search_radius: f32 = 5.0;
 
+    // Centroid early-exit: skip mover pairs where even the closest possible atoms
+    // cannot be within scoring range. The cutoff accounts for each mover's bounding
+    // radius (max displacement of any orientation position from the centroid).
+    const my_centroid = score_ctx.mover_centroids[mover_idx];
+    const my_radius = score_ctx.mover_radii[mover_idx];
+
     for (m.atom_indices) |ai| {
         const a = atoms[ai];
 
@@ -332,9 +344,15 @@ fn scoreMover(
             }
         }
 
-        // Mover-controlled atoms are few; score them directly with current coordinates.
+        // Mover-controlled atoms: score directly with current coordinates.
+        // Centroid early-exit: skip other movers whose bounding spheres cannot
+        // overlap with this mover's scoring range.
         for (movers, 0..) |other_m, other_idx| {
             if (other_idx == mover_idx) continue;
+            const other_radius = score_ctx.mover_radii[other_idx];
+            const pair_cutoff = search_radius + my_radius + other_radius;
+            const cdiff = my_centroid.sub(score_ctx.mover_centroids[other_idx]);
+            if (cdiff.dot(cdiff) > pair_cutoff * pair_cutoff) continue;
             for (other_m.atom_indices) |oi| {
                 if (oi == ai) continue;
                 if (isMoverAtom(m, oi)) continue;
@@ -420,7 +438,7 @@ fn buildScoreContext(
 
     // CellList may fail with GridTooLarge for very spread-out structures;
     // fall back to null (pairwise scoring only) rather than aborting.
-    const cell_list: ?CellList = CellList.init(allocator, static_positions, 5.0) catch |err| blk: {
+    var cell_list: ?CellList = CellList.init(allocator, static_positions, 5.0) catch |err| blk: {
         switch (err) {
             error.GridTooLarge => {
                 std.log.warn("CellList grid too large for static atoms; falling back to pairwise scoring", .{});
@@ -429,11 +447,47 @@ fn buildScoreContext(
             error.OutOfMemory => return err,
         }
     };
+    errdefer if (cell_list) |*cl| cl.deinit();
+
+    // Compute centroid (mean position) and bounding radius for each mover.
+    // Centroid is averaged over all orientation positions; bounding radius is the
+    // max distance from the centroid to any orientation position.
+    // Used by scoreMover for early-exit of distant mover-vs-mover pairs:
+    //   skip if dist(centroid_a, centroid_b) > search_radius + radius_a + radius_b
+    const mover_centroids = try allocator.alloc(math_mod.Vec3(f32), movers.len);
+    errdefer allocator.free(mover_centroids);
+    const mover_radii = try allocator.alloc(f32, movers.len);
+    errdefer allocator.free(mover_radii);
+
+    for (movers, 0..) |m, mi| {
+        var sum = math_mod.Vec3(f32).zero;
+        var count: usize = 0;
+        for (m.orientations) |orient| {
+            for (orient.positions) |pos| {
+                sum = sum.add(pos);
+                count += 1;
+            }
+        }
+        const centroid = if (count > 0) sum.scale(1.0 / @as(f32, @floatFromInt(count))) else math_mod.Vec3(f32).zero;
+        mover_centroids[mi] = centroid;
+
+        var max_r2: f32 = 0.0;
+        for (m.orientations) |orient| {
+            for (orient.positions) |pos| {
+                const d = pos.sub(centroid);
+                const r2 = d.dot(d);
+                if (r2 > max_r2) max_r2 = r2;
+            }
+        }
+        mover_radii[mi] = @sqrt(max_r2);
+    }
 
     return .{
         .cell_list = cell_list,
         .static_positions = static_positions,
         .static_atom_indices = static_atom_indices,
+        .mover_centroids = mover_centroids,
+        .mover_radii = mover_radii,
     };
 }
 
@@ -790,6 +844,12 @@ test "buildScoreContext partial allocation failure frees correctly" {
     const movers = [_]Mover{mover};
 
     // Fail at various allocation points; FailingAllocator verifies no leaks.
+    // Allocation order: moved_atoms, static_positions, static_atom_indices,
+    //                   CellList.init internals (counts/cell_offsets/atom_indices),
+    //                   mover_centroids, mover_radii.
+    // Range 0..5 covers the first 5 allocation points safely. CellList.init has a
+    // known pre-existing issue where cell_offsets leaks if atom_indices alloc fails
+    // (fail_index=5 in this test), so we stop before that index.
     for (0..5) |fail_idx| {
         var failing = std.testing.FailingAllocator.init(allocator, .{ .fail_index = fail_idx });
         const result = buildScoreContext(failing.allocator(), &movers, model.atoms.items);
@@ -800,6 +860,129 @@ test "buildScoreContext partial allocation failure frees correctly" {
             // Expected failure -- FailingAllocator checks for leaks on deinit.
         }
     }
+}
+
+test "buildScoreContext computes correct centroids and bounding radii" {
+    const allocator = testing.allocator;
+
+    var model = Model.init(allocator);
+    defer model.deinit();
+
+    // Static atom at origin; mover controls atoms 1 and 2
+    try model.atoms.append(allocator, .{ .pos = .{ .x = 0, .y = 0, .z = 0 } });
+    try model.atoms.append(allocator, .{ .pos = .{ .x = 2, .y = 0, .z = 0 } });
+    try model.atoms.append(allocator, .{ .pos = .{ .x = 4, .y = 0, .z = 0 } });
+    try model.atoms.append(allocator, .{ .pos = .{ .x = 100, .y = 0, .z = 0 } });
+
+    // Mover 0: one orientation with two positions at (2,0,0) and (4,0,0).
+    // centroid = ((2+4)/2, 0, 0) = (3, 0, 0)
+    // bounding radius = max(|2-3|, |4-3|) = 1.0
+    const orientations_m0 = try allocator.alloc(mover_mod.Orientation, 1);
+    const pos_m0 = try allocator.alloc(Vec3(f32), 2);
+    pos_m0[0] = .{ .x = 2, .y = 0, .z = 0 };
+    pos_m0[1] = .{ .x = 4, .y = 0, .z = 0 };
+    orientations_m0[0] = .{ .positions = pos_m0 };
+    const atom_indices_m0 = try allocator.alloc(u32, 2);
+    atom_indices_m0[0] = 1;
+    atom_indices_m0[1] = 2;
+    var m0 = Mover{
+        .kind = .single_h_rotator,
+        .residue_idx = 0,
+        .atom_indices = atom_indices_m0,
+        .orientations = orientations_m0,
+        .allocator = allocator,
+    };
+    defer m0.deinit();
+
+    // Mover 1: one orientation at (100,0,0). centroid=(100,0,0), radius=0.
+    var m1 = try makeTestMover(allocator, 3, &.{
+        .{ .x = 100, .y = 0, .z = 0 },
+    }, &.{0});
+    defer m1.deinit();
+
+    const movers = [_]Mover{ m0, m1 };
+    var score_ctx = try buildScoreContext(allocator, &movers, model.atoms.items);
+    defer score_ctx.deinit(allocator);
+
+    try testing.expectEqual(@as(usize, 2), score_ctx.mover_centroids.len);
+    try testing.expectEqual(@as(usize, 2), score_ctx.mover_radii.len);
+
+    // Centroid of mover 0: (3, 0, 0); bounding radius: 1.0
+    try testing.expectApproxEqAbs(@as(f32, 3.0), score_ctx.mover_centroids[0].x, 0.001);
+    try testing.expectApproxEqAbs(@as(f32, 0.0), score_ctx.mover_centroids[0].y, 0.001);
+    try testing.expectApproxEqAbs(@as(f32, 1.0), score_ctx.mover_radii[0], 0.001);
+
+    // Centroid of mover 1: (100, 0, 0); bounding radius: 0.0
+    try testing.expectApproxEqAbs(@as(f32, 100.0), score_ctx.mover_centroids[1].x, 0.001);
+    try testing.expectApproxEqAbs(@as(f32, 0.0), score_ctx.mover_radii[1], 0.001);
+}
+
+test "centroid early-exit does not change optimization result" {
+    // Two movers far apart: mover 0 near x=5.75, mover 1 near x=50.5.
+    // Pair cutoff = search_radius + radius_0 + radius_1 = 5.0 + 4.25 + 0.5 = 9.75.
+    // Distance between centroids ~= 44.75 >> 9.75 → early-exit fires.
+    // A fixed obstacle is near mover 0. Mover 0 should still pick the clear orientation.
+    const allocator = testing.allocator;
+
+    var model = Model.init(allocator);
+    defer model.deinit();
+
+    // Fixed obstacle near mover 0's closer orientation
+    try model.atoms.append(allocator, .{
+        .pos = .{ .x = 0, .y = 0, .z = 0 },
+        .vdw_radius = 1.7,
+    });
+    // Mover 0 atom (initial position, overwritten during optimization)
+    try model.atoms.append(allocator, .{
+        .pos = .{ .x = 5, .y = 0, .z = 0 },
+        .vdw_radius = 1.2,
+    });
+    // Mover 1 atom far away
+    try model.atoms.append(allocator, .{
+        .pos = .{ .x = 50, .y = 0, .z = 0 },
+        .vdw_radius = 1.2,
+    });
+
+    // Mover 0: orient 0 bumps obstacle at (0,0,0), orient 1 is clear.
+    // centroid = (1.5+10.0)/2 = 5.75, radius = max(|1.5-5.75|, |10.0-5.75|) = 4.25
+    var m0 = try makeTestMover(allocator, 1, &.{
+        .{ .x = 1.5, .y = 0, .z = 0 }, // bumps obstacle (dist 1.5 < 1.7+1.2=2.9)
+        .{ .x = 10.0, .y = 0, .z = 0 }, // clear
+    }, &.{ 0, 0 });
+    defer m0.deinit();
+
+    // Mover 1: far away; centroid = 50.5, radius = 0.5
+    var m1 = try makeTestMover(allocator, 2, &.{
+        .{ .x = 50, .y = 0, .z = 0 },
+        .{ .x = 51, .y = 0, .z = 0 },
+    }, &.{ 0, 0 });
+    defer m1.deinit();
+
+    var movers = [_]Mover{ m0, m1 };
+
+    var score_ctx = try buildScoreContext(allocator, &movers, model.atoms.items);
+    defer score_ctx.deinit(allocator);
+
+    // Verify early-exit fires: centroid distance > search_radius + r0 + r1
+    const search_radius: f32 = 5.0;
+    const r0 = score_ctx.mover_radii[0];
+    const r1 = score_ctx.mover_radii[1];
+    const pair_cutoff = search_radius + r0 + r1;
+    const cdiff = score_ctx.mover_centroids[0].sub(score_ctx.mover_centroids[1]);
+    const dist2 = cdiff.dot(cdiff);
+    try testing.expect(dist2 > pair_cutoff * pair_cutoff);
+
+    var scratch = std.ArrayListUnmanaged(u32).empty;
+    defer scratch.deinit(allocator);
+
+    optimizeSingleton(&movers, 0, &model, .{}, &score_ctx, allocator, &scratch);
+
+    // Mover 0 should pick orientation 1 (away from obstacle), even with early-exit skipping m1.
+    try testing.expectEqual(@as(u16, 1), movers[0].best_orientation);
+
+    // Optimize mover 1 as well -- should work fine (no nearby obstacles)
+    optimizeSingleton(&movers, 1, &model, .{}, &score_ctx, allocator, &scratch);
+    try testing.expect(movers[1].best_orientation < 2);
 }
 
 test "scorePair returns correct values for all branches" {
