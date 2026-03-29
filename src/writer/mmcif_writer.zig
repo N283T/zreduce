@@ -221,7 +221,7 @@ fn writeAtomSitePreserving(writer: anytype, model: *const Model, orig_loop: *con
                 } else if (cm.label_atom_id != null and col == cm.label_atom_id.?) {
                     try writeAtomName(writer, atom.nameSlice());
                 } else if (cm.label_alt_id != null and col == cm.label_alt_id.?) {
-                    try writer.writeAll(".");
+                    try writeAltId(writer, atom.altloc);
                 } else if (cm.label_comp_id != null and col == cm.label_comp_id.?) {
                     try writer.writeAll(res.compIdSlice());
                 } else if (cm.label_asym_id != null and col == cm.label_asym_id.?) {
@@ -401,7 +401,10 @@ fn writePairCifValue(writer: anytype, val: []const u8) !void {
     }
     var has_newline = false;
     for (val) |c| {
-        if (c == '\n' or c == '\r') { has_newline = true; break; }
+        if (c == '\n' or c == '\r') {
+            has_newline = true;
+            break;
+        }
     }
     if (has_newline) {
         try writer.writeAll("\n;");
@@ -481,10 +484,8 @@ fn writeAtomRow(writer: anytype, model: *const Model, atom: Atom, res: Residue, 
         else => "ATOM",
     };
     const elem_str = elementSymbol(atom.element_type);
-    const alt: [1]u8 = if (atom.altloc != ' ') [_]u8{atom.altloc} else [_]u8{'.'};
-
     try writer.print(
-        "{s} {d} {s} {s} {s} {s} {d} {d:.3} {d:.3} {d:.3} {d:.2} {d:.2} {s}\n",
+        "{s} {d} {s} {s} {s} {s} {d} {d:.3} {d:.3} {d:.3} {d:.2} {d:.2} ",
         .{
             group,
             serial,
@@ -498,9 +499,18 @@ fn writeAtomRow(writer: anytype, model: *const Model, atom: Atom, res: Residue, 
             atom.pos.z,
             atom.occupancy,
             atom.b_factor,
-            &alt,
         },
     );
+    try writeAltId(writer, atom.altloc);
+    try writer.writeByte('\n');
+}
+
+fn writeAltId(writer: anytype, altloc: u8) !void {
+    if (altloc == ' ') {
+        try writer.writeByte('.');
+    } else {
+        try writer.writeByte(altloc);
+    }
 }
 
 /// Write optimization log as a custom mmCIF category.
@@ -646,6 +656,43 @@ test "writeWithDocument preserves multiline pair and loop values" {
 
     const atom_site = block.findLoop("_atom_site.Cartn_x").?;
     try testing.expect(atom_site.length() > 5);
+}
+
+test "writeWithDocument preserves added hydrogen altloc" {
+    const source = @embedFile("../test_data/ala_altloc.cif");
+
+    var doc = try cif.readString(testing.allocator, source);
+    defer doc.deinit();
+
+    var mdl = try mmcif.parseModel(testing.allocator, source);
+    defer mdl.deinit();
+    place.applyChemistry(&mdl);
+    _ = try place.addHydrogens(&mdl, null);
+
+    var buf: std.ArrayListUnmanaged(u8) = .empty;
+    defer buf.deinit(testing.allocator);
+    try writeWithDocument(buf.writer(testing.allocator), &mdl, &doc);
+
+    var reparsed = try cif.readString(testing.allocator, buf.items);
+    defer reparsed.deinit();
+
+    const block = &reparsed.blocks.items[0];
+    const atom_site = block.findLoop("_atom_site.label_atom_id").?;
+    const atom_name_col = atom_site.findTag("_atom_site.label_atom_id").?;
+    const alt_id_col = atom_site.findTag("_atom_site.label_alt_id").?;
+
+    var ha_a_count: u32 = 0;
+    var ha_b_count: u32 = 0;
+    for (0..atom_site.length()) |row| {
+        const atom_name = atom_site.val(row, atom_name_col) orelse continue;
+        if (!std.mem.eql(u8, atom_name, "HA")) continue;
+        const alt_id = atom_site.val(row, alt_id_col) orelse continue;
+        if (std.mem.eql(u8, alt_id, "A")) ha_a_count += 1;
+        if (std.mem.eql(u8, alt_id, "B")) ha_b_count += 1;
+    }
+
+    try testing.expectEqual(@as(u32, 1), ha_a_count);
+    try testing.expectEqual(@as(u32, 1), ha_b_count);
 }
 
 test "elementSymbol returns correct symbols" {
