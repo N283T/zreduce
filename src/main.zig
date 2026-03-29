@@ -140,13 +140,110 @@ pub fn main() !void {
     if (std.mem.eql(u8, subcmd, "run")) {
         runSubcommand(allocator, args[2..]);
     } else if (std.mem.eql(u8, subcmd, "batch")) {
-        std.debug.print("Error: batch subcommand not yet implemented\n", .{});
-        std.process.exit(1);
+        batchSubcommand(allocator, args[2..]);
     } else {
         std.debug.print("Error: unknown subcommand '{s}'\n", .{subcmd});
         printUsage(args[0]);
         std.process.exit(1);
     }
+}
+
+fn parseBatchArgs(args: []const []const u8) ?zreduce.batch.BatchConfig {
+    var config = zreduce.batch.BatchConfig{ .input_dir = undefined };
+    var input_set = false;
+    var i: usize = 0;
+
+    while (i < args.len) : (i += 1) {
+        const arg = args[i];
+        if (std.mem.eql(u8, arg, "-h") or std.mem.eql(u8, arg, "--help")) {
+            printBatchUsage();
+            return null;
+        } else if (std.mem.eql(u8, arg, "-o") or std.mem.eql(u8, arg, "--output")) {
+            i += 1;
+            if (i >= args.len) {
+                std.debug.print("Error: {s} requires a path\n", .{arg});
+                std.process.exit(1);
+            }
+            config.output_dir = args[i];
+        } else if (std.mem.eql(u8, arg, "-d") or std.mem.eql(u8, arg, "--dict")) {
+            i += 1;
+            if (i >= args.len) {
+                std.debug.print("Error: {s} requires a path\n", .{arg});
+                std.process.exit(1);
+            }
+            config.dict_path = args[i];
+        } else if (std.mem.eql(u8, arg, "--jsonl")) {
+            i += 1;
+            if (i >= args.len) {
+                std.debug.print("Error: --jsonl requires a path\n", .{});
+                std.process.exit(1);
+            }
+            config.jsonl_path = args[i];
+        } else if (std.mem.eql(u8, arg, "-j") or std.mem.eql(u8, arg, "--threads")) {
+            i += 1;
+            if (i >= args.len) {
+                std.debug.print("Error: {s} requires a number\n", .{arg});
+                std.process.exit(1);
+            }
+            config.n_threads = std.fmt.parseInt(u32, args[i], 10) catch {
+                std.debug.print("Error: invalid thread count '{s}'\n", .{args[i]});
+                std.process.exit(1);
+            };
+        } else if (std.mem.eql(u8, arg, "--no-opt")) {
+            config.no_opt = true;
+        } else if (std.mem.eql(u8, arg, "--no-flip")) {
+            config.no_flip = true;
+        } else if (std.mem.eql(u8, arg, "--quiet")) {
+            config.quiet = true;
+        } else if (arg.len > 0 and arg[0] == '-') {
+            std.debug.print("Error: unknown option '{s}'\n", .{arg});
+            std.process.exit(1);
+        } else {
+            if (input_set) {
+                std.debug.print("Error: unexpected argument '{s}'\n", .{arg});
+                std.process.exit(1);
+            }
+            config.input_dir = arg;
+            input_set = true;
+        }
+    }
+
+    if (!input_set) {
+        std.debug.print("Error: missing input directory\n", .{});
+        printBatchUsage();
+        std.process.exit(1);
+    }
+
+    config.json_version = build_options.version;
+    return config;
+}
+
+fn printBatchUsage() void {
+    std.debug.print(
+        \\USAGE:
+        \\    zreduce batch [OPTIONS] <input_dir>
+        \\
+        \\OPTIONS:
+        \\    -h, --help         Show this help message
+        \\    -d, --dict PATH    CCD dictionary (loaded once)
+        \\    -o, --output PATH  Output directory (default: <input>_reduced/)
+        \\    -j, --threads N    Thread count (default: auto-detect)
+        \\    --jsonl PATH       Aggregated JSONL log file
+        \\    --no-opt           Skip optimization
+        \\    --no-flip          Disable flips
+        \\    --quiet            Suppress progress output
+        \\
+    , .{});
+}
+
+fn batchSubcommand(allocator: Allocator, args: []const []const u8) void {
+    const config = parseBatchArgs(args) orelse return;
+    zreduce.batch.run(allocator, config) catch |err| {
+        if (err != error.SomeFilesFailed) {
+            std.debug.print("Error: batch processing failed: {s}\n", .{@errorName(err)});
+        }
+        std.process.exit(1);
+    };
 }
 
 fn runSubcommand(allocator: Allocator, args: []const []const u8) void {
