@@ -38,6 +38,56 @@ const AtomSiteColumns = struct {
     id: ?usize = null,
 };
 
+/// Compare a Chain's label_asym_id with a string from the CIF data.
+fn chainAsymMatches(chain: Chain, asym: []const u8) bool {
+    return std.mem.eql(u8, chain.labelSlice(), asym);
+}
+
+/// Scan _pdbx_poly_seq_scheme to detect sequence gaps and mark residues
+/// that follow an unobserved residue (auth_seq_num = '?' or '.').
+fn detectChainBreaks(
+    mdl: *Model,
+    pss: *const cif.Loop,
+    col_asym: usize,
+    col_seq: usize,
+    col_auth_seq: usize,
+) void {
+    const nrows = pss.length();
+    var prev_asym: []const u8 = "";
+    var gap_pending = false;
+
+    for (0..nrows) |row| {
+        const asym = cif.asString(pss.val(row, col_asym) orelse continue);
+        const seq_str = pss.val(row, col_seq) orelse continue;
+        const auth_seq = cif.asString(pss.val(row, col_auth_seq) orelse "?");
+
+        // Reset on chain change
+        if (!std.mem.eql(u8, asym, prev_asym)) {
+            gap_pending = false;
+            prev_asym = asym;
+        }
+
+        // Unobserved residue (asString converts '?' and '.' to empty)
+        if (auth_seq.len == 0) {
+            gap_pending = true;
+            continue;
+        }
+
+        // Observed residue after gap -> find and mark
+        if (gap_pending) {
+            const seq_id = cif.value.asIntOr(i32, seq_str, 0);
+            for (mdl.residues.items) |*res| {
+                const chain = mdl.chains.items[res.chain_idx];
+                if (chainAsymMatches(chain, asym) and res.seq_id == seq_id) {
+                    res.is_chain_break_before = true;
+                    break;
+                }
+            }
+            gap_pending = false;
+        }
+    }
+}
+
 /// Parse an mmCIF source string and extract all _atom_site records into a Model.
 pub fn parseModel(allocator: Allocator, source: []const u8) MmcifError!Model {
     var doc = cif.readString(allocator, source) catch |err| switch (err) {
@@ -197,6 +247,22 @@ pub fn parseModel(allocator: Allocator, source: []const u8) MmcifError!Model {
         mdl.chains.items[chain_idx].residue_end = res_end;
     }
 
+    // Parse _pdbx_poly_seq_scheme for chain-break detection (optional)
+    if (block.findLoop("_pdbx_poly_seq_scheme.seq_id")) |pss| {
+        const col_asym = pss.findTag("_pdbx_poly_seq_scheme.asym_id");
+        const col_seq = pss.findTag("_pdbx_poly_seq_scheme.seq_id");
+        const col_auth_seq = pss.findTag("_pdbx_poly_seq_scheme.auth_seq_num");
+
+        if (col_asym != null and col_seq != null and col_auth_seq != null) {
+            detectChainBreaks(&mdl, pss, col_asym.?, col_seq.?, col_auth_seq.?);
+        }
+    }
+
+    // Parse _pdbx_unobs_or_zero_occ_atoms count (optional, diagnostic)
+    if (block.findLoop("_pdbx_unobs_or_zero_occ_atoms.label_atom_id")) |unobs| {
+        mdl.n_unobs_atoms = @intCast(unobs.length());
+    }
+
     return mdl;
 }
 
@@ -287,4 +353,34 @@ test "error: invalid coordinate value" {
     ;
     const result = parseModel(testing.allocator, source);
     try testing.expectError(MmcifError.InvalidCoordinateValue, result);
+}
+
+test "parse chain break from pdbx_poly_seq_scheme" {
+    const source = @embedFile("test_data/gap_chain.cif");
+    var mdl = try parseModel(testing.allocator, source);
+    defer mdl.deinit();
+
+    try testing.expectEqual(@as(usize, 2), mdl.residues.items.len);
+    try testing.expectEqual(@as(usize, 1), mdl.chains.items.len);
+
+    // First residue: no chain break before
+    try testing.expect(!mdl.residues.items[0].is_chain_break_before);
+    // Second residue: chain break before (seq_id 2 is unobserved)
+    try testing.expect(mdl.residues.items[1].is_chain_break_before);
+}
+
+test "parse without pdbx_poly_seq_scheme is backward compatible" {
+    const source = @embedFile("test_data/tiny.cif");
+    var mdl = try parseModel(testing.allocator, source);
+    defer mdl.deinit();
+
+    try testing.expect(!mdl.residues.items[0].is_chain_break_before);
+}
+
+test "model reports zero unobs atoms for tiny.cif" {
+    const source = @embedFile("test_data/tiny.cif");
+    var mdl = try parseModel(testing.allocator, source);
+    defer mdl.deinit();
+
+    try testing.expectEqual(@as(u32, 0), mdl.n_unobs_atoms);
 }
