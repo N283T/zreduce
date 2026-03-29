@@ -30,6 +30,18 @@ pub const OptResult = struct {
     total_cliques: u32 = 0,
 };
 
+const ScoreContext = struct {
+    cell_list: ?CellList,
+    static_positions: []math_mod.Vec3(f32),
+    static_atom_indices: []u32,
+
+    fn deinit(self: *ScoreContext, allocator: Allocator) void {
+        if (self.cell_list) |*cl| cl.deinit();
+        allocator.free(self.static_positions);
+        allocator.free(self.static_atom_indices);
+    }
+};
+
 /// Optimize all movers: find best orientations using clique-based search.
 pub fn optimize(
     allocator: Allocator,
@@ -39,12 +51,8 @@ pub fn optimize(
 ) !OptResult {
     var result = OptResult{};
 
-    const positions = try allocator.alloc(math_mod.Vec3(f32), model.atoms.items.len);
-    defer allocator.free(positions);
-    syncPositions(positions, model.atoms.items);
-
-    var cell_list = try CellList.init(allocator, positions, 5.0);
-    defer cell_list.deinit();
+    var score_ctx = try buildScoreContext(allocator, movers, model.atoms.items);
+    defer score_ctx.deinit(allocator);
 
     var scratch = std.ArrayListUnmanaged(u32).empty;
     defer scratch.deinit(allocator);
@@ -70,15 +78,14 @@ pub fn optimize(
     for (cliques) |clq| {
         if (clq.len == 1) {
             // Singleton: score all orientations, pick best
-            optimizeSingleton(movers, clq[0], model, config, &cell_list, positions, allocator, &scratch);
+            optimizeSingleton(movers, clq[0], model, config, &score_ctx, allocator, &scratch);
             result.n_singletons += 1;
         } else if (totalStates(movers, clq) <= config.brute_force_limit) {
             // Brute force: enumerate all combinations
-            optimizeBruteForce(allocator, movers, clq, model, config, &cell_list, positions, &scratch) catch |err| switch (err) {
-                error.OutOfMemory, error.GridTooLarge => {
-                    // Fallback to greedy on allocation or grid-sizing failure
-                    std.debug.print("Warning: brute-force optimization failed ({s}), falling back to greedy for clique of {d} movers\n", .{ @errorName(err), clq.len });
-                    for (clq) |mi| optimizeSingleton(movers, mi, model, config, &cell_list, positions, allocator, &scratch);
+            optimizeBruteForce(allocator, movers, clq, model, config, &score_ctx, &scratch) catch |err| switch (err) {
+                error.OutOfMemory => {
+                    std.log.warn("brute-force OOM for clique of {d} movers; falling back to greedy", .{clq.len});
+                    for (clq) |mi| optimizeSingleton(movers, mi, model, config, &score_ctx, allocator, &scratch);
                     result.n_vertex_cut += 1;
                     continue;
                 },
@@ -86,7 +93,7 @@ pub fn optimize(
             result.n_brute_force += 1;
         } else {
             // Vertex-cut decomposition (simplified: greedy for Phase 3)
-            optimizeIterativeGreedy(movers, clq, model, config, &cell_list, positions, allocator, &scratch);
+            optimizeIterativeGreedy(movers, clq, model, config, &score_ctx, allocator, &scratch);
             result.n_vertex_cut += 1;
         }
     }
@@ -99,7 +106,7 @@ pub fn optimize(
 
     // Fine search phase: refine each mover around its coarse best
     for (0..movers.len) |mi| {
-        fineSearchMover(allocator, movers, @intCast(mi), model, config, &cell_list, positions, &scratch);
+        fineSearchMover(allocator, movers, @intCast(mi), model, config, &score_ctx, &scratch);
     }
 
     return result;
@@ -110,8 +117,7 @@ fn optimizeSingleton(
     mover_idx: u32,
     model: *Model,
     config: OptConfig,
-    cell_list: *CellList,
-    positions: []math_mod.Vec3(f32),
+    score_ctx: *const ScoreContext,
     allocator: Allocator,
     scratch: *std.ArrayListUnmanaged(u32),
 ) void {
@@ -122,11 +128,7 @@ fn optimizeSingleton(
     for (0..m.nOrientations()) |oi| {
         const idx: u16 = @intCast(oi);
         m.applyOrientation(model.atoms.items, idx);
-        rebuildCellList(allocator, cell_list, positions, model.atoms.items) catch |err| {
-            std.debug.print("Warning: CellList rebuild failed during singleton optimization: {s}\n", .{@errorName(err)});
-            break;
-        };
-        const score = scoreMover(m, mover_idx, movers, model, config, cell_list, positions, allocator, scratch) - m.orientationPenalty(idx);
+        const score = scoreMover(m, mover_idx, movers, model, config, score_ctx, allocator, scratch) - m.orientationPenalty(idx);
         if (score > best_score) {
             best_score = score;
             best_idx = idx;
@@ -144,14 +146,16 @@ fn fineSearchMover(
     mover_idx: u32,
     model: *Model,
     config: OptConfig,
-    cell_list: *CellList,
-    positions: []math_mod.Vec3(f32),
+    score_ctx: *const ScoreContext,
     scratch: *std.ArrayListUnmanaged(u32),
 ) void {
     const m = &movers[mover_idx];
     const atoms = model.atoms.items;
 
-    const fine = rotator_mod.generateFineOrientations(allocator, atoms, m, m.best_orientation) catch return;
+    const fine = rotator_mod.generateFineOrientations(allocator, atoms, m, m.best_orientation) catch |err| {
+        std.log.warn("fine orientation generation failed for mover {d}: {s}", .{ mover_idx, @errorName(err) });
+        return;
+    };
     defer {
         for (fine) |o| allocator.free(o.positions);
         allocator.free(fine);
@@ -159,14 +163,8 @@ fn fineSearchMover(
 
     if (fine.len == 0) return;
 
-    // Rebuild CellList to reflect current coarse-best positions before baseline scoring
-    rebuildCellList(allocator, cell_list, positions, atoms) catch |err| {
-        std.debug.print("Warning: CellList rebuild failed during fine search: {s}\n", .{@errorName(err)});
-        return;
-    };
-
     // Score current coarse best (already applied)
-    var best_score = scoreMover(m, mover_idx, movers, model, config, cell_list, positions, allocator, scratch) - m.orientationPenalty(m.best_orientation);
+    var best_score = scoreMover(m, mover_idx, movers, model, config, score_ctx, allocator, scratch) - m.orientationPenalty(m.best_orientation);
 
     // Score fine orientations
     var best_fine: ?usize = null;
@@ -174,13 +172,7 @@ fn fineSearchMover(
         for (m.atom_indices, 0..) |ai, j| {
             atoms[ai].pos = orient.positions[j];
         }
-        rebuildCellList(allocator, cell_list, positions, atoms) catch |err| {
-            std.debug.print("Warning: CellList rebuild failed during fine search: {s}\n", .{@errorName(err)});
-            // Restore coarse-best positions before returning
-            m.applyOrientation(atoms, m.best_orientation);
-            return;
-        };
-        const score = scoreMover(m, mover_idx, movers, model, config, cell_list, positions, allocator, scratch) - orient.penalty;
+        const score = scoreMover(m, mover_idx, movers, model, config, score_ctx, allocator, scratch) - orient.penalty;
         if (score > best_score) {
             best_score = score;
             best_fine = fi;
@@ -204,8 +196,7 @@ fn optimizeBruteForce(
     clq: []const u32,
     model: *Model,
     config: OptConfig,
-    cell_list: *CellList,
-    positions: []math_mod.Vec3(f32),
+    score_ctx: *const ScoreContext,
     scratch: *std.ArrayListUnmanaged(u32),
 ) !void {
     const n = clq.len;
@@ -225,12 +216,11 @@ fn optimizeBruteForce(
         for (clq, 0..) |mi, i| {
             movers[mi].applyOrientation(model.atoms.items, indices[i]);
         }
-        try rebuildCellList(allocator, cell_list, positions, model.atoms.items);
 
         // Score all movers in clique
         var total_score: f32 = 0;
         for (clq, 0..) |mi, i| {
-            total_score += scoreMover(&movers[mi], mi, movers, model, config, cell_list, positions, allocator, scratch);
+            total_score += scoreMover(&movers[mi], mi, movers, model, config, score_ctx, allocator, scratch);
             total_score -= movers[mi].orientationPenalty(indices[i]);
         }
 
@@ -275,8 +265,7 @@ fn optimizeIterativeGreedy(
     clq: []const u32,
     model: *Model,
     config: OptConfig,
-    cell_list: *CellList,
-    positions: []math_mod.Vec3(f32),
+    score_ctx: *const ScoreContext,
     allocator: Allocator,
     scratch: *std.ArrayListUnmanaged(u32),
 ) void {
@@ -287,7 +276,7 @@ fn optimizeIterativeGreedy(
         var changed = false;
         for (clq) |mi| {
             const old_best = movers[mi].best_orientation;
-            optimizeSingleton(movers, mi, model, config, cell_list, positions, allocator, scratch);
+            optimizeSingleton(movers, mi, model, config, score_ctx, allocator, scratch);
             movers[mi].applyOrientation(model.atoms.items, movers[mi].best_orientation);
             if (movers[mi].best_orientation != old_best) changed = true;
         }
@@ -304,84 +293,148 @@ fn isMoverAtom(m: *const Mover, atom_idx: u32) bool {
 }
 
 /// Score a mover's current orientation against the model.
-/// Uses a lightweight distance-based VDW overlap scoring.
-/// Skips atoms belonging to the same mover.
-/// Uses CellList spatial index for fast neighbor queries (O(N) instead of O(N²)).
+/// Static (non-mover) atoms are queried via CellList spatial index (O(nearby)).
+/// Mover-controlled atoms are scored by direct iteration -- O(M_total) per mover atom,
+/// giving O(M^2) total across all movers. This is acceptable because M (number of
+/// mover-controlled atoms) is small relative to the full atom count.
 fn scoreMover(
     m: *const Mover,
     mover_idx: u32,
     movers: []const Mover,
     model: *const Model,
     config: OptConfig,
-    cell_list: *const CellList,
-    positions: []const math_mod.Vec3(f32),
+    score_ctx: *const ScoreContext,
     allocator: Allocator,
     scratch: *std.ArrayListUnmanaged(u32),
 ) f32 {
-    _ = movers;
-    _ = mover_idx;
     var total: f32 = 0;
     const atoms = model.atoms.items;
-    // Safe for H-mover atoms: max H(1.22) + largest neighbor(2.75) + 0.5 contact margin = 4.47
     const search_radius: f32 = 5.0;
 
     for (m.atom_indices) |ai| {
         const a = atoms[ai];
 
-        // Query CellList for nearby atoms using current mover position
-        scratch.clearRetainingCapacity();
-        cell_list.neighborsInRadius(a.pos, search_radius, scratch, allocator, positions) catch
-            return -std.math.inf(f32);
+        // Static atoms: use spatial index when available, else brute-force scan.
+        if (score_ctx.cell_list) |cl| {
+            scratch.clearRetainingCapacity();
+            cl.neighborsInRadius(a.pos, search_radius, scratch, allocator, score_ctx.static_positions) catch {
+                std.log.warn("neighbor query OOM during scoring for atom {d}; returning -inf", .{ai});
+                return -std.math.inf(f32);
+            };
+            for (scratch.items) |static_idx| {
+                const oi = score_ctx.static_atom_indices[static_idx];
+                total += scorePair(a, atoms[oi], config);
+            }
+        } else {
+            // Fallback: pairwise scan of all static atoms (no CellList available).
+            for (score_ctx.static_atom_indices) |oi| {
+                total += scorePair(a, atoms[oi], config);
+            }
+        }
 
-        for (scratch.items) |oi| {
-            if (oi == ai) continue;
-            if (isMoverAtom(m, oi)) continue;
-
-            const other = atoms[oi];
-            const diff = a.pos.sub(other.pos);
-            const dist2 = diff.dot(diff);
-            const sum_r = a.vdw_radius + other.vdw_radius;
-            const sum_r2 = sum_r * sum_r;
-
-            if (dist2 < sum_r2) {
-                const dist = @sqrt(dist2);
-                const gap = dist - sum_r;
-                if (scorer_mod.isHBond(a.flags, other.flags, gap, config.scoring_params)) {
-                    total += config.scoring_params.hb_weight * (-0.5 * gap);
-                } else {
-                    total -= config.scoring_params.bump_weight * (-0.5 * gap);
-                }
-            } else {
-                const threshold = sum_r + 0.5;
-                if (dist2 < threshold * threshold) {
-                    const dist = @sqrt(dist2);
-                    const gap = dist - sum_r;
-                    const ratio = gap / config.scoring_params.gap_scale;
-                    total += @exp(-ratio * ratio);
-                }
+        // Mover-controlled atoms are few; score them directly with current coordinates.
+        for (movers, 0..) |other_m, other_idx| {
+            if (other_idx == mover_idx) continue;
+            for (other_m.atom_indices) |oi| {
+                if (oi == ai) continue;
+                if (isMoverAtom(m, oi)) continue;
+                total += scorePair(a, atoms[oi], config);
             }
         }
     }
     return total;
 }
 
-fn syncPositions(positions: []math_mod.Vec3(f32), atoms: []const Atom) void {
-    std.debug.assert(positions.len == atoms.len);
-    for (atoms, 0..) |a, i| {
-        positions[i] = a.pos;
+fn scorePair(a: Atom, other: Atom, config: OptConfig) f32 {
+    const diff = a.pos.sub(other.pos);
+    const dist2 = diff.dot(diff);
+    const sum_r = a.vdw_radius + other.vdw_radius;
+    const sum_r2 = sum_r * sum_r;
+
+    if (dist2 < sum_r2) {
+        const dist = @sqrt(dist2);
+        const gap = dist - sum_r;
+        if (scorer_mod.isHBond(a.flags, other.flags, gap, config.scoring_params)) {
+            return config.scoring_params.hb_weight * (-0.5 * gap);
+        }
+        return -config.scoring_params.bump_weight * (-0.5 * gap);
     }
+
+    const threshold = sum_r + 0.5;
+    if (dist2 < threshold * threshold) {
+        const dist = @sqrt(dist2);
+        const gap = dist - sum_r;
+        const ratio = gap / config.scoring_params.gap_scale;
+        return @exp(-ratio * ratio);
+    }
+    return 0.0;
 }
 
-fn rebuildCellList(
+fn buildScoreContext(
     allocator: Allocator,
-    cell_list: *CellList,
-    positions: []math_mod.Vec3(f32),
+    movers: []const Mover,
     atoms: []const Atom,
-) !void {
-    syncPositions(positions, atoms);
-    const new_cell_list = try CellList.init(allocator, positions, 5.0);
-    cell_list.deinit();
-    cell_list.* = new_cell_list;
+) !ScoreContext {
+    // Mark mover-controlled atoms (temporary, freed before return).
+    const moved_atoms = try allocator.alloc(bool, atoms.len);
+    defer allocator.free(moved_atoms);
+    @memset(moved_atoms, false);
+    for (movers) |m| {
+        for (m.atom_indices) |ai| {
+            moved_atoms[ai] = true;
+        }
+    }
+
+    // Debug-only: verify mover atom indices are disjoint across movers.
+    if (std.debug.runtime_safety) {
+        for (movers, 0..) |m, mi| {
+            for (m.atom_indices) |ai| {
+                for (movers[mi + 1 ..]) |other| {
+                    for (other.atom_indices) |oai| {
+                        if (ai == oai) {
+                            std.debug.panic("mover atom index {d} appears in multiple movers", .{ai});
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    var static_count: usize = 0;
+    for (moved_atoms) |is_moved| {
+        if (!is_moved) static_count += 1;
+    }
+
+    const static_positions = try allocator.alloc(math_mod.Vec3(f32), static_count);
+    errdefer allocator.free(static_positions);
+    const static_atom_indices = try allocator.alloc(u32, static_count);
+    errdefer allocator.free(static_atom_indices);
+
+    var out_i: usize = 0;
+    for (atoms, 0..) |a, i| {
+        if (moved_atoms[i]) continue;
+        static_positions[out_i] = a.pos;
+        static_atom_indices[out_i] = @intCast(i);
+        out_i += 1;
+    }
+
+    // CellList may fail with GridTooLarge for very spread-out structures;
+    // fall back to null (pairwise scoring only) rather than aborting.
+    const cell_list: ?CellList = CellList.init(allocator, static_positions, 5.0) catch |err| blk: {
+        switch (err) {
+            error.GridTooLarge => {
+                std.log.warn("CellList grid too large for static atoms; falling back to pairwise scoring", .{});
+                break :blk null;
+            },
+            error.OutOfMemory => return err,
+        }
+    };
+
+    return .{
+        .cell_list = cell_list,
+        .static_positions = static_positions,
+        .static_atom_indices = static_atom_indices,
+    };
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -471,17 +524,13 @@ test "optimize singleton picks best orientation" {
 
     var movers = [_]Mover{mover};
 
-    // Build spatial index from current atom positions
-    const pos = try allocator.alloc(math_mod.Vec3(f32), model.atoms.items.len);
-    defer allocator.free(pos);
-    syncPositions(pos, model.atoms.items);
-    var cl = try CellList.init(allocator, pos, 5.0);
-    defer cl.deinit();
+    var score_ctx = try buildScoreContext(allocator, &movers, model.atoms.items);
+    defer score_ctx.deinit(allocator);
 
     var scratch = std.ArrayListUnmanaged(u32).empty;
     defer scratch.deinit(allocator);
 
-    optimizeSingleton(&movers, 0, &model, .{}, &cl, pos, allocator, &scratch);
+    optimizeSingleton(&movers, 0, &model, .{}, &score_ctx, allocator, &scratch);
 
     // Should pick orientation 1 (no bump)
     try testing.expectEqual(@as(u16, 1), movers[0].best_orientation);
@@ -528,17 +577,13 @@ test "optimize brute force finds optimal combination" {
     var movers = [_]Mover{ m0, m1 };
     const clq = [_]u32{ 0, 1 };
 
-    // Build spatial index from current atom positions
-    const pos = try allocator.alloc(math_mod.Vec3(f32), model.atoms.items.len);
-    defer allocator.free(pos);
-    syncPositions(pos, model.atoms.items);
-    var cl = try CellList.init(allocator, pos, 5.0);
-    defer cl.deinit();
+    var score_ctx = try buildScoreContext(allocator, &movers, model.atoms.items);
+    defer score_ctx.deinit(allocator);
 
     var scratch = std.ArrayListUnmanaged(u32).empty;
     defer scratch.deinit(allocator);
 
-    try optimizeBruteForce(allocator, &movers, &clq, &model, .{}, &cl, pos, &scratch);
+    try optimizeBruteForce(allocator, &movers, &clq, &model, .{}, &score_ctx, &scratch);
 
     // Both should pick orientation 1 (no bumps)
     try testing.expectEqual(@as(u16, 1), movers[0].best_orientation);
@@ -612,17 +657,13 @@ test "iterative greedy finds optimal for coupled movers" {
     var movers = [_]Mover{ m0, m1 };
     const clq = [_]u32{ 0, 1 };
 
-    // Build spatial index from current atom positions
-    const pos = try allocator.alloc(math_mod.Vec3(f32), model.atoms.items.len);
-    defer allocator.free(pos);
-    syncPositions(pos, model.atoms.items);
-    var cl = try CellList.init(allocator, pos, 5.0);
-    defer cl.deinit();
+    var score_ctx = try buildScoreContext(allocator, &movers, model.atoms.items);
+    defer score_ctx.deinit(allocator);
 
     var scratch = std.ArrayListUnmanaged(u32).empty;
     defer scratch.deinit(allocator);
 
-    optimizeIterativeGreedy(&movers, &clq, &model, .{}, &cl, pos, allocator, &scratch);
+    optimizeIterativeGreedy(&movers, &clq, &model, .{}, &score_ctx, allocator, &scratch);
 
     // Both should pick orientation 1 (away from obstacle)
     try testing.expectEqual(@as(u16, 1), movers[0].best_orientation);
@@ -659,22 +700,81 @@ test "optimize brute force sees clashes introduced by moved coordinates" {
     var movers = [_]Mover{ m0, m1 };
     const clq = [_]u32{ 0, 1 };
 
-    const pos = try allocator.alloc(math_mod.Vec3(f32), model.atoms.items.len);
-    defer allocator.free(pos);
-    syncPositions(pos, model.atoms.items);
-
-    var cl = try CellList.init(allocator, pos, 5.0);
-    defer cl.deinit();
+    var score_ctx = try buildScoreContext(allocator, &movers, model.atoms.items);
+    defer score_ctx.deinit(allocator);
 
     var scratch = std.ArrayListUnmanaged(u32).empty;
     defer scratch.deinit(allocator);
 
-    try optimizeBruteForce(allocator, &movers, &clq, &model, .{}, &cl, pos, &scratch);
+    try optimizeBruteForce(allocator, &movers, &clq, &model, .{}, &score_ctx, &scratch);
 
-    try testing.expect(!(movers[0].best_orientation == 0 and movers[1].best_orientation == 0));
+    // orient 0+0 places atoms at x=10.0 and x=10.5 (distance 0.5 < sum_r 3.4 → severe clash).
+    // orient 0+1: m0 at 10.0, m1 at 20.0 → no clash, penalty 0+0.2 = -0.2
+    // orient 1+0: m0 at 0.0, m1 at 10.5 → no clash, penalty 0.2+0 = -0.2
+    // orient 1+1: m0 at 0.0, m1 at 20.0 → no clash, penalty 0.2+0.2 = -0.4
+    // Best is orient 0+1 (first encountered with score -0.2).
+    try testing.expectEqual(@as(u16, 0), movers[0].best_orientation);
+    try testing.expectEqual(@as(u16, 1), movers[1].best_orientation);
 }
 
-test "rebuildCellList leaves previous index usable on allocation failure" {
+test "buildScoreContext excludes mover-controlled atoms from static index" {
+    const allocator = testing.allocator;
+
+    var model = Model.init(allocator);
+    defer model.deinit();
+    try model.atoms.append(allocator, .{ .pos = .{ .x = 0, .y = 0, .z = 0 } });
+    try model.atoms.append(allocator, .{ .pos = .{ .x = 1, .y = 0, .z = 0 } });
+    try model.atoms.append(allocator, .{ .pos = .{ .x = 5, .y = 0, .z = 0 } });
+
+    var mover = try makeTestMover(allocator, 1, &.{
+        .{ .x = 1, .y = 0, .z = 0 },
+        .{ .x = 2, .y = 0, .z = 0 },
+    }, &.{ 0, 0 });
+    defer mover.deinit();
+
+    const movers = [_]Mover{mover};
+    var score_ctx = try buildScoreContext(allocator, &movers, model.atoms.items);
+    defer score_ctx.deinit(allocator);
+
+    try testing.expectEqual(@as(usize, 2), score_ctx.static_positions.len);
+    try testing.expectEqual(@as(u32, 0), score_ctx.static_atom_indices[0]);
+    try testing.expectEqual(@as(u32, 2), score_ctx.static_atom_indices[1]);
+    try testing.expect(score_ctx.cell_list != null);
+}
+
+test "buildScoreContext with multiple movers excludes all mover atoms" {
+    const allocator = testing.allocator;
+
+    var model = Model.init(allocator);
+    defer model.deinit();
+    // atoms 0..4, movers control atoms 1 and 3
+    for (0..5) |i| {
+        try model.atoms.append(allocator, .{
+            .pos = .{ .x = @as(f32, @floatFromInt(i)), .y = 0, .z = 0 },
+        });
+    }
+
+    var m0 = try makeTestMover(allocator, 1, &.{
+        .{ .x = 1, .y = 0, .z = 0 },
+    }, &.{0});
+    defer m0.deinit();
+    var m1 = try makeTestMover(allocator, 3, &.{
+        .{ .x = 3, .y = 0, .z = 0 },
+    }, &.{0});
+    defer m1.deinit();
+
+    const movers = [_]Mover{ m0, m1 };
+    var score_ctx = try buildScoreContext(allocator, &movers, model.atoms.items);
+    defer score_ctx.deinit(allocator);
+
+    // Static atoms: 0, 2, 4
+    try testing.expectEqual(@as(usize, 3), score_ctx.static_positions.len);
+    try testing.expectEqual(@as(u32, 0), score_ctx.static_atom_indices[0]);
+    try testing.expectEqual(@as(u32, 2), score_ctx.static_atom_indices[1]);
+    try testing.expectEqual(@as(u32, 4), score_ctx.static_atom_indices[2]);
+}
+
+test "buildScoreContext partial allocation failure frees correctly" {
     const allocator = testing.allocator;
 
     var model = Model.init(allocator);
@@ -682,18 +782,125 @@ test "rebuildCellList leaves previous index usable on allocation failure" {
     try model.atoms.append(allocator, .{ .pos = .{ .x = 0, .y = 0, .z = 0 } });
     try model.atoms.append(allocator, .{ .pos = .{ .x = 1, .y = 0, .z = 0 } });
 
-    const positions = try allocator.alloc(math_mod.Vec3(f32), model.atoms.items.len);
-    defer allocator.free(positions);
-    syncPositions(positions, model.atoms.items);
+    var mover = try makeTestMover(allocator, 0, &.{
+        .{ .x = 0, .y = 0, .z = 0 },
+    }, &.{0});
+    defer mover.deinit();
 
-    var cl = try CellList.init(allocator, positions, 5.0);
-    defer cl.deinit();
+    const movers = [_]Mover{mover};
 
-    var failing = std.testing.FailingAllocator.init(allocator, .{ .fail_index = 0 });
-    try testing.expectError(error.OutOfMemory, rebuildCellList(failing.allocator(), &cl, positions, model.atoms.items));
+    // Fail at various allocation points; FailingAllocator verifies no leaks.
+    for (0..5) |fail_idx| {
+        var failing = std.testing.FailingAllocator.init(allocator, .{ .fail_index = fail_idx });
+        const result = buildScoreContext(failing.allocator(), &movers, model.atoms.items);
+        if (result) |*ctx| {
+            var ctx_mut = ctx.*;
+            ctx_mut.deinit(failing.allocator());
+        } else |_| {
+            // Expected failure -- FailingAllocator checks for leaks on deinit.
+        }
+    }
+}
 
-    var result = std.ArrayListUnmanaged(u32).empty;
-    defer result.deinit(allocator);
-    try cl.neighborsInRadius(model.atoms.items[0].pos, 2.0, &result, allocator, positions);
-    try testing.expect(result.items.len >= 2);
+test "scorePair returns correct values for all branches" {
+    const config = OptConfig{};
+
+    // Branch 1: No interaction (atoms far apart) -- returns 0.0
+    {
+        const a = Atom{ .pos = .{ .x = 0, .y = 0, .z = 0 }, .vdw_radius = 1.7 };
+        const b = Atom{ .pos = .{ .x = 10, .y = 0, .z = 0 }, .vdw_radius = 1.7 };
+        try testing.expectEqual(@as(f32, 0.0), scorePair(a, b, config));
+    }
+
+    // Branch 2: Contact within threshold (dist between sum_r and sum_r + 0.5)
+    // sum_r = 1.7 + 1.7 = 3.4, threshold = 3.9
+    // place at distance 3.6: gap = 0.2
+    {
+        const a = Atom{ .pos = .{ .x = 0, .y = 0, .z = 0 }, .vdw_radius = 1.7 };
+        const b = Atom{ .pos = .{ .x = 3.6, .y = 0, .z = 0 }, .vdw_radius = 1.7 };
+        const score = scorePair(a, b, config);
+        // gap = 0.2, ratio = 0.2 / 0.25 = 0.8, exp(-0.64) ≈ 0.527
+        try testing.expect(score > 0.0);
+        try testing.expect(@abs(score - @exp(@as(f32, -0.64))) < 0.001);
+    }
+
+    // Branch 3: Overlap without H-bond (bump) -- no donor/acceptor flags
+    // distance 3.0 < sum_r 3.4, gap = 3.0 - 3.4 = -0.4
+    {
+        const a = Atom{ .pos = .{ .x = 0, .y = 0, .z = 0 }, .vdw_radius = 1.7 };
+        const b = Atom{ .pos = .{ .x = 3.0, .y = 0, .z = 0 }, .vdw_radius = 1.7 };
+        const score = scorePair(a, b, config);
+        // bump: -bump_weight * (-0.5 * gap) = -10.0 * (-0.5 * -0.4) = -10.0 * 0.2 = -2.0
+        try testing.expect(score < 0.0);
+        try testing.expect(@abs(score - (-2.0)) < 0.001);
+    }
+
+    // Branch 4: Overlap with H-bond (donor + acceptor flags)
+    // distance 3.0 < sum_r 3.4, gap = -0.4 → -gap = 0.4 <= min_reg_hb_gap(0.6) → H-bond
+    {
+        const a = Atom{
+            .pos = .{ .x = 0, .y = 0, .z = 0 },
+            .vdw_radius = 1.7,
+            .flags = .{ .donor = true },
+        };
+        const b = Atom{
+            .pos = .{ .x = 3.0, .y = 0, .z = 0 },
+            .vdw_radius = 1.7,
+            .flags = .{ .acceptor = true },
+        };
+        const score = scorePair(a, b, config);
+        // hb: hb_weight * (-0.5 * gap) = 4.0 * (-0.5 * -0.4) = 4.0 * 0.2 = 0.8
+        try testing.expect(score > 0.0);
+        try testing.expect(@abs(score - 0.8) < 0.001);
+    }
+}
+
+test "mover-vs-mover clash scoring picks correct orientations" {
+    // Both atoms are mover-controlled (no static atoms).
+    // m0 orient 0: x=10.0 (near m1 orient 0 at x=10.5 → clash)
+    // m0 orient 1: x=0.0  (far from m1)
+    // m1 orient 0: x=10.5 (near m0 orient 0)
+    // m1 orient 1: x=20.0 (far from m0)
+    // Best: both avoid clash. orient 0+0 has penalty 0 but severe clash.
+    // orient 1+1 has penalty 0.2+0.2 = 0.4 but no clash → should win.
+    const allocator = testing.allocator;
+
+    var model = Model.init(allocator);
+    defer model.deinit();
+
+    try model.atoms.append(allocator, .{
+        .pos = .{ .x = 0, .y = 0, .z = 0 },
+        .vdw_radius = 1.7,
+    });
+    try model.atoms.append(allocator, .{
+        .pos = .{ .x = 20, .y = 0, .z = 0 },
+        .vdw_radius = 1.7,
+    });
+
+    var m0 = try makeTestMover(allocator, 0, &.{
+        .{ .x = 10.0, .y = 0, .z = 0 },
+        .{ .x = 0.0, .y = 0, .z = 0 },
+    }, &.{ 0.0, 0.2 });
+    defer m0.deinit();
+
+    var m1 = try makeTestMover(allocator, 1, &.{
+        .{ .x = 10.5, .y = 0, .z = 0 },
+        .{ .x = 20.0, .y = 0, .z = 0 },
+    }, &.{ 0.0, 0.2 });
+    defer m1.deinit();
+
+    var movers = [_]Mover{ m0, m1 };
+    const clq = [_]u32{ 0, 1 };
+
+    var score_ctx = try buildScoreContext(allocator, &movers, model.atoms.items);
+    defer score_ctx.deinit(allocator);
+
+    var scratch = std.ArrayListUnmanaged(u32).empty;
+    defer scratch.deinit(allocator);
+
+    try optimizeBruteForce(allocator, &movers, &clq, &model, .{}, &score_ctx, &scratch);
+
+    // orient 0+1 scores best: m0 at 10.0 (no clash with m1 at 20.0), penalty 0+0.2 = -0.2.
+    try testing.expectEqual(@as(u16, 0), movers[0].best_orientation);
+    try testing.expectEqual(@as(u16, 1), movers[1].best_orientation);
 }
