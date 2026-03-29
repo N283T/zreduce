@@ -567,7 +567,7 @@ fn scorePair(a: Atom, other: Atom, config: OptConfig) f32 {
         const dist = @sqrt(dist2);
         const gap = dist - sum_r;
         const ratio = gap / config.scoring_params.gap_scale;
-        return @exp(-ratio * ratio);
+        return math_mod.fastExp(-ratio * ratio);
     }
     return 0.0;
 }
@@ -1186,9 +1186,9 @@ test "scorePair returns correct values for all branches" {
         const a = Atom{ .pos = .{ .x = 0, .y = 0, .z = 0 }, .vdw_radius = 1.7 };
         const b = Atom{ .pos = .{ .x = 3.6, .y = 0, .z = 0 }, .vdw_radius = 1.7 };
         const score = scorePair(a, b, config);
-        // gap = 0.2, ratio = 0.2 / 0.25 = 0.8, exp(-0.64) ≈ 0.527
+        // gap = 0.2, ratio = 0.2 / 0.25 = 0.8, fastExp(-0.64) ≈ 0.527
         try testing.expect(score > 0.0);
-        try testing.expect(@abs(score - @exp(@as(f32, -0.64))) < 0.001);
+        try testing.expect(@abs(score - math_mod.fastExp(@as(f32, -0.64))) < 0.001);
     }
 
     // Branch 3: Overlap without H-bond (bump) -- no donor/acceptor flags

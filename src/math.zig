@@ -15,11 +15,17 @@ pub fn Vec3(comptime T: type) type {
         pub const zero = Self{ .x = 0, .y = 0, .z = 0 };
 
         pub fn add(self: Self, other: Self) Self {
-            return .{ .x = self.x + other.x, .y = self.y + other.y, .z = self.z + other.z };
+            const a: @Vector(4, T) = .{ self.x, self.y, self.z, 0 };
+            const b: @Vector(4, T) = .{ other.x, other.y, other.z, 0 };
+            const r = a + b;
+            return .{ .x = r[0], .y = r[1], .z = r[2] };
         }
 
         pub fn sub(self: Self, other: Self) Self {
-            return .{ .x = self.x - other.x, .y = self.y - other.y, .z = self.z - other.z };
+            const a: @Vector(4, T) = .{ self.x, self.y, self.z, 0 };
+            const b: @Vector(4, T) = .{ other.x, other.y, other.z, 0 };
+            const r = a - b;
+            return .{ .x = r[0], .y = r[1], .z = r[2] };
         }
 
         pub fn scale(self: Self, s: T) Self {
@@ -34,7 +40,10 @@ pub fn Vec3(comptime T: type) type {
         }
 
         pub fn dot(self: Self, other: Self) T {
-            return self.x * other.x + self.y * other.y + self.z * other.z;
+            const a: @Vector(4, T) = .{ self.x, self.y, self.z, 0 };
+            const b: @Vector(4, T) = .{ other.x, other.y, other.z, 0 };
+            const prod = a * b;
+            return prod[0] + prod[1] + prod[2];
         }
 
         pub fn cross(self: Self, other: Self) Self {
@@ -200,4 +209,23 @@ test "angle 90 degrees" {
     const c = V{ .x = 0, .y = 1, .z = 0 };
     const result = angle(f64, a, b, c);
     try std.testing.expectApproxEqAbs(90.0, result, 1e-9);
+}
+
+/// Fast approximation of exp(x) for x in [-87, 0] range.
+/// Uses Schraudolph's integer-cast method. Max relative error ~6%.
+/// Suitable for contact scoring where relative ranking matters, not absolute values.
+pub fn fastExp(x: f32) f32 {
+    const clamped = @max(x, -87.0);
+    const v: i32 = @intFromFloat(12102203.0 * clamped + 1065353216.0);
+    return @bitCast(@as(u32, @intCast(@max(v, 0))));
+}
+
+test "fastExp approximation within 7% for scoring range" {
+    const test_values = [_]f32{ 0.0, -0.5, -1.0, -2.0, -4.0 };
+    for (test_values) |x| {
+        const exact = @exp(x);
+        const approx = fastExp(x);
+        const rel_err = @abs(approx - exact) / exact;
+        try std.testing.expect(rel_err < 0.07);
+    }
 }
