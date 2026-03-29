@@ -1,4 +1,4 @@
-//! Batch processing: scan a directory of mmCIF files, process each sequentially,
+//! Batch processing: scan a directory of mmCIF files, process in parallel,
 //! and produce an aggregated JSONL log.
 
 const std = @import("std");
@@ -221,6 +221,168 @@ fn runBatchSequential(
 // JSONL logging
 // ---------------------------------------------------------------------------
 
+const JsonlStreamWriter = struct {
+    mutex: std.Thread.Mutex = .{},
+    file: std.fs.File,
+
+    fn writeResult(self: *JsonlStreamWriter, allocator: Allocator, file_result: FileResult) void {
+        // Serialize to a buffer first (outside mutex)
+        var line_buf = std.ArrayListUnmanaged(u8).empty;
+        defer line_buf.deinit(allocator);
+        writeJsonlLine(line_buf.writer(allocator), file_result) catch return;
+
+        // Write under mutex (unbuffered to avoid stale buffered-writer state)
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        self.file.writeAll(line_buf.items) catch {};
+    }
+};
+
+// ---------------------------------------------------------------------------
+// Parallel execution
+// ---------------------------------------------------------------------------
+
+const ParallelContext = struct {
+    files: []const []const u8,
+    input_dir: []const u8,
+    output_dir: []const u8,
+    config: *const BatchConfig,
+    dict: ?*const zreduce.ccd.ComponentDict,
+    results: []FileResult,
+    result_allocator: Allocator,
+    next_file: std.atomic.Value(usize),
+    processed_count: std.atomic.Value(usize),
+    jsonl_stream: ?*JsonlStreamWriter,
+};
+
+fn parallelWorker(ctx: *ParallelContext) void {
+    var arena = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
+    defer arena.deinit();
+
+    while (true) {
+        const file_idx = ctx.next_file.fetchAdd(1, .monotonic);
+        if (file_idx >= ctx.files.len) break;
+
+        const filename = ctx.files[file_idx];
+
+        // Reset arena per file to bound memory usage
+        _ = arena.reset(.retain_capacity);
+        const alloc = arena.allocator();
+
+        var result = processFileInBatch(
+            alloc,
+            filename,
+            ctx.input_dir,
+            ctx.output_dir,
+            ctx.dict,
+            ctx.config,
+        ) catch |err| blk: {
+            // processFileInBatch can only fail on OOM (path join or dupe)
+            break :blk FileResult{
+                .filename = filename, // will be duped below
+                .status = .err,
+                .error_msg = @errorName(err),
+            };
+        };
+
+        // Copy owned strings to result_allocator (thread-safe: disjoint index)
+        result.filename = ctx.result_allocator.dupe(u8, result.filename) catch filename;
+        if (result.error_msg) |msg| {
+            result.error_msg = ctx.result_allocator.dupe(u8, msg) catch null;
+        }
+
+        ctx.results[file_idx] = result;
+
+        // Stream JSONL line if enabled
+        if (ctx.jsonl_stream) |stream| {
+            stream.writeResult(alloc, result);
+        }
+
+        _ = ctx.processed_count.fetchAdd(1, .monotonic);
+    }
+}
+
+fn runBatchParallel(
+    allocator: Allocator,
+    files: []const []const u8,
+    input_dir: []const u8,
+    output_dir: []const u8,
+    dict: ?*const zreduce.ccd.ComponentDict,
+    config: *const BatchConfig,
+    jsonl_stream: ?*JsonlStreamWriter,
+) !BatchResult {
+    const file_results = try allocator.alloc(FileResult, files.len);
+    errdefer allocator.free(file_results);
+
+    const cpu_count: u32 = @intCast(std.Thread.getCpuCount() catch 1);
+    const n_threads = if (config.n_threads == 0)
+        cpu_count
+    else
+        @min(config.n_threads, cpu_count);
+
+    // Fall back to sequential for 1 thread or 1 file
+    if (files.len <= 1 or n_threads <= 1) {
+        allocator.free(file_results);
+        return runBatchSequential(allocator, files, input_dir, output_dir, dict, config);
+    }
+
+    var ctx = ParallelContext{
+        .files = files,
+        .input_dir = input_dir,
+        .output_dir = output_dir,
+        .config = config,
+        .dict = dict,
+        .results = file_results,
+        .result_allocator = allocator,
+        .next_file = std.atomic.Value(usize).init(0),
+        .processed_count = std.atomic.Value(usize).init(0),
+        .jsonl_stream = jsonl_stream,
+    };
+
+    const actual_threads: u32 = @min(n_threads, @as(u32, @intCast(files.len)));
+    const threads = try allocator.alloc(std.Thread, actual_threads);
+    defer allocator.free(threads);
+
+    for (threads) |*thread| {
+        thread.* = try std.Thread.spawn(.{}, parallelWorker, .{&ctx});
+    }
+
+    // Progress monitor on main thread
+    if (!config.quiet) {
+        while (ctx.processed_count.load(.acquire) < files.len) {
+            const processed = ctx.processed_count.load(.acquire);
+            std.debug.print("\rProcessing: {d}/{d}", .{ processed, files.len });
+            std.Thread.sleep(50 * std.time.ns_per_ms);
+        }
+        std.debug.print("\rProcessing: {d}/{d}\n", .{ files.len, files.len });
+    }
+
+    for (threads) |thread| {
+        thread.join();
+    }
+
+    var successful: u32 = 0;
+    var failed: u32 = 0;
+    var total_time_ns: u64 = 0;
+    for (file_results) |r| {
+        switch (r.status) {
+            .ok => successful += 1,
+            .err => failed += 1,
+        }
+        total_time_ns += r.time_ns;
+    }
+
+    return BatchResult{
+        .total_files = @intCast(files.len),
+        .successful = successful,
+        .failed = failed,
+        .total_time_ns = total_time_ns,
+        .file_results = file_results,
+        .allocator = allocator,
+    };
+}
+
 fn writeJsonString(writer: anytype, s: []const u8) !void {
     try writer.writeByte('"');
     for (s) |c| switch (c) {
@@ -312,20 +474,36 @@ pub fn run(allocator: Allocator, config: BatchConfig) !void {
         return err;
     };
 
-    // 5. Run sequential processing
-    var batch_result = try runBatchSequential(
+    // 5. Set up JSONL streaming writer (if requested)
+    var jsonl_file: ?std.fs.File = null;
+    var jsonl_file_needs_close = false;
+    if (config.jsonl_path) |path| {
+        jsonl_file = try std.fs.cwd().createFile(path, .{});
+        jsonl_file_needs_close = true;
+    }
+    defer if (jsonl_file_needs_close) {
+        if (jsonl_file) |f| f.close();
+    };
+
+    var jsonl_stream_storage: JsonlStreamWriter = if (jsonl_file) |jf|
+        JsonlStreamWriter{ .file = jf }
+    else
+        undefined;
+    const jsonl_stream_ptr: ?*JsonlStreamWriter = if (jsonl_file != null) &jsonl_stream_storage else null;
+
+    // 6. Process files (parallel or sequential)
+    var batch_result = try runBatchParallel(
         allocator,
         files,
         config.input_dir,
         output_dir,
         if (ccd_dict) |*d| d else null,
         &config,
+        jsonl_stream_ptr,
     );
     defer batch_result.deinit();
 
-    // 6. Write JSONL log (optional)
     if (config.jsonl_path) |jsonl_path| {
-        try writeJsonlLog(allocator, batch_result.file_results, jsonl_path);
         std.debug.print("JSONL log written to '{s}'\n", .{jsonl_path});
     }
 
