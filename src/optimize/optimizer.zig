@@ -48,6 +48,42 @@ const ScoreContext = struct {
     }
 };
 
+/// Arguments for a parallel singleton optimization task.
+const ParallelSingletonArgs = struct {
+    movers: []Mover,
+    mover_idx: u32,
+    model: *Model,
+    config: OptConfig,
+    score_ctx: *const ScoreContext,
+    allocator: Allocator,
+};
+
+/// Thread pool work function for singleton optimization.
+/// Allocates its own scratch buffer to avoid sharing state across threads.
+fn parallelSingleton(args: *const ParallelSingletonArgs) void {
+    var scratch = std.ArrayListUnmanaged(u32).empty;
+    defer scratch.deinit(args.allocator);
+    optimizeSingleton(args.movers, args.mover_idx, args.model, args.config, args.score_ctx, args.allocator, &scratch);
+}
+
+/// Arguments for a parallel fine search task.
+const ParallelFineSearchArgs = struct {
+    movers: []Mover,
+    mover_idx: u32,
+    model: *Model,
+    config: OptConfig,
+    score_ctx: *const ScoreContext,
+    allocator: Allocator,
+};
+
+/// Thread pool work function for fine search.
+/// Allocates its own scratch buffer to avoid sharing state across threads.
+fn parallelFineSearch(args: *const ParallelFineSearchArgs) void {
+    var scratch = std.ArrayListUnmanaged(u32).empty;
+    defer scratch.deinit(args.allocator);
+    fineSearchMover(args.allocator, args.movers, args.mover_idx, args.model, args.config, args.score_ctx, &scratch);
+}
+
 /// Optimize all movers: find best orientations using clique-based search.
 pub fn optimize(
     allocator: Allocator,
@@ -56,6 +92,8 @@ pub fn optimize(
     config: OptConfig,
 ) !OptResult {
     var result = OptResult{};
+
+    const n_threads: u32 = @intCast(@min(std.Thread.getCpuCount() catch 1, 8));
 
     var score_ctx = try buildScoreContext(allocator, movers, model.atoms.items);
     defer score_ctx.deinit(allocator);
@@ -81,17 +119,21 @@ pub fn optimize(
 
     result.total_cliques = @intCast(cliques.len);
 
+    // Collect singleton mover indices for parallel dispatch after sequential cliques.
+    var singleton_indices = std.ArrayListUnmanaged(u32).empty;
+    defer singleton_indices.deinit(allocator);
+
     for (cliques) |clq| {
         if (clq.len == 1) {
-            // Singleton: score all orientations, pick best
-            optimizeSingleton(movers, clq[0], model, config, &score_ctx, allocator, &scratch);
+            // Defer singletons for parallel dispatch below.
+            try singleton_indices.append(allocator, clq[0]);
             result.n_singletons += 1;
         } else if (totalStates(movers, clq) <= config.brute_force_limit) {
             // Brute force: enumerate all combinations
             optimizeBruteForce(allocator, movers, clq, model, config, &score_ctx, &scratch) catch |err| switch (err) {
                 error.OutOfMemory => {
-                    std.log.warn("brute-force OOM for clique of {d} movers; falling back to greedy", .{clq.len});
-                    for (clq) |mi| optimizeSingleton(movers, mi, model, config, &score_ctx, allocator, &scratch);
+                    std.log.warn("brute-force OOM for clique of {d} movers; falling back to singletons", .{clq.len});
+                    for (clq) |mi| try singleton_indices.append(allocator, mi);
                     result.n_vertex_cut += 1;
                     continue;
                 },
@@ -104,15 +146,72 @@ pub fn optimize(
         }
     }
 
+    // Dispatch singleton optimization in parallel (or sequentially when not worth the overhead).
+    const use_parallel = n_threads > 1 and singleton_indices.items.len > 1;
+    if (use_parallel) {
+        // Build per-task arg structs (one per singleton) on the heap so thread lifetimes are safe.
+        const singleton_args = try allocator.alloc(ParallelSingletonArgs, singleton_indices.items.len);
+        defer allocator.free(singleton_args);
+        for (singleton_indices.items, 0..) |mi, i| {
+            singleton_args[i] = .{
+                .movers = movers,
+                .mover_idx = mi,
+                .model = model,
+                .config = config,
+                .score_ctx = &score_ctx,
+                .allocator = allocator,
+            };
+        }
+
+        var pool: std.Thread.Pool = undefined;
+        try pool.init(.{ .allocator = allocator, .n_jobs = n_threads });
+        defer pool.deinit();
+
+        var wg = std.Thread.WaitGroup{};
+        for (singleton_args) |*args| {
+            pool.spawnWg(&wg, parallelSingleton, .{args});
+        }
+        wg.wait();
+    } else {
+        for (singleton_indices.items) |mi| {
+            optimizeSingleton(movers, mi, model, config, &score_ctx, allocator, &scratch);
+        }
+    }
+
     // Apply best coarse orientations
     for (movers) |*m| {
         m.applyOrientation(model.atoms.items, m.best_orientation);
         m.current_orientation = m.best_orientation;
     }
 
-    // Fine search phase: refine each mover around its coarse best
-    for (0..movers.len) |mi| {
-        fineSearchMover(allocator, movers, @intCast(mi), model, config, &score_ctx, &scratch);
+    // Fine search phase: refine each mover around its coarse best, in parallel when worthwhile.
+    if (use_parallel and movers.len > 1) {
+        const fine_args = try allocator.alloc(ParallelFineSearchArgs, movers.len);
+        defer allocator.free(fine_args);
+        for (0..movers.len) |mi| {
+            fine_args[mi] = .{
+                .movers = movers,
+                .mover_idx = @intCast(mi),
+                .model = model,
+                .config = config,
+                .score_ctx = &score_ctx,
+                .allocator = allocator,
+            };
+        }
+
+        var pool: std.Thread.Pool = undefined;
+        try pool.init(.{ .allocator = allocator, .n_jobs = n_threads });
+        defer pool.deinit();
+
+        var wg = std.Thread.WaitGroup{};
+        for (fine_args) |*args| {
+            pool.spawnWg(&wg, parallelFineSearch, .{args});
+        }
+        wg.wait();
+    } else {
+        for (0..movers.len) |mi| {
+            fineSearchMover(allocator, movers, @intCast(mi), model, config, &score_ctx, &scratch);
+        }
     }
 
     return result;
@@ -1086,4 +1185,56 @@ test "mover-vs-mover clash scoring picks correct orientations" {
     // orient 0+1 scores best: m0 at 10.0 (no clash with m1 at 20.0), penalty 0+0.2 = -0.2.
     try testing.expectEqual(@as(u16, 0), movers[0].best_orientation);
     try testing.expectEqual(@as(u16, 1), movers[1].best_orientation);
+}
+
+test "optimize() with multiple independent singletons uses parallel path and gets correct results" {
+    // Place N independent movers far apart (200 Å apart on y-axis) so they form N singleton cliques.
+    // Each mover has its own nearby obstacle:
+    //   obstacle_i at (0, y_i, 0) with VDW 1.7
+    //   orient 0:  mover at (1.5, y_i, 0) -- bumps obstacle (dist 1.5 < sum_r 3.4)
+    //   orient 1:  mover at (10.0, y_i, 0) -- far away, no bump
+    // After optimize(), every mover should have best_orientation == 1.
+    const allocator = testing.allocator;
+    const N = 8;
+
+    var model = Model.init(allocator);
+    defer model.deinit();
+
+    // Each mover i occupies atom slot obstacle_atom = 2*i, mover_atom = 2*i+1.
+    // Movers are 200 Å apart on y-axis so they don't interact with each other.
+    var movers_buf: [N]Mover = undefined;
+    for (0..N) |i| {
+        const mover_atom_idx: u32 = @intCast(2 * i + 1);
+        const y: f32 = @as(f32, @floatFromInt(i)) * 200.0;
+
+        // Fixed obstacle for this mover (atom index obstacle_atom_idx = 2*i, static)
+        try model.atoms.append(allocator, .{
+            .pos = .{ .x = 0, .y = y, .z = 0 },
+            .vdw_radius = 1.7,
+        });
+
+        // Mover atom (initial position, overwritten during optimization)
+        try model.atoms.append(allocator, .{
+            .pos = .{ .x = 5, .y = y, .z = 0 },
+            .vdw_radius = 1.7,
+        });
+
+        movers_buf[i] = try makeTestMover(allocator, mover_atom_idx, &.{
+            .{ .x = 1.5, .y = y, .z = 0 }, // bumps own obstacle (dist 1.5 < sum_r 3.4)
+            .{ .x = 10.0, .y = y, .z = 0 }, // clear
+        }, &.{ 0, 0 });
+    }
+    defer for (&movers_buf) |*m| m.deinit();
+
+    const movers: []Mover = &movers_buf;
+    const result = try optimize(allocator, movers, &model, .{});
+
+    // All singletons, no brute-force or greedy cliques
+    try testing.expectEqual(@as(u32, N), result.n_singletons);
+    try testing.expectEqual(@as(u32, 0), result.n_brute_force);
+
+    // Every mover should pick orientation 1 (no bump)
+    for (movers_buf) |m| {
+        try testing.expectEqual(@as(u16, 1), m.best_orientation);
+    }
 }
