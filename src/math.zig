@@ -228,3 +228,38 @@ test "fastExp approximation within 7% for scoring range" {
         try std.testing.expect(rel_err < 0.07);
     }
 }
+
+test "fastExp clamp boundary: x = -87 is on the boundary" {
+    // x = -87 is at the clamp boundary; result should match exp(-87) within 7%.
+    const exact = @exp(@as(f32, -87.0));
+    const approx = fastExp(-87.0);
+    const rel_err = @abs(approx - exact) / exact;
+    try std.testing.expect(rel_err < 0.07);
+}
+
+test "fastExp clamp: x below -87 is clamped to exp(-87)" {
+    // x = -100 is below the clamp boundary; fastExp should return the same as fastExp(-87).
+    const clamped = fastExp(-87.0);
+    const below = fastExp(-100.0);
+    // Both should produce the same bit-identical result since -100 is clamped to -87.
+    try std.testing.expectEqual(clamped, below);
+}
+
+test "fastExp positive input: x = 0.5 documents behavior" {
+    // fastExp is designed for x in [-87, 0]; positive x is outside the intended range.
+    // Document that it returns a value greater than 1.0 (exp(0.5) > 1).
+    // The approximation accuracy for positive x is not guaranteed, but it must not crash.
+    const result = fastExp(0.5);
+    try std.testing.expect(result > 1.0);
+}
+
+test "fastExp sweep: max relative error stays within 7% across [-80, 0]" {
+    // Sweep 160 evenly-spaced points in [-80, 0] and verify the worst-case error.
+    var x: f32 = -80.0;
+    while (x <= 0.0) : (x += 0.5) {
+        const exact = @exp(x);
+        const approx = fastExp(x);
+        const rel_err = @abs(approx - exact) / exact;
+        try std.testing.expect(rel_err < 0.07);
+    }
+}
