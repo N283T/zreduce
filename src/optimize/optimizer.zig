@@ -34,6 +34,10 @@ const ScoreContext = struct {
     cell_list: ?CellList,
     static_positions: []math_mod.Vec3(f32),
     static_atom_indices: []u32,
+    /// VDW radii for static atoms (parallel to static_positions).
+    static_radii: []f32,
+    /// AtomFlags for static atoms (parallel to static_positions).
+    static_flags: []element.AtomFlags,
     /// Mean position of each mover's atoms across all its orientations.
     mover_centroids: []math_mod.Vec3(f32),
     /// Bounding radius of each mover: max distance from centroid to any orientation position.
@@ -43,6 +47,8 @@ const ScoreContext = struct {
         if (self.cell_list) |*cl| cl.deinit();
         allocator.free(self.static_positions);
         allocator.free(self.static_atom_indices);
+        allocator.free(self.static_radii);
+        allocator.free(self.static_flags);
         allocator.free(self.mover_centroids);
         allocator.free(self.mover_radii);
     }
@@ -471,24 +477,37 @@ fn scoreMoverWithPositions(
 
     for (m.atom_indices, 0..) |ai, j| {
         // Use the override position for this mover's atom instead of atoms[ai].pos.
-        var a = atoms[ai];
-        a.pos = positions_override[j];
+        const a_pos = positions_override[j];
+        const a_radius = atoms[ai].vdw_radius;
+        const a_flags = atoms[ai].flags;
 
         // Static atoms: use spatial index when available, else brute-force scan.
+        // Use SoA arrays (static_radii/static_flags) to avoid loading full Atom structs.
         if (score_ctx.cell_list) |cl| {
             scratch.clearRetainingCapacity();
-            cl.neighborsInRadius(a.pos, search_radius, scratch, allocator, score_ctx.static_positions) catch {
+            cl.neighborsInRadius(a_pos, search_radius, scratch, allocator, score_ctx.static_positions) catch {
                 std.log.warn("neighbor query OOM during scoring for atom {d}; returning -inf", .{ai});
                 return -std.math.inf(f32);
             };
             for (scratch.items) |static_idx| {
-                const oi = score_ctx.static_atom_indices[static_idx];
-                total += scorePair(a, atoms[oi], config);
+                total += scorePairSoA(
+                    a_pos, a_radius, a_flags,
+                    score_ctx.static_positions[static_idx],
+                    score_ctx.static_radii[static_idx],
+                    score_ctx.static_flags[static_idx],
+                    config,
+                );
             }
         } else {
             // Fallback: pairwise scan of all static atoms (no CellList available).
-            for (score_ctx.static_atom_indices) |oi| {
-                total += scorePair(a, atoms[oi], config);
+            for (0..score_ctx.static_atom_indices.len) |static_idx| {
+                total += scorePairSoA(
+                    a_pos, a_radius, a_flags,
+                    score_ctx.static_positions[static_idx],
+                    score_ctx.static_radii[static_idx],
+                    score_ctx.static_flags[static_idx],
+                    config,
+                );
             }
         }
 
@@ -504,7 +523,11 @@ fn scoreMoverWithPositions(
             for (other_m.atom_indices) |oi| {
                 if (oi == ai) continue;
                 if (isMoverAtom(m, oi)) continue;
-                total += scorePair(a, atoms[oi], config);
+                total += scorePairSoA(
+                    a_pos, a_radius, a_flags,
+                    atoms[oi].pos, atoms[oi].vdw_radius, atoms[oi].flags,
+                    config,
+                );
             }
         }
     }
@@ -575,6 +598,42 @@ fn scorePair(a: Atom, other: Atom, config: OptConfig) f32 {
     return 0.0;
 }
 
+/// Like scorePair but takes individual fields instead of Atom structs.
+/// Used in the static-atom scoring path to read from compact SoA arrays,
+/// reducing cache pressure compared to loading full Atom structs (~64B each).
+fn scorePairSoA(
+    pos_a: math_mod.Vec3(f32),
+    radius_a: f32,
+    flags_a: element.AtomFlags,
+    pos_b: math_mod.Vec3(f32),
+    radius_b: f32,
+    flags_b: element.AtomFlags,
+    config: OptConfig,
+) f32 {
+    const diff = pos_a.sub(pos_b);
+    const dist2 = diff.dot(diff);
+    const sum_r = radius_a + radius_b;
+    const sum_r2 = sum_r * sum_r;
+
+    if (dist2 < sum_r2) {
+        const dist = @sqrt(dist2);
+        const gap = dist - sum_r;
+        if (scorer_mod.isHBond(flags_a, flags_b, gap, config.scoring_params)) {
+            return config.scoring_params.hb_weight * (-0.5 * gap);
+        }
+        return -config.scoring_params.bump_weight * (-0.5 * gap);
+    }
+
+    const threshold = sum_r + 0.5;
+    if (dist2 < threshold * threshold) {
+        const dist = @sqrt(dist2);
+        const gap = dist - sum_r;
+        const ratio = gap / config.scoring_params.gap_scale;
+        return math_mod.fastExp(-ratio * ratio);
+    }
+    return 0.0;
+}
+
 fn buildScoreContext(
     allocator: Allocator,
     movers: []const Mover,
@@ -614,12 +673,18 @@ fn buildScoreContext(
     errdefer allocator.free(static_positions);
     const static_atom_indices = try allocator.alloc(u32, static_count);
     errdefer allocator.free(static_atom_indices);
+    const static_radii = try allocator.alloc(f32, static_count);
+    errdefer allocator.free(static_radii);
+    const static_flags = try allocator.alloc(element.AtomFlags, static_count);
+    errdefer allocator.free(static_flags);
 
     var out_i: usize = 0;
     for (atoms, 0..) |a, i| {
         if (moved_atoms[i]) continue;
         static_positions[out_i] = a.pos;
         static_atom_indices[out_i] = @intCast(i);
+        static_radii[out_i] = a.vdw_radius;
+        static_flags[out_i] = a.flags;
         out_i += 1;
     }
 
@@ -673,6 +738,8 @@ fn buildScoreContext(
         .cell_list = cell_list,
         .static_positions = static_positions,
         .static_atom_indices = static_atom_indices,
+        .static_radii = static_radii,
+        .static_flags = static_flags,
         .mover_centroids = mover_centroids,
         .mover_radii = mover_radii,
     };
