@@ -8,6 +8,7 @@ const mmcif = @import("mmcif.zig");
 const place = @import("place.zig");
 const writer = @import("writer.zig");
 const cif = @import("cif.zig");
+const optimize = @import("optimize/optimize.zig");
 
 test "end-to-end: tiny.cif placement" {
     const source = @embedFile("test_data/tiny.cif");
@@ -148,4 +149,56 @@ test "end-to-end: JSON log output" {
     try testing.expect(std.mem.indexOf(u8, output, "\"version\"") != null);
     try testing.expect(std.mem.indexOf(u8, output, "\"hydrogens_added\"") != null);
     _ = result;
+}
+
+test "end-to-end: HIS sentinel cleanup matches output and JSON count" {
+    const source = @embedFile("test_data/his.cif");
+    var model = try mmcif.parseModel(testing.allocator, source);
+    defer model.deinit();
+
+    place.applyChemistry(&model);
+    _ = try place.addHydrogens(&model, null);
+
+    const gen_result = try optimize.generateMovers(testing.allocator, &model, false, null);
+    const movers = gen_result.movers;
+    defer {
+        for (0..movers.len) |i| @constCast(&movers[i]).deinit();
+        testing.allocator.free(movers);
+    }
+
+    _ = try optimize.optimizer.optimize(testing.allocator, movers, &model, .{});
+
+    var final_h_count: u32 = 0;
+    for (model.atoms.items) |*atom| {
+        if (optimize.mover.isAbsentH(atom.*)) atom.is_added = false;
+        if (atom.is_added and atom.is_hydrogen) final_h_count += 1;
+    }
+
+    var cif_buf: std.ArrayListUnmanaged(u8) = .empty;
+    defer cif_buf.deinit(testing.allocator);
+    try writer.mmcif_writer.write(cif_buf.writer(testing.allocator), &model, "HIS");
+
+    var h_rows: u32 = 0;
+    var lines = std.mem.tokenizeScalar(u8, cif_buf.items, '\n');
+    while (lines.next()) |line| {
+        if (!std.mem.startsWith(u8, line, "ATOM ")) continue;
+        if (std.mem.indexOf(u8, line, " H ")) |_| {
+            h_rows += 1;
+        }
+    }
+
+    try testing.expectEqual(final_h_count, h_rows);
+
+    var json_buf: std.ArrayListUnmanaged(u8) = .empty;
+    defer json_buf.deinit(testing.allocator);
+    try writer.json_writer.writeLog(
+        json_buf.writer(testing.allocator),
+        "0.1.0",
+        "his.cif",
+        final_h_count,
+        movers,
+        model.residues.items,
+        model.chains.items,
+    );
+    try testing.expect(std.mem.indexOf(u8, json_buf.items, "\"hydrogens_added\": 9") != null);
 }

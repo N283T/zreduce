@@ -351,9 +351,6 @@ fn writeCifValue(writer: anytype, val: []const u8) !void {
     {
         needs_quote = true;
     }
-    // Bare '?' and '.' are CIF missing/inapplicable markers — quote if literal
-    if (std.mem.eql(u8, val, "?") or std.mem.eql(u8, val, ".")) needs_quote = true;
-
     if (has_newline) needs_quote = true;
 
     if (!needs_quote) {
@@ -713,7 +710,7 @@ test "elementSymbol returns correct symbols" {
 
 test "writeCifValue quotes special-char-prefixed values" {
     // Test that values starting with [, ], {, } get quoted
-    const cases = [_][]const u8{ "[bracket", "]close", "{brace", "}close", "?", "." };
+    const cases = [_][]const u8{ "[bracket", "]close", "{brace", "}close" };
     for (cases) |input| {
         var buf = std.ArrayList(u8).empty;
         defer buf.deinit(testing.allocator);
@@ -729,6 +726,29 @@ test "writeCifValue quotes special-char-prefixed values" {
         try writeCifValue(buf.writer(testing.allocator), "hello");
         try testing.expectEqualStrings("hello", buf.items);
     }
+    // CIF null markers must remain bare for round-tripping preserved data.
+    for ([_][]const u8{ ".", "?" }) |marker| {
+        var buf = std.ArrayList(u8).empty;
+        defer buf.deinit(testing.allocator);
+        try writeCifValue(buf.writer(testing.allocator), marker);
+        try testing.expectEqualStrings(marker, buf.items);
+    }
+}
+
+test "writeWithDocument preserves bare null alt ids on original rows" {
+    const source = @embedFile("../test_data/tiny.cif");
+
+    var doc = try cif.readString(testing.allocator, source);
+    defer doc.deinit();
+
+    var mdl = try mmcif.parseModel(testing.allocator, source);
+    defer mdl.deinit();
+
+    var buf: std.ArrayListUnmanaged(u8) = .empty;
+    defer buf.deinit(testing.allocator);
+    try writeWithDocument(buf.writer(testing.allocator), &mdl, &doc);
+
+    try testing.expect(std.mem.indexOf(u8, buf.items, "'.'") == null);
 }
 
 test "writeZreduceLog produces expected output" {

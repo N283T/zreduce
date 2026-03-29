@@ -108,6 +108,22 @@ fn printUsage(program_name: []const u8) void {
     , .{ build_options.version, program_name });
 }
 
+fn markAbsentHydrogens(mdl: *zreduce.model.Model) void {
+    for (mdl.atoms.items) |*atom| {
+        if (zreduce.optimize.mover.isAbsentH(atom.*)) {
+            atom.is_added = false;
+        }
+    }
+}
+
+fn countAddedHydrogens(mdl: *const zreduce.model.Model) u32 {
+    var count: u32 = 0;
+    for (mdl.atoms.items) |atom| {
+        if (atom.is_added and atom.is_hydrogen) count += 1;
+    }
+    return count;
+}
+
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
@@ -156,12 +172,10 @@ pub fn main() !void {
     zreduce.place.applyChemistry(&mdl);
 
     // 6. Place hydrogens
-    const initial_count = mdl.atoms.items.len;
     const place_result = zreduce.place.addHydrogens(&mdl, if (ccd_dict) |*d| d else null) catch |err| {
         std.debug.print("Error: hydrogen placement failed: {s}\n", .{@errorName(err)});
         std.process.exit(1);
     };
-    const n_added: u32 = @intCast(mdl.atoms.items.len - initial_count);
 
     // 7. Optimize (unless --no-opt)
     var movers: []zreduce.optimize.Mover = &.{};
@@ -198,7 +212,12 @@ pub fn main() !void {
         }
     }
 
-    // 7.5 Validate model (always run, report issues — before sentinel removal)
+    // 7.5 Mark absent H atoms (flipper sentinels) as not-added so writer skips them.
+    markAbsentHydrogens(&mdl);
+
+    const n_added = countAddedHydrogens(&mdl);
+
+    // 7.6 Validate the final output-visible model state.
     {
         var validation = zreduce.validate.validateModel(allocator, &mdl) catch |err| {
             std.debug.print("Error: validation failed: {s}\n", .{@errorName(err)});
@@ -211,13 +230,6 @@ pub fn main() !void {
             if (config.validate) {
                 zreduce.validate.reportIssues(validation.issues, &mdl);
             }
-        }
-    }
-
-    // 7.6 Remove absent H atoms (flipper sentinels) from the model
-    for (mdl.atoms.items) |*atom| {
-        if (zreduce.optimize.mover.isAbsentH(atom.*)) {
-            atom.is_added = false; // mark as not placed — writer will skip
         }
     }
 
