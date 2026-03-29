@@ -103,10 +103,13 @@ pub fn scanDirectory(allocator: Allocator, dir_path: []const u8) ![][]const u8 {
 // ---------------------------------------------------------------------------
 
 fn makeErrorResult(allocator: Allocator, filename: []const u8, err_name: []const u8, elapsed_ns: u64) !FileResult {
+    const owned_name = try allocator.dupe(u8, filename);
+    errdefer allocator.free(owned_name);
+    const owned_err = try allocator.dupe(u8, err_name);
     return FileResult{
-        .filename = try allocator.dupe(u8, filename),
+        .filename = owned_name,
         .status = .err,
-        .error_msg = try allocator.dupe(u8, err_name),
+        .error_msg = owned_err,
         .time_ns = elapsed_ns,
     };
 }
@@ -165,7 +168,14 @@ fn runBatchSequential(
     config: *const BatchConfig,
 ) !BatchResult {
     const results = try allocator.alloc(FileResult, files.len);
-    errdefer allocator.free(results);
+    var completed: usize = 0;
+    errdefer {
+        for (results[0..completed]) |r| {
+            allocator.free(r.filename);
+            if (r.error_msg) |msg| allocator.free(msg);
+        }
+        allocator.free(results);
+    }
 
     var successful: u32 = 0;
     var failed: u32 = 0;
@@ -184,6 +194,7 @@ fn runBatchSequential(
             dict,
             config,
         );
+        completed = i + 1;
 
         total_time_ns += results[i].time_ns;
         switch (results[i].status) {
@@ -210,8 +221,23 @@ fn runBatchSequential(
 // JSONL logging
 // ---------------------------------------------------------------------------
 
+fn writeJsonString(writer: anytype, s: []const u8) !void {
+    try writer.writeByte('"');
+    for (s) |c| switch (c) {
+        '"' => try writer.writeAll("\\\""),
+        '\\' => try writer.writeAll("\\\\"),
+        '\n' => try writer.writeAll("\\n"),
+        '\r' => try writer.writeAll("\\r"),
+        '\t' => try writer.writeAll("\\t"),
+        else => try writer.writeByte(c),
+    };
+    try writer.writeByte('"');
+}
+
 fn writeJsonlLine(writer: anytype, file_result: FileResult) !void {
-    try writer.print("{{\"file\":\"{s}\",\"status\":", .{file_result.filename});
+    try writer.writeAll("{\"file\":");
+    try writeJsonString(writer, file_result.filename);
+    try writer.writeAll(",\"status\":");
     switch (file_result.status) {
         .ok => {
             const r = file_result.result.?;
@@ -224,9 +250,9 @@ fn writeJsonlLine(writer: anytype, file_result: FileResult) !void {
             });
         },
         .err => {
-            try writer.print("\"error\",\"error\":\"{s}\"}}\n", .{
-                file_result.error_msg orelse "unknown",
-            });
+            try writer.writeAll("\"error\",\"error\":");
+            try writeJsonString(writer, file_result.error_msg orelse "unknown");
+            try writer.writeAll("}\n");
         },
     }
 }
