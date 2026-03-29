@@ -20,6 +20,7 @@ const scoreMover = scoring_mod.scoreMover;
 const scoreMoverWithPositions = scoring_mod.scoreMoverWithPositions;
 
 pub const OptConfig = struct {
+    n_threads: u32 = 0, // 0 = auto-detect CPU count; batch mode sets to 1
     brute_force_limit: u64 = 100_000,
     interaction_cutoff: f32 = 6.0, // Angstrom -- max distance for mover interaction
     scoring_params: scorer_mod.ScoringParams = .{},
@@ -76,7 +77,10 @@ pub fn optimize(
 ) !OptResult {
     var result = OptResult{};
 
-    const n_threads: u32 = @intCast(@min(std.Thread.getCpuCount() catch 1, 8));
+    const n_threads: u32 = if (config.n_threads > 0)
+        config.n_threads
+    else
+        @intCast(@min(std.Thread.getCpuCount() catch 1, 8));
 
     var score_ctx = try buildScoreContext(allocator, movers, model.atoms.items);
     defer score_ctx.deinit(allocator);
