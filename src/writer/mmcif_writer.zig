@@ -209,6 +209,8 @@ fn writeAtomSitePreserving(writer: anytype, model: *const Model, orig_loop: *con
         for (model.atoms.items) |atom| {
             if (!atom.is_added) continue;
             if (atom.residue_idx != res_idx) continue;
+            // Skip absent H atoms (flipper sentinel)
+            if (atom.pos.x > 999.0) continue;
 
             for (0..w) |col| {
                 if (col > 0) try writer.writeByte(' ');
@@ -471,6 +473,8 @@ fn writeAtomSite(writer: anytype, model: *const Model) !void {
         for (model.atoms.items) |atom| {
             if (!atom.is_added) continue;
             if (atom.residue_idx != res_idx) continue;
+            // Skip absent H atoms (flipper sentinel position)
+            if (atom.pos.x > 999.0) continue;
             try writeAtomRow(writer, model, atom, res, serial);
             serial += 1;
         }

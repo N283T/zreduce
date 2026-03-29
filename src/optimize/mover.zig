@@ -45,6 +45,9 @@ pub const Mover = struct {
         self.allocator.free(self.atom_indices);
     }
 
+    /// Sentinel position used by flipper for absent H atoms.
+    pub const ABSENT_H_POS = Vec3(f32){ .x = 1000.0, .y = 1000.0, .z = 1000.0 };
+
     /// Apply the given orientation: update atom positions and optionally flags.
     pub fn applyOrientation(self: *const Mover, atoms: []Atom, idx: u16) void {
         const orient = self.orientations[idx];
