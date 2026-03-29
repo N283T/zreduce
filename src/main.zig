@@ -168,7 +168,7 @@ pub fn main() !void {
     }
 
     if (!config.no_opt) {
-        const gen_result = zreduce.optimize.generateMovers(allocator, &mdl, config.no_flip) catch |err| {
+        const gen_result = zreduce.optimize.generateMovers(allocator, &mdl, config.no_flip, if (ccd_dict) |*d| d else null) catch |err| {
             std.debug.print("Error: mover generation failed: {s}\n", .{@errorName(err)});
             std.process.exit(1);
         };

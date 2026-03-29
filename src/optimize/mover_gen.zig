@@ -16,6 +16,8 @@ const Mover = mover_mod.Mover;
 const rotator = @import("rotator.zig");
 const flipper = @import("flipper.zig");
 const standard = @import("../place/standard.zig");
+const ccd_mod = @import("../ccd.zig");
+const ComponentDict = ccd_mod.ComponentDict;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -54,6 +56,63 @@ fn findAtomIdx(atoms: []const Atom, residue_idx: u32, name: []const u8, target_a
     return blank_match;
 }
 
+/// Resolve center and axis atom names for a rotatable H using CCD topology.
+/// For a single-H rotator: center = heavy atom bonded to H, axis = heavy atom bonded to center.
+fn resolveCcdRotatorAtoms(
+    ccd_dict: ?*const ComponentDict,
+    comp_id: []const u8,
+    h_name: []const u8,
+    center_out: *[4]u8,
+    axis_out: *[4]u8,
+) bool {
+    const dict = ccd_dict orelse return false;
+    const component = dict.get(comp_id) orelse return false;
+
+    // Find H atom index in CCD component
+    var h_ccd_idx: ?u16 = null;
+    for (component.atoms, 0..) |a, i| {
+        const a_name = trimName(&a.name);
+        if (std.mem.eql(u8, a_name, h_name)) {
+            h_ccd_idx = @intCast(i);
+            break;
+        }
+    }
+    const h_idx = h_ccd_idx orelse return false;
+
+    // Find the heavy atom bonded to this H (center)
+    var center_idx: ?u16 = null;
+    for (component.bonds) |bond| {
+        const other: u16 = if (bond.atom_idx_1 == h_idx)
+            bond.atom_idx_2
+        else if (bond.atom_idx_2 == h_idx)
+            bond.atom_idx_1
+        else
+            continue;
+        if (component.atoms[other].element_symbol[0] != 'H') {
+            center_idx = other;
+            break;
+        }
+    }
+    const ci = center_idx orelse return false;
+    center_out.* = component.atoms[ci].name;
+
+    // Find the first heavy atom bonded to center (axis), excluding H atoms
+    for (component.bonds) |bond| {
+        const other: u16 = if (bond.atom_idx_1 == ci)
+            bond.atom_idx_2
+        else if (bond.atom_idx_2 == ci)
+            bond.atom_idx_1
+        else
+            continue;
+        if (other == h_idx) continue;
+        if (component.atoms[other].element_symbol[0] != 'H') {
+            axis_out.* = component.atoms[other].name;
+            return true;
+        }
+    }
+    return false;
+}
+
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
@@ -66,7 +125,7 @@ pub const MoverGenResult = struct {
 /// Scan all placed H atoms in the model and create Mover instances for
 /// optimization. Caller owns the returned movers slice and must call
 /// `deinit()` on each Mover, then free the slice with the same allocator.
-pub fn generateMovers(allocator: std.mem.Allocator, mdl: *const Model, no_flip: bool) !MoverGenResult {
+pub fn generateMovers(allocator: std.mem.Allocator, mdl: *const Model, no_flip: bool, ccd_dict: ?*const ComponentDict) !MoverGenResult {
     var movers: std.ArrayListUnmanaged(Mover) = .empty;
     errdefer {
         for (movers.items) |*m| m.deinit();
@@ -95,13 +154,25 @@ pub fn generateMovers(allocator: std.mem.Allocator, mdl: *const Model, no_flip: 
         switch (atom.mover_hint) {
             .rotate => {
                 // Single H rotator (OH, SH, etc.)
-                const plan = findPlanForH(comp_id, h_name) orelse {
+                // Try standard plan first, fall back to CCD topology
+                var center_name_buf: [4]u8 = undefined;
+                var axis_name_buf: [4]u8 = undefined;
+                var center_name: []const u8 = undefined;
+                var axis_name: []const u8 = undefined;
+
+                if (findPlanForH(comp_id, h_name)) |plan| {
+                    center_name_buf = plan.connected[0];
+                    axis_name_buf = plan.connected[1];
+                    center_name = trimName(&center_name_buf);
+                    axis_name = trimName(&axis_name_buf);
+                } else if (resolveCcdRotatorAtoms(ccd_dict, comp_id, h_name, &center_name_buf, &axis_name_buf)) {
+                    center_name = trimName(&center_name_buf);
+                    axis_name = trimName(&axis_name_buf);
+                } else {
                     log.warn("no plan for H '{s}' in {s} (res {d}), skipping rotator", .{ h_name, comp_id, residue_idx });
                     n_skipped += 1;
                     continue;
-                };
-                const center_name = trimName(&plan.connected[0]);
-                const axis_name = trimName(&plan.connected[1]);
+                }
                 const center_idx = findAtomIdx(atoms, residue_idx, center_name, target_altloc) orelse {
                     log.warn("center atom '{s}' not found for H '{s}' in {s} (res {d}), skipping", .{ center_name, h_name, comp_id, residue_idx });
                     n_skipped += 1;
@@ -126,19 +197,30 @@ pub fn generateMovers(allocator: std.mem.Allocator, mdl: *const Model, no_flip: 
             },
             .rotate_methyl, .rotate_nh3 => {
                 // Group rotator: 3 H atoms share same center.
-                const plan = findPlanForH(comp_id, h_name) orelse {
+                // Try standard plan first, fall back to CCD topology.
+                var center_name_raw: [4]u8 = undefined;
+                var axis_name_buf: [4]u8 = undefined;
+                var center_name: []const u8 = undefined;
+                var axis_name: []const u8 = undefined;
+
+                if (findPlanForH(comp_id, h_name)) |plan| {
+                    center_name_raw = plan.connected[0];
+                    axis_name_buf = plan.connected[1];
+                    center_name = trimName(&center_name_raw);
+                    axis_name = trimName(&axis_name_buf);
+                } else if (resolveCcdRotatorAtoms(ccd_dict, comp_id, h_name, &center_name_raw, &axis_name_buf)) {
+                    center_name = trimName(&center_name_raw);
+                    axis_name = trimName(&axis_name_buf);
+                } else {
                     n_skipped += 1;
                     continue;
-                };
-                const center_name_raw = plan.connected[0];
+                }
 
-                // Dedup key: pack residue_idx and center_name into u64.
+                // Dedup key
                 const group_key = GroupKey{ .residue_idx = residue_idx, .center_name = center_name_raw, .altloc = target_altloc };
                 const gop = try seen_groups.getOrPut(allocator, group_key);
                 if (gop.found_existing) continue;
 
-                const center_name = trimName(&center_name_raw);
-                const axis_name = trimName(&plan.connected[1]);
                 const center_idx = findAtomIdx(atoms, residue_idx, center_name, target_altloc) orelse {
                     log.warn("center atom '{s}' not found for group in {s} (res {d}), skipping", .{ center_name, comp_id, residue_idx });
                     n_skipped += 1;
@@ -151,12 +233,20 @@ pub fn generateMovers(allocator: std.mem.Allocator, mdl: *const Model, no_flip: 
                 };
 
                 // Find all 3 H atoms with same (residue_idx, center, hint).
+                // Use both standard plan lookup and CCD fallback to match center.
                 var h_indices: [3]u32 = undefined;
                 var h_count: u32 = 0;
                 for (atoms, 0..) |*a, ai| {
                     if (a.residue_idx == residue_idx and a.is_added and a.mover_hint == atom.mover_hint and a.altloc == target_altloc) {
-                        const a_plan = findPlanForH(comp_id, a.nameSlice()) orelse continue;
-                        if (std.mem.eql(u8, &a_plan.connected[0], &center_name_raw)) {
+                        // Resolve this H's center via standard plan or CCD
+                        var a_center: [4]u8 = undefined;
+                        var a_axis: [4]u8 = undefined;
+                        const has_center = if (findPlanForH(comp_id, a.nameSlice())) |ap| blk: {
+                            a_center = ap.connected[0];
+                            break :blk true;
+                        } else resolveCcdRotatorAtoms(ccd_dict, comp_id, a.nameSlice(), &a_center, &a_axis);
+
+                        if (has_center and std.mem.eql(u8, &a_center, &center_name_raw)) {
                             if (h_count < 3) {
                                 h_indices[h_count] = @intCast(ai);
                                 h_count += 1;
@@ -367,7 +457,7 @@ test "generateMovers creates methyl rotator for ALA" {
     placer.applyChemistry(&mdl);
     _ = try placer.addHydrogens(&mdl, null);
 
-    const gen_result = try generateMovers(testing.allocator, &mdl, false);
+    const gen_result = try generateMovers(testing.allocator, &mdl, false, null);
     const movers = gen_result.movers;
     defer {
         for (0..movers.len) |i| @constCast(&movers[i]).deinit();
@@ -390,7 +480,7 @@ test "generateMovers creates separate methyl rotators per altloc conformer" {
     placer.applyChemistry(&mdl);
     _ = try placer.addHydrogens(&mdl, null);
 
-    const gen_result = try generateMovers(testing.allocator, &mdl, false);
+    const gen_result = try generateMovers(testing.allocator, &mdl, false, null);
     const movers = gen_result.movers;
     defer {
         for (0..movers.len) |i| @constCast(&movers[i]).deinit();
@@ -421,7 +511,7 @@ test "generateMovers total count for ALA" {
     placer.applyChemistry(&mdl);
     _ = try placer.addHydrogens(&mdl, null);
 
-    const gen_result = try generateMovers(testing.allocator, &mdl, false);
+    const gen_result = try generateMovers(testing.allocator, &mdl, false, null);
     const movers = gen_result.movers;
     defer {
         for (0..movers.len) |i| @constCast(&movers[i]).deinit();
@@ -444,7 +534,7 @@ test "optimizer pipeline runs without error on ALA" {
     placer.applyChemistry(&mdl);
     _ = try placer.addHydrogens(&mdl, null);
 
-    const gen_result = try generateMovers(testing.allocator, &mdl, false);
+    const gen_result = try generateMovers(testing.allocator, &mdl, false, null);
     const movers = gen_result.movers;
     defer {
         for (0..movers.len) |i| @constCast(&movers[i]).deinit();
@@ -466,7 +556,7 @@ test "methyl rotator controls 3 atoms" {
     placer.applyChemistry(&mdl);
     _ = try placer.addHydrogens(&mdl, null);
 
-    const gen_result = try generateMovers(testing.allocator, &mdl, false);
+    const gen_result = try generateMovers(testing.allocator, &mdl, false, null);
     const movers = gen_result.movers;
     defer {
         for (0..movers.len) |i| @constCast(&movers[i]).deinit();
@@ -489,7 +579,7 @@ test "generateMovers creates amide flipper for ASN" {
     placer.applyChemistry(&mdl);
     _ = try placer.addHydrogens(&mdl, null);
 
-    const gen_result = try generateMovers(testing.allocator, &mdl, false);
+    const gen_result = try generateMovers(testing.allocator, &mdl, false, null);
     const movers = gen_result.movers;
     defer {
         for (0..movers.len) |i| @constCast(&movers[i]).deinit();
@@ -511,7 +601,7 @@ test "no_flip suppresses flip movers" {
     placer.applyChemistry(&mdl);
     _ = try placer.addHydrogens(&mdl, null);
 
-    const gen_result = try generateMovers(testing.allocator, &mdl, true);
+    const gen_result = try generateMovers(testing.allocator, &mdl, true, null);
     const movers = gen_result.movers;
     defer {
         for (0..movers.len) |i| @constCast(&movers[i]).deinit();
@@ -532,7 +622,7 @@ test "generateMovers creates His flipper" {
     placer.applyChemistry(&mdl);
     _ = try placer.addHydrogens(&mdl, null);
 
-    const gen_result = try generateMovers(testing.allocator, &mdl, false);
+    const gen_result = try generateMovers(testing.allocator, &mdl, false, null);
     const movers = gen_result.movers;
     defer {
         for (0..movers.len) |i| @constCast(&movers[i]).deinit();
