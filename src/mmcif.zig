@@ -67,8 +67,8 @@ fn detectChainBreaks(
             prev_asym = asym;
         }
 
-        // Unobserved residue
-        if (auth_seq.len == 0 or std.mem.eql(u8, auth_seq, "?")) {
+        // Unobserved residue (asString converts '?' and '.' to empty)
+        if (auth_seq.len == 0) {
             gap_pending = true;
             continue;
         }
