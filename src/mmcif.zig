@@ -258,6 +258,11 @@ pub fn parseModel(allocator: Allocator, source: []const u8) MmcifError!Model {
         }
     }
 
+    // Parse _pdbx_unobs_or_zero_occ_atoms count (optional, diagnostic)
+    if (block.findLoop("_pdbx_unobs_or_zero_occ_atoms.label_atom_id")) |unobs| {
+        mdl.n_unobs_atoms = @intCast(unobs.length());
+    }
+
     return mdl;
 }
 
@@ -370,4 +375,12 @@ test "parse without pdbx_poly_seq_scheme is backward compatible" {
     defer mdl.deinit();
 
     try testing.expect(!mdl.residues.items[0].is_chain_break_before);
+}
+
+test "model reports zero unobs atoms for tiny.cif" {
+    const source = @embedFile("test_data/tiny.cif");
+    var mdl = try parseModel(testing.allocator, source);
+    defer mdl.deinit();
+
+    try testing.expectEqual(@as(u32, 0), mdl.n_unobs_atoms);
 }

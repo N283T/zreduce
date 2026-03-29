@@ -19,6 +19,7 @@ pub const Model = struct {
     chains: std.ArrayListUnmanaged(Chain),
     bonds: std.ArrayListUnmanaged(Bond),
     allocator: Allocator,
+    n_unobs_atoms: u32 = 0,
 
     pub fn init(allocator: Allocator) Model {
         return .{
