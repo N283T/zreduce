@@ -9,6 +9,8 @@ const Vec3 = math_mod.Vec3;
 const Atom = model_mod.Atom;
 const Mover = mover_mod.Mover;
 const Orientation = mover_mod.Orientation;
+const element = @import("../element.zig");
+const AtomFlags = element.AtomFlags;
 
 /// Compute planar NH2 hydrogen positions given:
 ///   n_pos: the nitrogen position
@@ -197,6 +199,32 @@ pub fn createHisFlipper(
         .{ .nd1_p = nd1_f, .cd2_p = cd2_f, .ce1_p = ce1_f, .ne2_p = ne2_f, .hd1_p = hd1_f_computed, .he2_p = he2_f_computed },
     };
 
+    // Flags per orientation: [ND1, CD2, CE1, NE2, HD1, HE2]
+    // Aromatic ring carbons keep ARA (aromatic+acceptor) in all states.
+    // Nitrogens switch donor/acceptor based on protonation.
+    // H atoms are always donor when present.
+    const ar_acc = AtomFlags{ .aromatic = true, .acceptor = true }; // ring C
+    const ar_don = AtomFlags{ .aromatic = true, .donor = true }; // protonated N
+    const ar_acc_n = AtomFlags{ .aromatic = true, .acceptor = true }; // unprotonated N
+    const h_don = AtomFlags{ .donor = true }; // H atom present
+    const h_absent = AtomFlags{}; // absent H (no flags)
+
+    // [ND1, CD2, CE1, NE2, HD1, HE2]
+    const orient_flags = [6][6]AtomFlags{
+        // 0: HE2 only → ND1=acceptor, NE2=donor
+        .{ ar_acc_n, ar_acc, ar_acc, ar_don, h_absent, h_don },
+        // 1: HD1 only → ND1=donor, NE2=acceptor
+        .{ ar_don, ar_acc, ar_acc, ar_acc_n, h_don, h_absent },
+        // 2: both → ND1=donor, NE2=donor
+        .{ ar_don, ar_acc, ar_acc, ar_don, h_don, h_don },
+        // 3: flip, HE2 only → ND1=acceptor, NE2=donor (flipped positions)
+        .{ ar_acc_n, ar_acc, ar_acc, ar_don, h_absent, h_don },
+        // 4: flip, HD1 only → ND1=donor, NE2=acceptor
+        .{ ar_don, ar_acc, ar_acc, ar_acc_n, h_don, h_absent },
+        // 5: flip, both → ND1=donor, NE2=donor
+        .{ ar_don, ar_acc, ar_acc, ar_don, h_don, h_don },
+    };
+
     const orientations = try allocator.alloc(Orientation, 6);
     for (specs, 0..) |spec, i| {
         const positions = try allocator.alloc(Vec3(f32), 6);
@@ -206,7 +234,11 @@ pub fn createHisFlipper(
         positions[3] = spec.ne2_p;
         positions[4] = spec.hd1_p;
         positions[5] = spec.he2_p;
-        orientations[i] = .{ .positions = positions, .penalty = penalties[i] };
+
+        const flags = try allocator.alloc(AtomFlags, 6);
+        @memcpy(flags, &orient_flags[i]);
+
+        orientations[i] = .{ .positions = positions, .flags = flags, .penalty = penalties[i] };
     }
 
     // atom_indices: [ND1, CD2, CE1, NE2, HD1_or_placeholder, HE2_or_placeholder]
@@ -322,4 +354,45 @@ test "his flipper penalties match spec" {
     for (mover.orientations, 0..) |o, i| {
         try testing.expectApproxEqAbs(expected_penalties[i], o.penalty, 1e-6);
     }
+}
+
+test "his flipper orientations have chemistry flags" {
+    const allocator = testing.allocator;
+
+    const atoms = [_]Atom{
+        .{ .pos = .{ .x = 0.0, .y = 1.38, .z = 0.0 } }, // 0: ND1
+        .{ .pos = .{ .x = 1.19, .y = -0.38, .z = 0.0 } }, // 1: CD2
+        .{ .pos = .{ .x = 1.21, .y = 0.97, .z = 0.0 } }, // 2: CE1
+        .{ .pos = .{ .x = 0.0, .y = -1.38, .z = 0.0 } }, // 3: NE2
+        .{ .pos = .{ .x = -0.9, .y = 2.0, .z = 0.0 } }, // 4: HD1
+        .{ .pos = .{ .x = -0.9, .y = -2.0, .z = 0.0 } }, // 5: HE2
+    };
+
+    var mover = try createHisFlipper(allocator, &atoms, 0, 1, 2, 3, 4, 5, 3);
+    defer mover.deinit();
+
+    // All 6 orientations should have flags
+    for (mover.orientations) |o| {
+        try testing.expect(o.flags != null);
+        try testing.expectEqual(@as(usize, 6), o.flags.?.len);
+    }
+
+    // Orient 0: HE2 only → ND1=acceptor (not donor), NE2=donor
+    const flags0 = mover.orientations[0].flags.?;
+    try testing.expect(flags0[0].acceptor); // ND1 acceptor
+    try testing.expect(!flags0[0].donor); // ND1 not donor
+    try testing.expect(flags0[3].donor); // NE2 donor
+    try testing.expect(!flags0[3].acceptor); // NE2 not acceptor
+
+    // Orient 1: HD1 only → ND1=donor, NE2=acceptor
+    const flags1 = mover.orientations[1].flags.?;
+    try testing.expect(flags1[0].donor); // ND1 donor
+    try testing.expect(!flags1[0].acceptor); // ND1 not acceptor
+    try testing.expect(flags1[3].acceptor); // NE2 acceptor
+    try testing.expect(!flags1[3].donor); // NE2 not donor
+
+    // Orient 2: both → ND1=donor, NE2=donor
+    const flags2 = mover.orientations[2].flags.?;
+    try testing.expect(flags2[0].donor);
+    try testing.expect(flags2[3].donor);
 }
