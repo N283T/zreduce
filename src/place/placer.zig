@@ -65,7 +65,7 @@ pub fn addHydrogens(
 
         // Detect N-terminal residue (first residue in its chain)
         const chain = mdl.chains.items[res.chain_idx];
-        const is_nterm = (res_idx == chain.residue_start);
+        const is_nterm = (res_idx == chain.residue_start) or res.is_chain_break_before;
 
         if (standard.getPlans(comp_id)) |plans| {
             const bonds = topology.getBonds(comp_id);
@@ -137,8 +137,9 @@ pub fn applyChemistry(mdl: *Model) void {
 
         // Detect terminal residues
         const chain = mdl.chains.items[res.chain_idx];
-        const is_nterm = (res_idx == chain.residue_start);
-        const is_cterm = (res_idx == chain.residue_end - 1);
+        const is_nterm = (res_idx == chain.residue_start) or res.is_chain_break_before;
+        const is_cterm = (res_idx == chain.residue_end - 1) or
+            (res_idx + 1 < n_residues and mdl.residues.items[res_idx + 1].is_chain_break_before);
 
         const atoms = mdl.atoms.items[res.atom_start..res.atom_end];
         for (atoms) |*atom| {
@@ -1175,4 +1176,42 @@ test "placed H atoms have correct mover_hint" {
     }
     // ALA has 3 methyl H on CB
     try testing.expectEqual(@as(u32, 3), methyl_count);
+}
+
+test "chain break residue gets NH3+ placement" {
+    const source = @embedFile("../test_data/gap_chain.cif");
+    var mdl = try mmcif.parseModel(testing.allocator, source);
+    defer mdl.deinit();
+
+    applyChemistry(&mdl);
+    _ = try addHydrogens(&mdl, null);
+
+    // Second residue (seq_id 3, index 1) should be N-terminal after chain break
+    // -> should have H1, H2, H3 (NH3+)
+    var h1_count: u32 = 0;
+    for (mdl.atoms.items) |atom| {
+        if (atom.is_added and atom.residue_idx == 1 and std.mem.eql(u8, atom.nameSlice(), "H1")) {
+            h1_count += 1;
+        }
+    }
+    try testing.expectEqual(@as(u32, 1), h1_count);
+}
+
+test "residue before chain break gets C-terminal charge" {
+    const source = @embedFile("../test_data/gap_chain.cif");
+    var mdl = try mmcif.parseModel(testing.allocator, source);
+    defer mdl.deinit();
+
+    applyChemistry(&mdl);
+
+    // First residue (seq_id 1, index 0): before gap -> C-terminal -> O gets negative
+    const res0 = mdl.residues.items[0];
+    const atoms0 = mdl.atoms.items[res0.atom_start..res0.atom_end];
+    var o_negative = false;
+    for (atoms0) |atom| {
+        if (std.mem.eql(u8, atom.nameSlice(), "O")) {
+            o_negative = atom.flags.negative;
+        }
+    }
+    try testing.expect(o_negative);
 }
