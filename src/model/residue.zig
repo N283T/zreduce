@@ -13,6 +13,7 @@ pub const Residue = struct {
     atom_start: u32 = 0,
     atom_end: u32 = 0,
     entity_type: EntityType = .unknown,
+    is_chain_break_before: bool = false,
 
     pub fn compIdSlice(self: *const Residue) []const u8 {
         return self.comp_id[0..@min(@as(usize, self.comp_id_len), 3)];
