@@ -149,16 +149,18 @@ pub fn optimize(
     // Thread safety: optimizeSingleton uses scoreMoverWithPositions which reads other movers'
     // atoms from model.atoms but does NOT write to model.atoms during scoring. The only
     // write is to m.best_orientation (a per-mover field; each thread owns a distinct mover).
-    const use_parallel = n_threads > 1 and singleton_indices.items.len > 1;
+    const use_parallel_singleton = n_threads > 1 and singleton_indices.items.len > 1;
+    const use_parallel_fine = n_threads > 1 and movers.len > 1;
+    const need_pool = use_parallel_singleton or use_parallel_fine;
 
     // Allocate one pool and reuse it for both the singleton and fine-search phases.
     var pool: std.Thread.Pool = undefined;
-    if (use_parallel) {
+    if (need_pool) {
         try pool.init(.{ .allocator = allocator, .n_jobs = n_threads });
     }
-    defer if (use_parallel) pool.deinit();
+    defer if (need_pool) pool.deinit();
 
-    if (use_parallel) {
+    if (use_parallel_singleton) {
         // Build per-task arg structs (one per singleton) on the heap so thread lifetimes are safe.
         const singleton_args = try allocator.alloc(ParallelTaskArgs, singleton_indices.items.len);
         defer allocator.free(singleton_args);
@@ -194,7 +196,6 @@ pub fn optimize(
     // The gate uses n_threads > 1 and movers.len > 1 (independent of singleton count).
     // Thread safety: fineSearchMover uses scoreMoverWithPositions; the only write to
     // model.atoms happens after all threads join (the sequential apply-best loop below).
-    const use_parallel_fine = n_threads > 1 and movers.len > 1;
     if (use_parallel_fine) {
         const fine_args = try allocator.alloc(ParallelTaskArgs, movers.len);
         defer allocator.free(fine_args);
@@ -530,6 +531,8 @@ fn scoreMover(
         blk: {
             // Build a slice of current positions from model.atoms for this mover.
             // This is a small, bounded allocation on the stack (up to ~16 atoms per mover).
+            // NOTE: pos_buf lives on this call frame; the slice is only valid for this
+            // synchronous call — do NOT pass it to a spawned thread.
             var pos_buf: [64]math_mod.Vec3(f32) = undefined;
             const n = m.atom_indices.len;
             std.debug.assert(n <= pos_buf.len);

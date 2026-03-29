@@ -42,8 +42,7 @@ pub fn Vec3(comptime T: type) type {
         pub fn dot(self: Self, other: Self) T {
             const a: @Vector(4, T) = .{ self.x, self.y, self.z, 0 };
             const b: @Vector(4, T) = .{ other.x, other.y, other.z, 0 };
-            const prod = a * b;
-            return prod[0] + prod[1] + prod[2];
+            return @reduce(.Add, a * b);
         }
 
         pub fn cross(self: Self, other: Self) Self {
