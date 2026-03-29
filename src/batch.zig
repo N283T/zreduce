@@ -55,7 +55,7 @@ pub const BatchResult = struct {
 
     pub fn deinit(self: *BatchResult) void {
         for (self.file_results) |r| {
-            self.allocator.free(r.filename);
+            if (r.filename.len > 0) self.allocator.free(r.filename);
             if (r.error_msg) |msg| self.allocator.free(msg);
         }
         self.allocator.free(self.file_results);
@@ -286,8 +286,15 @@ fn parallelWorker(ctx: *ParallelContext) void {
             };
         };
 
-        // Copy owned strings to result_allocator (thread-safe: disjoint index)
-        result.filename = ctx.result_allocator.dupe(u8, result.filename) catch filename;
+        // Copy owned strings to result_allocator (thread-safe: disjoint index).
+        // Filename dupe must succeed for deinit safety; error_msg is optional.
+        const owned_filename = ctx.result_allocator.dupe(u8, result.filename) catch {
+            // OOM on a tiny string — record minimal error and continue
+            ctx.results[file_idx] = .{ .filename = &.{}, .status = .err };
+            _ = ctx.processed_count.fetchAdd(1, .monotonic);
+            continue;
+        };
+        result.filename = owned_filename;
         if (result.error_msg) |msg| {
             result.error_msg = ctx.result_allocator.dupe(u8, msg) catch null;
         }
@@ -313,6 +320,8 @@ fn runBatchParallel(
     jsonl_stream: ?*JsonlStreamWriter,
 ) !BatchResult {
     const file_results = try allocator.alloc(FileResult, files.len);
+    // Zero-initialize so deinit is safe even if a worker panics before writing a slot.
+    @memset(file_results, FileResult{ .filename = &.{}, .status = .err });
     errdefer allocator.free(file_results);
 
     const cpu_count: u32 = @intCast(std.Thread.getCpuCount() catch 1);
@@ -344,23 +353,51 @@ fn runBatchParallel(
     const threads = try allocator.alloc(std.Thread, actual_threads);
     defer allocator.free(threads);
 
+    var spawned: u32 = 0;
+    errdefer {
+        // On partial spawn failure, signal remaining workers to stop and join.
+        _ = ctx.next_file.fetchAdd(files.len, .monotonic);
+        for (threads[0..spawned]) |thread| {
+            thread.join();
+        }
+    }
+
     for (threads) |*thread| {
         thread.* = try std.Thread.spawn(.{}, parallelWorker, .{&ctx});
+        spawned += 1;
     }
 
-    // Progress monitor on main thread
-    if (!config.quiet) {
-        while (ctx.processed_count.load(.acquire) < files.len) {
-            const processed = ctx.processed_count.load(.acquire);
-            std.debug.print("\rProcessing: {d}/{d}", .{ processed, files.len });
-            std.Thread.sleep(50 * std.time.ns_per_ms);
-        }
-        std.debug.print("\rProcessing: {d}/{d}\n", .{ files.len, files.len });
-    }
+    // Spawn a progress reporter thread if not quiet.
+    // It polls processed_count and exits once all files are done.
+    var progress_done = std.atomic.Value(bool).init(false);
+    const ProgressArgs = struct {
+        ctx: *ParallelContext,
+        done: *std.atomic.Value(bool),
+    };
+    var progress_args = ProgressArgs{ .ctx = &ctx, .done = &progress_done };
+    const progress_thread: ?std.Thread = if (!config.quiet)
+        std.Thread.spawn(.{}, struct {
+            fn run(pa: *ProgressArgs) void {
+                const total = pa.ctx.files.len;
+                while (!pa.done.load(.acquire)) {
+                    const processed = pa.ctx.processed_count.load(.acquire);
+                    std.debug.print("\rProcessing: {d}/{d}", .{ processed, total });
+                    std.Thread.sleep(100 * std.time.ns_per_ms);
+                }
+                std.debug.print("\rProcessing: {d}/{d}\n", .{ total, total });
+            }
+        }.run, .{&progress_args}) catch null
+    else
+        null;
 
+    // Join all worker threads.
     for (threads) |thread| {
         thread.join();
     }
+
+    // Signal progress thread to stop and join it.
+    progress_done.store(true, .release);
+    if (progress_thread) |pt| pt.join();
 
     var successful: u32 = 0;
     var failed: u32 = 0;
