@@ -197,19 +197,30 @@ pub fn generateMovers(allocator: std.mem.Allocator, mdl: *const Model, no_flip: 
             },
             .rotate_methyl, .rotate_nh3 => {
                 // Group rotator: 3 H atoms share same center.
-                const plan = findPlanForH(comp_id, h_name) orelse {
+                // Try standard plan first, fall back to CCD topology.
+                var center_name_raw: [4]u8 = undefined;
+                var axis_name_buf: [4]u8 = undefined;
+                var center_name: []const u8 = undefined;
+                var axis_name: []const u8 = undefined;
+
+                if (findPlanForH(comp_id, h_name)) |plan| {
+                    center_name_raw = plan.connected[0];
+                    axis_name_buf = plan.connected[1];
+                    center_name = trimName(&center_name_raw);
+                    axis_name = trimName(&axis_name_buf);
+                } else if (resolveCcdRotatorAtoms(ccd_dict, comp_id, h_name, &center_name_raw, &axis_name_buf)) {
+                    center_name = trimName(&center_name_raw);
+                    axis_name = trimName(&axis_name_buf);
+                } else {
                     n_skipped += 1;
                     continue;
-                };
-                const center_name_raw = plan.connected[0];
+                }
 
-                // Dedup key: pack residue_idx and center_name into u64.
+                // Dedup key
                 const group_key = GroupKey{ .residue_idx = residue_idx, .center_name = center_name_raw, .altloc = target_altloc };
                 const gop = try seen_groups.getOrPut(allocator, group_key);
                 if (gop.found_existing) continue;
 
-                const center_name = trimName(&center_name_raw);
-                const axis_name = trimName(&plan.connected[1]);
                 const center_idx = findAtomIdx(atoms, residue_idx, center_name, target_altloc) orelse {
                     log.warn("center atom '{s}' not found for group in {s} (res {d}), skipping", .{ center_name, comp_id, residue_idx });
                     n_skipped += 1;
@@ -222,12 +233,20 @@ pub fn generateMovers(allocator: std.mem.Allocator, mdl: *const Model, no_flip: 
                 };
 
                 // Find all 3 H atoms with same (residue_idx, center, hint).
+                // Use both standard plan lookup and CCD fallback to match center.
                 var h_indices: [3]u32 = undefined;
                 var h_count: u32 = 0;
                 for (atoms, 0..) |*a, ai| {
                     if (a.residue_idx == residue_idx and a.is_added and a.mover_hint == atom.mover_hint and a.altloc == target_altloc) {
-                        const a_plan = findPlanForH(comp_id, a.nameSlice()) orelse continue;
-                        if (std.mem.eql(u8, &a_plan.connected[0], &center_name_raw)) {
+                        // Resolve this H's center via standard plan or CCD
+                        var a_center: [4]u8 = undefined;
+                        var a_axis: [4]u8 = undefined;
+                        const has_center = if (findPlanForH(comp_id, a.nameSlice())) |ap| blk: {
+                            a_center = ap.connected[0];
+                            break :blk true;
+                        } else resolveCcdRotatorAtoms(ccd_dict, comp_id, a.nameSlice(), &a_center, &a_axis);
+
+                        if (has_center and std.mem.eql(u8, &a_center, &center_name_raw)) {
                             if (h_count < 3) {
                                 h_indices[h_count] = @intCast(ai);
                                 h_count += 1;
