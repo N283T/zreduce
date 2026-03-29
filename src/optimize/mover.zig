@@ -6,6 +6,7 @@ const math_mod = @import("../math.zig");
 const model_mod = @import("../model.zig");
 const Vec3 = math_mod.Vec3;
 const Atom = model_mod.Atom;
+const element = @import("../element.zig");
 
 pub const MoverKind = enum(u4) {
     single_h_rotator, // OH, SH, SeH — 12 orientations at 30° intervals
@@ -18,6 +19,7 @@ pub const MoverKind = enum(u4) {
 
 pub const Orientation = struct {
     positions: []Vec3(f32), // atom positions for this orientation
+    flags: ?[]element.AtomFlags = null, // per-atom flags (for flip state chemistry updates)
     penalty: f32 = 0.0,
 };
 
@@ -37,16 +39,22 @@ pub const Mover = struct {
     pub fn deinit(self: *Mover) void {
         for (self.orientations) |o| {
             self.allocator.free(o.positions);
+            if (o.flags) |f| self.allocator.free(f);
         }
         self.allocator.free(self.orientations);
         self.allocator.free(self.atom_indices);
     }
 
-    /// Apply the given orientation: update atom positions in the model.
+    /// Apply the given orientation: update atom positions and optionally flags.
     pub fn applyOrientation(self: *const Mover, atoms: []Atom, idx: u16) void {
         const orient = self.orientations[idx];
         for (self.atom_indices, 0..) |ai, i| {
             atoms[ai].pos = orient.positions[i];
+        }
+        if (orient.flags) |flags| {
+            for (self.atom_indices, 0..) |ai, i| {
+                atoms[ai].flags = flags[i];
+            }
         }
     }
 
