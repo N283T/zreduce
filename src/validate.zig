@@ -9,7 +9,7 @@ const std = @import("std");
 const model_mod = @import("model.zig");
 const Model = model_mod.Model;
 const Atom = model_mod.Atom;
-const math = @import("math.zig");
+const mover_mod = @import("optimize/mover.zig");
 
 pub const Issue = struct {
     kind: Kind,
@@ -49,7 +49,7 @@ pub fn validateModel(allocator: std.mem.Allocator, mdl: *const Model) !Validatio
 
     for (mdl.atoms.items, 0..) |atom, idx| {
         // Check for sentinel positions (absent H from flipper)
-        if (atom.is_added and atom.pos.x > 999.0 and atom.pos.y > 999.0 and atom.pos.z > 999.0) {
+        if (mover_mod.isAbsentH(atom)) {
             var issue = Issue{
                 .kind = .sentinel_position,
                 .atom_idx = @intCast(idx),
@@ -151,4 +151,30 @@ test "sentinel position detected" {
     try testing.expect(!result.ok());
     try testing.expectEqual(@as(usize, 1), result.issues.len);
     try testing.expectEqual(Issue.Kind.sentinel_position, result.issues[0].kind);
+}
+
+test "NaN coordinate detected" {
+    var mdl = Model.init(testing.allocator);
+    defer mdl.deinit();
+    try mdl.atoms.append(testing.allocator, .{
+        .pos = .{ .x = std.math.nan(f32), .y = 2.0, .z = 3.0 },
+    });
+    try mdl.residues.append(testing.allocator, .{});
+    var result = try validateModel(testing.allocator, &mdl);
+    defer result.deinit();
+    try testing.expect(!result.ok());
+    try testing.expectEqual(Issue.Kind.nan_coordinate, result.issues[0].kind);
+}
+
+test "Inf coordinate detected" {
+    var mdl = Model.init(testing.allocator);
+    defer mdl.deinit();
+    try mdl.atoms.append(testing.allocator, .{
+        .pos = .{ .x = std.math.inf(f32), .y = 2.0, .z = 3.0 },
+    });
+    try mdl.residues.append(testing.allocator, .{});
+    var result = try validateModel(testing.allocator, &mdl);
+    defer result.deinit();
+    try testing.expect(!result.ok());
+    try testing.expectEqual(Issue.Kind.inf_coordinate, result.issues[0].kind);
 }

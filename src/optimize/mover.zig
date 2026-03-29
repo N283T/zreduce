@@ -71,6 +71,12 @@ pub const Mover = struct {
     }
 };
 
+/// Check if an atom is at the sentinel (absent) position.
+pub fn isAbsentH(atom: Atom) bool {
+    return atom.is_added and
+        atom.pos.x > 999.0 and atom.pos.y > 999.0 and atom.pos.z > 999.0;
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 const testing = std.testing;
