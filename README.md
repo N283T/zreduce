@@ -7,49 +7,59 @@ zreduce reads mmCIF structures, adds hydrogen atoms using geometric rules and CC
 ## Features
 
 - **mmCIF-native** input and output (no PDB format dependency)
-- **CCD-driven** hydrogen placement for HET groups (ligands, modified residues)
-- **20 standard amino acids** with hardcoded placement plans and mover hints
+- **CCD-driven** hydrogen placement for non-standard residues (nucleotides, glycans, ligands, modified residues)
+- **20 standard amino acids** with hardcoded placement plans and bond topology
 - **6 geometry types**: tetrahedral, sp2, dihedral-controlled, planar bisector, fractional angle, linear
+- **Conformer-aware**: altloc handling with per-conformer placement and optimization
+- **Residue-specific chemistry**: donor/acceptor/aromatic/charge annotations for scoring
+- **Chain-break detection**: from `_pdbx_poly_seq_scheme` for correct terminal chemistry
 - **Dot-sphere scoring** with bump/H-bond classification (matching original reduce constants)
-- **Clique-based optimization**: singleton, brute-force, and greedy strategies
-- **Rotation movers**: OH/SH (12 orientations), NH3+ (3), methyl (3)
+- **Clique-based optimization**: singleton, brute-force, iterative greedy, with fine angular search
+- **Rotation movers**: OH/SH (12 orientations), NH3+ (3), methyl (3) — standard + CCD-derived
 - **Flip movers**: Asn/Gln amide flip (2 orientations), His ring flip (6 orientations)
+- **CellList spatial index**: O(N) scoring instead of O(N^2)
+- **Model validation**: sentinel detection, NaN/Inf coordinate checks
 - **Zero-copy CIF parser** with streaming CCD support (~40K components)
-- **Spatial neighbor list** using counting-sort cell grid
 
 ## Quick Start
 
 ### Requirements
 
 - [Zig](https://ziglang.org/) 0.14+ (tested with 0.15.2)
-- zlib (for gzip CCD support, linked via system library)
 
 ### Build
 
 ```bash
-zig build
+zig build                           # Debug
+zig build -Doptimize=ReleaseFast    # Optimized (recommended for real structures)
 ```
 
 ### Run
 
 ```bash
-# Basic: place hydrogens, write to stdout
-zig build run -- input.cif
+# Basic: place hydrogens on standard amino acids
+zreduce input.cif -o output.cif
 
-# Write to file
-zig build run -- input.cif -o output.cif
+# With CCD dictionary (enables non-standard residue H placement + optimization)
+zreduce input.cif -d components.cif -o output.cif
 
-# With CCD dictionary for HET groups
-zig build run -- input.cif -d components.cif -o output.cif
+# Placement only (skip optimization)
+zreduce input.cif -o output.cif --no-opt
 
-# Write JSON log
-zig build run -- input.cif -o output.cif --json log.json
+# Disable flips (keep rotators only)
+zreduce input.cif -o output.cif --no-flip
+
+# With validation diagnostics
+zreduce input.cif -o output.cif --validate
+
+# Write JSON optimization log
+zreduce input.cif -o output.cif --json log.json
 ```
 
 ### Test
 
 ```bash
-zig build test
+zig build test --summary all    # 225+ tests
 ```
 
 ## CLI Options
@@ -59,12 +69,11 @@ zig build test
 | `-h, --help` | Show help message |
 | `-V, --version` | Show version |
 | `-o, --output PATH` | Output mmCIF file (default: stdout) |
-| `-d, --dict PATH` | Path to components.cif for CCD HET groups |
+| `-d, --dict PATH` | Path to components.cif for non-standard residues |
 | `--json PATH` | Write JSON optimization log |
-| `--no-opt` | Skip optimization (placement only) * |
-| `--no-flip` | Disable Asn/Gln/His flips * |
-
-\* Not yet implemented in v0.1.0 — optimization pipeline integration is planned for v0.2.0.
+| `--no-opt` | Skip optimization (placement only) |
+| `--no-flip` | Disable Asn/Gln/His flips |
+| `--validate` | Print detailed validation diagnostics |
 
 ## Architecture
 
@@ -72,36 +81,60 @@ zig build test
 mmCIF input
     |
     v
-+-------------+
-| CIF Parser  |  Zero-copy tokenizer + parser
-+------+------+
-       |
-       v
-+-------------+
-| CCD Loader  |  Streaming parser for components.cif
-+------+------+
-       |
-       v
-+-------------+
-| Model Build |  Atom[], Residue[], Chain[], Bond[]
-+------+------+
-       |
-       v
-+-----------------+
-| H Placement     |  Geometric placement (type 1-6)
-| (Standard+HET)  |  Standard: hardcoded, HET: CCD-derived
-+------+----------+
-       |
-       v
-+-----------------+
-| Optimizer       |  Dot-sphere scoring + clique search
-+------+----------+
-       |
-       v
-+-----------------+
-| Output Writer   |  mmCIF with H atoms + JSON log
-+-----------------+
++------------------+
+| CIF Parser       |  Zero-copy tokenizer + parser
++--------+---------+
+         |
+         v
++------------------+
+| CCD Loader       |  Streaming parser for components.cif
++--------+---------+
+         |
+         v
++------------------+
+| Model Build      |  Atom[], Residue[], Chain[]
+| + Chemistry      |  Donor/acceptor/aromatic/charge annotations
+| + Chain Breaks   |  From _pdbx_poly_seq_scheme
++--------+---------+
+         |
+         v
++------------------+
+| H Placement      |  Conformer-aware, altloc-consistent
+| Standard + CCD   |  Bond topology for neighbor resolution
++--------+---------+
+         |
+         v
++------------------+
+| Mover Generation |  Standard plans + CCD topology fallback
++--------+---------+
+         |
+         v
++------------------+
+| Optimizer        |  CellList scoring + clique search
+| + Fine Search    |  Angular refinement around coarse best
++--------+---------+
+         |
+         v
++------------------+
+| Validation       |  Sentinel, NaN/Inf checks
++--------+---------+
+         |
+         v
++------------------+
+| Output Writer    |  mmCIF with H atoms + JSON log
++------------------+
 ```
+
+## Performance
+
+Benchmarked on Apple Silicon (ReleaseFast):
+
+| Structure | Residues | Atoms | Movers | Time |
+|-----------|----------|-------|--------|------|
+| AF small protein | 16 | ~200 | 12 | <1s |
+| AF medium protein | 309 | ~3K | 299 | 1s |
+| AF large protein | 2339 | ~18K | 2434 | ~3s |
+| Protein+DNA+RNA+glycan (CCD) | 507 | ~10K | 696 | 6s |
 
 ## Project Structure
 
@@ -109,39 +142,33 @@ mmCIF input
 src/
   main.zig              CLI entry point
   root.zig              Library re-exports
+  validate.zig          Post-placement model validation
   math.zig              Vec3(T), rotation, dihedral
-  element.zig           AtomType, VDW radii, flags
+  element.zig           AtomType, VDW radii, AtomFlags
   cif/                  CIF parser subsystem
-  cif.zig               CIF module re-exports
-  mmcif.zig             atom_site extraction
+  mmcif.zig             atom_site + poly_seq_scheme + unobs atoms
   ccd.zig               CCD component dictionary
   model/                Molecular model structs
-  model.zig             Model module re-exports
   place/                Hydrogen placement
-  place.zig             Place module re-exports
+    placer.zig          Unified placer (conformer-aware)
+    standard.zig        20 AA placement plans
+    het.zig             CCD-derived placement
+    topology.zig        Bond topology tables
+    chemistry.zig       Chemical annotations
   optimize/             Optimization engine
+    optimizer.zig       Clique search + fine search + CellList scoring
+    mover_gen.zig       Mover generation (standard + CCD)
+    scorer.zig          Dot-sphere scoring
+    rotator.zig         Rotation movers
+    flipper.zig         Flip movers
+    mover.zig           Mover types
+    clique.zig          Interaction graph
+    dot_sphere.zig      Dot generation
   writer/               Output writers
-  writer.zig            Writer module re-exports
-  integration_test.zig  End-to-end tests
+examples/
+  data/                 Input structures
+  result/               zreduce output
 ```
-
-## Scoring Constants (from original reduce)
-
-| Parameter | Value | Description |
-|-----------|-------|-------------|
-| dot_density | 16.0 dots/A^2 | Dot sphere density |
-| probe_radius | 0.0 A | Probe sphere radius |
-| gap_scale | 0.25 | Contact score gaussian width |
-| bump_weight | 10.0 | Clash penalty multiplier |
-| hb_weight | 4.0 | H-bond reward multiplier |
-| bad_bump_gap_cut | 0.4 A | Bad bump threshold |
-
-## Known Limitations (v0.1.0)
-
-- Optimizer is not yet integrated into the main pipeline (placement only)
-- CCD dihedral estimation uses fixed heuristic values (not computed from ideal coordinates)
-- No PDB format support (mmCIF only)
-- No Python bindings
 
 ## License
 
