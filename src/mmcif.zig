@@ -36,6 +36,7 @@ const AtomSiteColumns = struct {
     b_iso_or_equiv: ?usize = null,
     group_pdb: ?usize = null,
     id: ?usize = null,
+    pdbx_PDB_ins_code: ?usize = null,
 };
 
 /// Compare a Chain's label_asym_id with a string from the CIF data.
@@ -117,6 +118,7 @@ pub fn parseModel(allocator: Allocator, source: []const u8) MmcifError!Model {
     cols.b_iso_or_equiv = loop.findTag("_atom_site.B_iso_or_equiv");
     cols.group_pdb = loop.findTag("_atom_site.group_PDB");
     cols.id = loop.findTag("_atom_site.id");
+    cols.pdbx_PDB_ins_code = loop.findTag("_atom_site.pdbx_PDB_ins_code");
 
     // Require x, y, z
     if (cols.cartn_x == null or cols.cartn_y == null or cols.cartn_z == null) {
@@ -132,6 +134,7 @@ pub fn parseModel(allocator: Allocator, source: []const u8) MmcifError!Model {
     var cur_label_asym_id: []const u8 = "";
     var cur_seq_id: []const u8 = "";
     var cur_comp_id: []const u8 = "";
+    var cur_ins_code: []const u8 = "";
     var res_atom_start: u32 = 0;
     var in_chain = false;
     var in_residue = false;
@@ -156,6 +159,7 @@ pub fn parseModel(allocator: Allocator, source: []const u8) MmcifError!Model {
         const occ_str = if (cols.occupancy) |c| loop.val(row, c) orelse "1.0" else "1.0";
         const bfac_str = if (cols.b_iso_or_equiv) |c| loop.val(row, c) orelse "0.0" else "0.0";
         const serial_str = if (cols.id) |c| loop.val(row, c) orelse "0" else "0";
+        const ins_code_str = if (cols.pdbx_PDB_ins_code) |c| cif.asString(loop.val(row, c) orelse ".") else "";
 
         // Chain boundary detection
         if (!in_chain or !std.mem.eql(u8, label_asym, cur_label_asym_id)) {
@@ -183,12 +187,14 @@ pub fn parseModel(allocator: Allocator, source: []const u8) MmcifError!Model {
             // Force new residue
             cur_seq_id = "";
             cur_comp_id = "";
+            cur_ins_code = "";
         }
 
-        // Residue boundary detection
+        // Residue boundary detection (includes insertion code)
         const new_residue = !in_residue or
             !std.mem.eql(u8, seq_id, cur_seq_id) or
-            !std.mem.eql(u8, comp_id, cur_comp_id);
+            !std.mem.eql(u8, comp_id, cur_comp_id) or
+            !std.mem.eql(u8, ins_code_str, cur_ins_code);
 
         if (new_residue) {
             // Close previous residue
@@ -202,12 +208,14 @@ pub fn parseModel(allocator: Allocator, source: []const u8) MmcifError!Model {
             var new_res = Residue{};
             new_res.setCompId(comp_id);
             new_res.seq_id = cif.value.asIntOr(i32, seq_id, 0);
+            new_res.ins_code = if (ins_code_str.len > 0) ins_code_str[0] else ' ';
             new_res.chain_idx = @intCast(mdl.chains.items.len - 1);
             new_res.atom_start = res_atom_start;
             new_res.atom_end = res_atom_start; // will be updated
             try mdl.residues.append(mdl.allocator, new_res);
             cur_seq_id = seq_id;
             cur_comp_id = comp_id;
+            cur_ins_code = ins_code_str;
             in_residue = true;
         }
 
@@ -383,4 +391,22 @@ test "model reports zero unobs atoms for tiny.cif" {
     defer mdl.deinit();
 
     try testing.expectEqual(@as(u32, 0), mdl.n_unobs_atoms);
+}
+
+test "insertion code splits residues with same seq_id" {
+    const source = @embedFile("test_data/ins_code.cif");
+    var mdl = try parseModel(testing.allocator, source);
+    defer mdl.deinit();
+
+    // Same seq_id=1 but different ins_codes (blank vs 'A') → 2 residues
+    try testing.expectEqual(@as(usize, 2), mdl.residues.items.len);
+    try testing.expectEqual(@as(usize, 1), mdl.chains.items.len);
+
+    // First residue: ALA with ins_code=' '
+    try testing.expectEqualStrings("ALA", mdl.residues.items[0].compIdSlice());
+    try testing.expectEqual(@as(u8, ' '), mdl.residues.items[0].ins_code);
+
+    // Second residue: GLY with ins_code='A'
+    try testing.expectEqualStrings("GLY", mdl.residues.items[1].compIdSlice());
+    try testing.expectEqual(@as(u8, 'A'), mdl.residues.items[1].ins_code);
 }
