@@ -168,14 +168,10 @@ test "end-to-end: HIS sentinel cleanup matches output and JSON count" {
 
     _ = try optimize.optimizer.optimize(testing.allocator, movers, &model, .{});
 
+    var final_h_count: u32 = 0;
     for (model.atoms.items) |*atom| {
         if (optimize.mover.isAbsentH(atom.*)) atom.is_added = false;
-    }
-
-    var final_h_count: u32 = 0;
-    for (model.atoms.items) |atom| {
         if (atom.is_added and atom.is_hydrogen) final_h_count += 1;
-        try testing.expect(!optimize.mover.isAbsentH(atom) or !atom.is_added);
     }
 
     var cif_buf: std.ArrayListUnmanaged(u8) = .empty;

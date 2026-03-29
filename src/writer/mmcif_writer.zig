@@ -727,17 +727,11 @@ test "writeCifValue quotes special-char-prefixed values" {
         try testing.expectEqualStrings("hello", buf.items);
     }
     // CIF null markers must remain bare for round-tripping preserved data.
-    {
+    for ([_][]const u8{ ".", "?" }) |marker| {
         var buf = std.ArrayList(u8).empty;
         defer buf.deinit(testing.allocator);
-        try writeCifValue(buf.writer(testing.allocator), ".");
-        try testing.expectEqualStrings(".", buf.items);
-    }
-    {
-        var buf = std.ArrayList(u8).empty;
-        defer buf.deinit(testing.allocator);
-        try writeCifValue(buf.writer(testing.allocator), "?");
-        try testing.expectEqualStrings("?", buf.items);
+        try writeCifValue(buf.writer(testing.allocator), marker);
+        try testing.expectEqualStrings(marker, buf.items);
     }
 }
 

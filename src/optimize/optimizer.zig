@@ -76,7 +76,8 @@ pub fn optimize(
             // Brute force: enumerate all combinations
             optimizeBruteForce(allocator, movers, clq, model, config, &cell_list, positions, &scratch) catch |err| switch (err) {
                 error.OutOfMemory, error.GridTooLarge => {
-                    // Fallback to greedy on allocation failure
+                    // Fallback to greedy on allocation or grid-sizing failure
+                    std.debug.print("Warning: brute-force optimization failed ({s}), falling back to greedy for clique of {d} movers\n", .{ @errorName(err), clq.len });
                     for (clq) |mi| optimizeSingleton(movers, mi, model, config, &cell_list, positions, allocator, &scratch);
                     result.n_vertex_cut += 1;
                     continue;
@@ -121,7 +122,10 @@ fn optimizeSingleton(
     for (0..m.nOrientations()) |oi| {
         const idx: u16 = @intCast(oi);
         m.applyOrientation(model.atoms.items, idx);
-        rebuildCellList(allocator, cell_list, positions, model.atoms.items) catch return;
+        rebuildCellList(allocator, cell_list, positions, model.atoms.items) catch |err| {
+            std.debug.print("Warning: CellList rebuild failed during singleton optimization: {s}\n", .{@errorName(err)});
+            break;
+        };
         const score = scoreMover(m, mover_idx, movers, model, config, cell_list, positions, allocator, scratch) - m.orientationPenalty(idx);
         if (score > best_score) {
             best_score = score;
@@ -155,6 +159,12 @@ fn fineSearchMover(
 
     if (fine.len == 0) return;
 
+    // Rebuild CellList to reflect current coarse-best positions before baseline scoring
+    rebuildCellList(allocator, cell_list, positions, atoms) catch |err| {
+        std.debug.print("Warning: CellList rebuild failed during fine search: {s}\n", .{@errorName(err)});
+        return;
+    };
+
     // Score current coarse best (already applied)
     var best_score = scoreMover(m, mover_idx, movers, model, config, cell_list, positions, allocator, scratch) - m.orientationPenalty(m.best_orientation);
 
@@ -164,7 +174,12 @@ fn fineSearchMover(
         for (m.atom_indices, 0..) |ai, j| {
             atoms[ai].pos = orient.positions[j];
         }
-        rebuildCellList(allocator, cell_list, positions, atoms) catch return;
+        rebuildCellList(allocator, cell_list, positions, atoms) catch |err| {
+            std.debug.print("Warning: CellList rebuild failed during fine search: {s}\n", .{@errorName(err)});
+            // Restore coarse-best positions before returning
+            m.applyOrientation(atoms, m.best_orientation);
+            return;
+        };
         const score = scoreMover(m, mover_idx, movers, model, config, cell_list, positions, allocator, scratch) - orient.penalty;
         if (score > best_score) {
             best_score = score;
