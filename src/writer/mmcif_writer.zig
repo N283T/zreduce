@@ -210,7 +210,7 @@ fn writeAtomSitePreserving(writer: anytype, model: *const Model, orig_loop: *con
             if (!atom.is_added) continue;
             if (atom.residue_idx != res_idx) continue;
             // Skip absent H atoms (flipper sentinel)
-            if (atom.pos.x > 999.0) continue;
+            if (mover_mod.isAbsentH(atom)) continue;
 
             for (0..w) |col| {
                 if (col > 0) try writer.writeByte(' ');
@@ -340,7 +340,8 @@ fn writeCifValue(writer: anytype, val: []const u8) !void {
         if (c == '\n' or c == '\r') has_newline = true;
     }
     // Starts with special char?
-    if (val[0] == '_' or val[0] == '#' or val[0] == '$' or val[0] == ';' or val[0] == '[') needs_quote = true;
+    if (val[0] == '_' or val[0] == '#' or val[0] == '$' or val[0] == ';' or
+        val[0] == '[' or val[0] == ']' or val[0] == '{' or val[0] == '}') needs_quote = true;
     // Could be confused with CIF keyword?
     if (std.ascii.startsWithIgnoreCase(val, "data_") or
         std.ascii.startsWithIgnoreCase(val, "save_") or
@@ -350,6 +351,8 @@ fn writeCifValue(writer: anytype, val: []const u8) !void {
     {
         needs_quote = true;
     }
+    // Bare '?' and '.' are CIF missing/inapplicable markers — quote if literal
+    if (std.mem.eql(u8, val, "?") or std.mem.eql(u8, val, ".")) needs_quote = true;
 
     if (has_newline) needs_quote = true;
 
@@ -474,7 +477,7 @@ fn writeAtomSite(writer: anytype, model: *const Model) !void {
             if (!atom.is_added) continue;
             if (atom.residue_idx != res_idx) continue;
             // Skip absent H atoms (flipper sentinel position)
-            if (atom.pos.x > 999.0) continue;
+            if (mover_mod.isAbsentH(atom)) continue;
             try writeAtomRow(writer, model, atom, res, serial);
             serial += 1;
         }
@@ -706,6 +709,26 @@ test "elementSymbol returns correct symbols" {
     try testing.expectEqualStrings("N", elementSymbol(.Nacc));
     try testing.expectEqualStrings("Fe", elementSymbol(.Fe));
     try testing.expectEqualStrings("Cl", elementSymbol(.Cl));
+}
+
+test "writeCifValue quotes special-char-prefixed values" {
+    // Test that values starting with [, ], {, } get quoted
+    const cases = [_][]const u8{ "[bracket", "]close", "{brace", "}close", "?", "." };
+    for (cases) |input| {
+        var buf = std.ArrayList(u8).empty;
+        defer buf.deinit(testing.allocator);
+        try writeCifValue(buf.writer(testing.allocator), input);
+        const output = buf.items;
+        // All should be quoted (start with ' or ")
+        try testing.expect(output[0] == '\'' or output[0] == '"');
+    }
+    // Plain value should NOT be quoted
+    {
+        var buf = std.ArrayList(u8).empty;
+        defer buf.deinit(testing.allocator);
+        try writeCifValue(buf.writer(testing.allocator), "hello");
+        try testing.expectEqualStrings("hello", buf.items);
+    }
 }
 
 test "writeZreduceLog produces expected output" {

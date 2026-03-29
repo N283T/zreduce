@@ -98,9 +98,7 @@ pub fn createAmideFlipper(
     };
 }
 
-/// Sentinel position used for H atoms that should not exist in a given orientation.
-/// Placed far away so they do not contribute to scoring.
-const ABSENT_H_POS = Vec3(f32){ .x = 1000.0, .y = 1000.0, .z = 1000.0 };
+const ABSENT_H_POS = Mover.ABSENT_H_POS;
 
 /// Compute position of a ring H (HD1 on ND1 or HE2 on NE2) given:
 ///   n_pos: the nitrogen bearing the H

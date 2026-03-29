@@ -198,14 +198,7 @@ pub fn main() !void {
         }
     }
 
-    // 7.5 Remove absent H atoms (flipper sentinels) from the model
-    for (mdl.atoms.items) |*atom| {
-        if (atom.is_added and atom.pos.x > 999.0) {
-            atom.is_added = false; // mark as not placed — writer will skip
-        }
-    }
-
-    // 7.6 Validate model (always run, report issues)
+    // 7.5 Validate model (always run, report issues — before sentinel removal)
     {
         var validation = zreduce.validate.validateModel(allocator, &mdl) catch |err| {
             std.debug.print("Error: validation failed: {s}\n", .{@errorName(err)});
@@ -218,6 +211,13 @@ pub fn main() !void {
             if (config.validate) {
                 zreduce.validate.reportIssues(validation.issues, &mdl);
             }
+        }
+    }
+
+    // 7.6 Remove absent H atoms (flipper sentinels) from the model
+    for (mdl.atoms.items) |*atom| {
+        if (zreduce.optimize.mover.isAbsentH(atom.*)) {
+            atom.is_added = false; // mark as not placed — writer will skip
         }
     }
 
