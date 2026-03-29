@@ -15,11 +15,17 @@ pub fn Vec3(comptime T: type) type {
         pub const zero = Self{ .x = 0, .y = 0, .z = 0 };
 
         pub fn add(self: Self, other: Self) Self {
-            return .{ .x = self.x + other.x, .y = self.y + other.y, .z = self.z + other.z };
+            const a: @Vector(4, T) = .{ self.x, self.y, self.z, 0 };
+            const b: @Vector(4, T) = .{ other.x, other.y, other.z, 0 };
+            const r = a + b;
+            return .{ .x = r[0], .y = r[1], .z = r[2] };
         }
 
         pub fn sub(self: Self, other: Self) Self {
-            return .{ .x = self.x - other.x, .y = self.y - other.y, .z = self.z - other.z };
+            const a: @Vector(4, T) = .{ self.x, self.y, self.z, 0 };
+            const b: @Vector(4, T) = .{ other.x, other.y, other.z, 0 };
+            const r = a - b;
+            return .{ .x = r[0], .y = r[1], .z = r[2] };
         }
 
         pub fn scale(self: Self, s: T) Self {
@@ -34,7 +40,9 @@ pub fn Vec3(comptime T: type) type {
         }
 
         pub fn dot(self: Self, other: Self) T {
-            return self.x * other.x + self.y * other.y + self.z * other.z;
+            const a: @Vector(4, T) = .{ self.x, self.y, self.z, 0 };
+            const b: @Vector(4, T) = .{ other.x, other.y, other.z, 0 };
+            return @reduce(.Add, a * b);
         }
 
         pub fn cross(self: Self, other: Self) Self {
@@ -200,4 +208,58 @@ test "angle 90 degrees" {
     const c = V{ .x = 0, .y = 1, .z = 0 };
     const result = angle(f64, a, b, c);
     try std.testing.expectApproxEqAbs(90.0, result, 1e-9);
+}
+
+/// Fast approximation of exp(x) for x in [-87, 0] range.
+/// Uses Schraudolph's integer-cast method. Max relative error ~6%.
+/// Suitable for contact scoring where relative ranking matters, not absolute values.
+pub fn fastExp(x: f32) f32 {
+    const clamped = @max(x, -87.0);
+    const v: i32 = @intFromFloat(12102203.0 * clamped + 1065353216.0);
+    return @bitCast(@as(u32, @intCast(@max(v, 0))));
+}
+
+test "fastExp approximation within 7% for scoring range" {
+    const test_values = [_]f32{ 0.0, -0.5, -1.0, -2.0, -4.0 };
+    for (test_values) |x| {
+        const exact = @exp(x);
+        const approx = fastExp(x);
+        const rel_err = @abs(approx - exact) / exact;
+        try std.testing.expect(rel_err < 0.07);
+    }
+}
+
+test "fastExp clamp boundary: x = -87 is on the boundary" {
+    // x = -87 is at the clamp boundary; result should match exp(-87) within 7%.
+    const exact = @exp(@as(f32, -87.0));
+    const approx = fastExp(-87.0);
+    const rel_err = @abs(approx - exact) / exact;
+    try std.testing.expect(rel_err < 0.07);
+}
+
+test "fastExp clamp: x below -87 is clamped to exp(-87)" {
+    // x = -100 is below the clamp boundary; fastExp should return the same as fastExp(-87).
+    const clamped = fastExp(-87.0);
+    const below = fastExp(-100.0);
+    // Both should produce the same bit-identical result since -100 is clamped to -87.
+    try std.testing.expectEqual(clamped, below);
+}
+
+test "fastExp positive input: x = 0.5 documents behavior" {
+    // fastExp is designed for x in [-87, 0]; positive x is outside the intended range.
+    // Document that it returns a value greater than 1.0 (exp(0.5) > 1).
+    // The approximation accuracy for positive x is not guaranteed, but it must not crash.
+    const result = fastExp(0.5);
+    try std.testing.expect(result > 1.0);
+}
+
+test "fastExp sweep: max relative error stays within 7% across [-80, 0]" {
+    // Sweep 160 evenly-spaced points in [-80, 0] and verify the worst-case error.
+    var x: f32 = -80.0;
+    while (x <= 0.0) : (x += 0.5) {
+        const exact = @exp(x);
+        const approx = fastExp(x);
+        const rel_err = @abs(approx - exact) / exact;
+        try std.testing.expect(rel_err < 0.07);
+    }
 }

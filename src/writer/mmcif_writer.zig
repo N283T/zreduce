@@ -240,15 +240,15 @@ fn writeAtomSitePreserving(writer: anytype, model: *const Model, orig_loop: *con
                 } else if (cm.label_seq_id != null and col == cm.label_seq_id.?) {
                     try writer.print("{d}", .{res.seq_id});
                 } else if (cm.cartn_x != null and col == cm.cartn_x.?) {
-                    try writer.print("{d:.3}", .{atom.pos.x});
+                    try writeFixedFloat3(writer, atom.pos.x);
                 } else if (cm.cartn_y != null and col == cm.cartn_y.?) {
-                    try writer.print("{d:.3}", .{atom.pos.y});
+                    try writeFixedFloat3(writer, atom.pos.y);
                 } else if (cm.cartn_z != null and col == cm.cartn_z.?) {
-                    try writer.print("{d:.3}", .{atom.pos.z});
+                    try writeFixedFloat3(writer, atom.pos.z);
                 } else if (cm.occupancy != null and col == cm.occupancy.?) {
-                    try writer.print("{d:.2}", .{atom.occupancy});
+                    try writeFixedFloat2(writer, atom.occupancy);
                 } else if (cm.b_factor != null and col == cm.b_factor.?) {
-                    try writer.print("{d:.2}", .{atom.b_factor});
+                    try writeFixedFloat2(writer, atom.b_factor);
                 } else if (cm.auth_seq_id != null and col == cm.auth_seq_id.?) {
                     // Copy from first original row of this residue
                     const first_orig = res.atom_start;
@@ -489,7 +489,7 @@ fn writeAtomRow(writer: anytype, model: *const Model, atom: Atom, res: Residue, 
     };
     const elem_str = elementSymbol(atom.element_type);
     try writer.print(
-        "{s} {d} {s} {s} {s} {s} {d} {d:.3} {d:.3} {d:.3} {d:.2} {d:.2} ",
+        "{s} {d} {s} {s} {s} {s} {d} ",
         .{
             group,
             serial,
@@ -498,13 +498,18 @@ fn writeAtomRow(writer: anytype, model: *const Model, atom: Atom, res: Residue, 
             res.compIdSlice(),
             chain.labelSlice(),
             res.seq_id,
-            atom.pos.x,
-            atom.pos.y,
-            atom.pos.z,
-            atom.occupancy,
-            atom.b_factor,
         },
     );
+    try writeFixedFloat3(writer, atom.pos.x);
+    try writer.writeByte(' ');
+    try writeFixedFloat3(writer, atom.pos.y);
+    try writer.writeByte(' ');
+    try writeFixedFloat3(writer, atom.pos.z);
+    try writer.writeByte(' ');
+    try writeFixedFloat2(writer, atom.occupancy);
+    try writer.writeByte(' ');
+    try writeFixedFloat2(writer, atom.b_factor);
+    try writer.writeByte(' ');
     try writeAltId(writer, atom.altloc);
     try writer.writeByte('\n');
 }
@@ -548,6 +553,54 @@ pub fn writeZreduceLog(
             m.best_orientation,
         });
     }
+}
+
+// ── Fixed-point float helpers ─────────────────────────────────────────────────
+
+/// Write a float with exactly 3 decimal places using integer arithmetic.
+/// Avoids std.fmt.formatFloat overhead for the common coordinate case.
+fn writeFixedFloat3(writer: anytype, val: f32) !void {
+    // Guard against NaN, Inf, and values too large for integer conversion.
+    if (std.math.isNan(val) or std.math.isInf(val) or @abs(val) > 1.0e15) {
+        return writer.print("{d:.3}", .{val});
+    }
+    if (val < 0) {
+        try writer.writeByte('-');
+        return writeFixedFloat3(writer, -val);
+    }
+    const scaled: u64 = @intFromFloat(@round(val * 1000.0));
+    const int_part = scaled / 1000;
+    const frac_part: u32 = @intCast(scaled % 1000);
+    try writer.print("{d}", .{int_part});
+    try writer.writeByte('.');
+    if (frac_part < 10) {
+        try writer.writeAll("00");
+    } else if (frac_part < 100) {
+        try writer.writeByte('0');
+    }
+    try writer.print("{d}", .{frac_part});
+}
+
+/// Write a float with exactly 2 decimal places using integer arithmetic.
+/// Avoids std.fmt.formatFloat overhead for occupancy/b-factor output.
+fn writeFixedFloat2(writer: anytype, val: f32) !void {
+    // Guard against NaN, Inf, and values too large for integer conversion.
+    if (std.math.isNan(val) or std.math.isInf(val) or @abs(val) > 1.0e15) {
+        return writer.print("{d:.2}", .{val});
+    }
+    if (val < 0) {
+        try writer.writeByte('-');
+        return writeFixedFloat2(writer, -val);
+    }
+    const scaled: u64 = @intFromFloat(@round(val * 100.0));
+    const int_part = scaled / 100;
+    const frac_part: u32 = @intCast(scaled % 100);
+    try writer.print("{d}", .{int_part});
+    try writer.writeByte('.');
+    if (frac_part < 10) {
+        try writer.writeByte('0');
+    }
+    try writer.print("{d}", .{frac_part});
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -706,6 +759,145 @@ test "elementSymbol returns correct symbols" {
     try testing.expectEqualStrings("N", elementSymbol(.Nacc));
     try testing.expectEqualStrings("Fe", elementSymbol(.Fe));
     try testing.expectEqualStrings("Cl", elementSymbol(.Cl));
+}
+
+test "writeFixedFloat3 formats coordinates correctly" {
+    var buf: [32]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buf);
+    const w = fbs.writer();
+
+    // Zero
+    fbs.reset();
+    try writeFixedFloat3(w, 0.0);
+    try testing.expectEqualStrings("0.000", fbs.getWritten());
+
+    // Positive integer-valued
+    fbs.reset();
+    try writeFixedFloat3(w, 12.0);
+    try testing.expectEqualStrings("12.000", fbs.getWritten());
+
+    // Positive with decimals
+    fbs.reset();
+    try writeFixedFloat3(w, 1.5);
+    try testing.expectEqualStrings("1.500", fbs.getWritten());
+
+    // Rounding: 123.4567 -> 123.457
+    fbs.reset();
+    try writeFixedFloat3(w, 123.4567);
+    try testing.expectEqualStrings("123.457", fbs.getWritten());
+
+    // Negative value
+    fbs.reset();
+    try writeFixedFloat3(w, -4.321);
+    try testing.expectEqualStrings("-4.321", fbs.getWritten());
+
+    // Small negative near zero: -0.001
+    fbs.reset();
+    try writeFixedFloat3(w, -0.001);
+    try testing.expectEqualStrings("-0.001", fbs.getWritten());
+
+    // Leading zeros in fractional part: 1.005
+    fbs.reset();
+    try writeFixedFloat3(w, 1.005);
+    try testing.expectEqualStrings("1.005", fbs.getWritten());
+
+    // Two leading zeros in fractional: 1.001
+    fbs.reset();
+    try writeFixedFloat3(w, 1.001);
+    try testing.expectEqualStrings("1.001", fbs.getWritten());
+}
+
+test "writeFixedFloat2 formats occupancy/b-factor correctly" {
+    var buf: [32]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buf);
+    const w = fbs.writer();
+
+    // Zero
+    fbs.reset();
+    try writeFixedFloat2(w, 0.0);
+    try testing.expectEqualStrings("0.00", fbs.getWritten());
+
+    // 1.0 (common occupancy)
+    fbs.reset();
+    try writeFixedFloat2(w, 1.0);
+    try testing.expectEqualStrings("1.00", fbs.getWritten());
+
+    // 0.5 (half occupancy)
+    fbs.reset();
+    try writeFixedFloat2(w, 0.5);
+    try testing.expectEqualStrings("0.50", fbs.getWritten());
+
+    // Rounding: 10.456 -> 10.46
+    fbs.reset();
+    try writeFixedFloat2(w, 10.456);
+    try testing.expectEqualStrings("10.46", fbs.getWritten());
+
+    // Negative value
+    fbs.reset();
+    try writeFixedFloat2(w, -3.14);
+    try testing.expectEqualStrings("-3.14", fbs.getWritten());
+
+    // Leading zero in fractional part: 20.05
+    fbs.reset();
+    try writeFixedFloat2(w, 20.05);
+    try testing.expectEqualStrings("20.05", fbs.getWritten());
+
+    // Large b-factor
+    fbs.reset();
+    try writeFixedFloat2(w, 99.99);
+    try testing.expectEqualStrings("99.99", fbs.getWritten());
+}
+
+test "writeFixedFloat3 does not panic on NaN, Inf, or overflow" {
+    var buf: [64]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buf);
+    const w = fbs.writer();
+
+    // NaN falls back to std.fmt (must not panic)
+    fbs.reset();
+    try writeFixedFloat3(w, std.math.nan(f32));
+    try testing.expect(fbs.getWritten().len > 0);
+
+    // Positive infinity falls back
+    fbs.reset();
+    try writeFixedFloat3(w, std.math.inf(f32));
+    try testing.expect(fbs.getWritten().len > 0);
+
+    // Negative infinity falls back
+    fbs.reset();
+    try writeFixedFloat3(w, -std.math.inf(f32));
+    try testing.expect(fbs.getWritten().len > 0);
+
+    // Very large value (1e20) falls back
+    fbs.reset();
+    try writeFixedFloat3(w, 1.0e20);
+    try testing.expect(fbs.getWritten().len > 0);
+}
+
+test "writeFixedFloat2 does not panic on NaN, Inf, or overflow" {
+    var buf: [64]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buf);
+    const w = fbs.writer();
+
+    // NaN falls back to std.fmt (must not panic)
+    fbs.reset();
+    try writeFixedFloat2(w, std.math.nan(f32));
+    try testing.expect(fbs.getWritten().len > 0);
+
+    // Positive infinity falls back
+    fbs.reset();
+    try writeFixedFloat2(w, std.math.inf(f32));
+    try testing.expect(fbs.getWritten().len > 0);
+
+    // Negative infinity falls back
+    fbs.reset();
+    try writeFixedFloat2(w, -std.math.inf(f32));
+    try testing.expect(fbs.getWritten().len > 0);
+
+    // Very large value (1e20) falls back
+    fbs.reset();
+    try writeFixedFloat2(w, 1.0e20);
+    try testing.expect(fbs.getWritten().len > 0);
 }
 
 test "writeCifValue quotes special-char-prefixed values" {

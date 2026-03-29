@@ -76,7 +76,7 @@ pub fn scoreAtom(
         // Classify and score this dot
         if (min_gap >= 0.0) {
             // Contact (van der Waals contact)
-            const score = @exp(-(min_gap / params.gap_scale) * (min_gap / params.gap_scale));
+            const score = math_mod.fastExp(-(min_gap / params.gap_scale) * (min_gap / params.gap_scale));
             result.contact_sub += score * dot_scale;
             result.total += score * dot_scale;
         } else {
