@@ -77,7 +77,7 @@ pub fn generateMovers(allocator: std.mem.Allocator, mdl: *const Model, no_flip: 
 
     // Track which group rotators we have already created to avoid duplicates.
     // Key: (residue_idx, center_name) packed into u64.
-    var seen_groups: std.AutoHashMapUnmanaged(u64, void) = .empty;
+    var seen_groups: std.AutoHashMapUnmanaged(GroupKey, void) = .empty;
     defer seen_groups.deinit(allocator);
 
     const atoms = mdl.atoms.items;
@@ -133,7 +133,7 @@ pub fn generateMovers(allocator: std.mem.Allocator, mdl: *const Model, no_flip: 
                 const center_name_raw = plan.connected[0];
 
                 // Dedup key: pack residue_idx and center_name into u64.
-                const group_key = packGroupKey(residue_idx, center_name_raw, target_altloc);
+                const group_key = GroupKey{ .residue_idx = residue_idx, .center_name = center_name_raw, .altloc = target_altloc };
                 const gop = try seen_groups.getOrPut(allocator, group_key);
                 if (gop.found_existing) continue;
 
@@ -195,7 +195,7 @@ pub fn generateMovers(allocator: std.mem.Allocator, mdl: *const Model, no_flip: 
                 if (no_flip) continue;
 
                 // Deduplicate: one amide flipper per residue
-                const group_key = packGroupKey(residue_idx, .{ 'A', 'M', 'D', ' ' }, target_altloc);
+                const group_key = GroupKey{ .residue_idx = residue_idx, .center_name = .{ 'A', 'M', 'D', ' ' }, .altloc = target_altloc };
                 const gop = try seen_groups.getOrPut(allocator, group_key);
                 if (gop.found_existing) continue;
 
@@ -264,7 +264,7 @@ pub fn generateMovers(allocator: std.mem.Allocator, mdl: *const Model, no_flip: 
                 if (no_flip) continue;
 
                 // Deduplicate: one His flipper per residue
-                const group_key = packGroupKey(residue_idx, .{ 'H', 'I', 'S', ' ' }, target_altloc);
+                const group_key = GroupKey{ .residue_idx = residue_idx, .center_name = .{ 'H', 'I', 'S', ' ' }, .altloc = target_altloc };
                 const gop = try seen_groups.getOrPut(allocator, group_key);
                 if (gop.found_existing) continue;
 
@@ -317,14 +317,11 @@ pub fn generateMovers(allocator: std.mem.Allocator, mdl: *const Model, no_flip: 
     };
 }
 
-fn packGroupKey(residue_idx: u32, center_name: [4]u8, altloc: u8) u64 {
-    return (@as(u64, residue_idx) << 40) |
-        (@as(u64, center_name[0]) << 24) |
-        (@as(u64, center_name[1]) << 16) |
-        (@as(u64, center_name[2]) << 8) |
-        (@as(u64, center_name[3])) |
-        (@as(u64, altloc) << 32);
-}
+const GroupKey = struct {
+    residue_idx: u32,
+    center_name: [4]u8,
+    altloc: u8,
+};
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
