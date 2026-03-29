@@ -11,6 +11,7 @@ const Config = struct {
     json_path: ?[]const u8 = null,
     no_opt: bool = false,
     no_flip: bool = false,
+    validate: bool = false,
 };
 
 fn parseArgs() ?Config {
@@ -57,6 +58,8 @@ fn parseArgs() ?Config {
             config.no_opt = true;
         } else if (std.mem.eql(u8, arg, "--no-flip")) {
             config.no_flip = true;
+        } else if (std.mem.eql(u8, arg, "--validate")) {
+            config.validate = true;
         } else if (arg.len > 0 and arg[0] == '-') {
             std.debug.print("Error: unknown option '{s}'\n", .{arg});
             std.process.exit(1);
@@ -100,6 +103,7 @@ fn printUsage(program_name: []const u8) void {
         \\    --json PATH        Write JSON log to file
         \\    --no-opt           Skip optimization (placement only)
         \\    --no-flip          Disable Asn/Gln/His flips
+        \\    --validate         Print detailed validation diagnostics
         \\
     , .{ build_options.version, program_name });
 }
@@ -191,6 +195,29 @@ pub fn main() !void {
                 opt_result.n_brute_force,
                 opt_result.n_vertex_cut,
             });
+        }
+    }
+
+    // 7.5 Remove absent H atoms (flipper sentinels) from the model
+    for (mdl.atoms.items) |*atom| {
+        if (atom.is_added and atom.pos.x > 999.0) {
+            atom.is_added = false; // mark as not placed — writer will skip
+        }
+    }
+
+    // 7.6 Validate model (always run, report issues)
+    {
+        var validation = zreduce.validate.validateModel(allocator, &mdl) catch |err| {
+            std.debug.print("Error: validation failed: {s}\n", .{@errorName(err)});
+            std.process.exit(1);
+        };
+        defer validation.deinit();
+
+        if (!validation.ok()) {
+            std.debug.print("  Validation: {d} issue(s) found\n", .{validation.issues.len});
+            if (config.validate) {
+                zreduce.validate.reportIssues(validation.issues, &mdl);
+            }
         }
     }
 

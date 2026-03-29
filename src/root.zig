@@ -9,6 +9,7 @@ pub const place = @import("place.zig");
 pub const ccd = @import("ccd.zig");
 pub const optimize = @import("optimize/optimize.zig");
 pub const writer = @import("writer.zig");
+pub const validate = @import("validate.zig");
 
 test {
     @import("std").testing.refAllDecls(@This());
