@@ -127,6 +127,9 @@ pub fn optimize(
     // Collect singleton mover indices for parallel dispatch after sequential cliques.
     var singleton_indices = std.ArrayListUnmanaged(u32).empty;
     defer singleton_indices.deinit(allocator);
+    // Pre-allocate worst-case capacity so that the OOM fallback path's append
+    // calls in the brute-force error handler never need to allocate.
+    try singleton_indices.ensureTotalCapacity(allocator, movers.len);
 
     for (cliques) |clq| {
         if (clq.len == 1) {
@@ -558,7 +561,10 @@ fn scoreMover(
             // synchronous call — do NOT pass it to a spawned thread.
             var pos_buf: [64]math_mod.Vec3(f32) = undefined;
             const n = m.atom_indices.len;
-            std.debug.assert(n <= pos_buf.len);
+            if (n > pos_buf.len) {
+                std.log.err("mover has {d} atoms, exceeding stack buffer of {d}", .{ n, pos_buf.len });
+                return -std.math.inf(f32);
+            }
             for (m.atom_indices, 0..) |ai, i| {
                 pos_buf[i] = model.atoms.items[ai].pos;
             }
@@ -1391,5 +1397,37 @@ test "optimize() with multiple independent singletons uses parallel path and get
     // Every mover should pick orientation 1 (no bump)
     for (movers_buf) |m| {
         try testing.expectEqual(@as(u16, 1), m.best_orientation);
+    }
+}
+
+test "scorePairSoA produces identical results to scorePair" {
+    const config = OptConfig{};
+
+    // Test all 4 branches with the same atom configurations
+    const TestCase = struct {
+        pos_a: math_mod.Vec3(f32), r_a: f32, flags_a: element.AtomFlags,
+        pos_b: math_mod.Vec3(f32), r_b: f32, flags_b: element.AtomFlags,
+    };
+    const test_cases = [_]TestCase{
+        // Branch 1: No interaction (far apart)
+        .{ .pos_a = .{ .x = 0, .y = 0, .z = 0 }, .r_a = 1.7, .flags_a = .{},
+           .pos_b = .{ .x = 10, .y = 0, .z = 0 }, .r_b = 1.7, .flags_b = .{} },
+        // Branch 2: Contact (within threshold, sum_r=3.4, threshold=3.9)
+        .{ .pos_a = .{ .x = 0, .y = 0, .z = 0 }, .r_a = 1.7, .flags_a = .{},
+           .pos_b = .{ .x = 3.6, .y = 0, .z = 0 }, .r_b = 1.7, .flags_b = .{} },
+        // Branch 3: Bump (overlap, no H-bond)
+        .{ .pos_a = .{ .x = 0, .y = 0, .z = 0 }, .r_a = 1.7, .flags_a = .{},
+           .pos_b = .{ .x = 3.0, .y = 0, .z = 0 }, .r_b = 1.7, .flags_b = .{} },
+        // Branch 4: H-bond (overlap with donor + acceptor)
+        .{ .pos_a = .{ .x = 0, .y = 0, .z = 0 }, .r_a = 1.7, .flags_a = .{ .donor = true },
+           .pos_b = .{ .x = 3.0, .y = 0, .z = 0 }, .r_b = 1.7, .flags_b = .{ .acceptor = true } },
+    };
+
+    for (test_cases) |tc| {
+        const atom_a = Atom{ .pos = tc.pos_a, .vdw_radius = tc.r_a, .flags = tc.flags_a };
+        const atom_b = Atom{ .pos = tc.pos_b, .vdw_radius = tc.r_b, .flags = tc.flags_b };
+        const score_pair = scorePair(atom_a, atom_b, config);
+        const score_soa = scorePairSoA(tc.pos_a, tc.r_a, tc.flags_a, tc.pos_b, tc.r_b, tc.flags_b, config);
+        try testing.expectEqual(score_pair, score_soa);
     }
 }

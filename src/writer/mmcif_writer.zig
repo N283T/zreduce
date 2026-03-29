@@ -560,6 +560,10 @@ pub fn writeZreduceLog(
 /// Write a float with exactly 3 decimal places using integer arithmetic.
 /// Avoids std.fmt.formatFloat overhead for the common coordinate case.
 fn writeFixedFloat3(writer: anytype, val: f32) !void {
+    // Guard against NaN, Inf, and values too large for integer conversion.
+    if (std.math.isNan(val) or std.math.isInf(val) or @abs(val) > 1.0e15) {
+        return writer.print("{d:.3}", .{val});
+    }
     if (val < 0) {
         try writer.writeByte('-');
         return writeFixedFloat3(writer, -val);
@@ -580,6 +584,10 @@ fn writeFixedFloat3(writer: anytype, val: f32) !void {
 /// Write a float with exactly 2 decimal places using integer arithmetic.
 /// Avoids std.fmt.formatFloat overhead for occupancy/b-factor output.
 fn writeFixedFloat2(writer: anytype, val: f32) !void {
+    // Guard against NaN, Inf, and values too large for integer conversion.
+    if (std.math.isNan(val) or std.math.isInf(val) or @abs(val) > 1.0e15) {
+        return writer.print("{d:.2}", .{val});
+    }
     if (val < 0) {
         try writer.writeByte('-');
         return writeFixedFloat2(writer, -val);
@@ -838,6 +846,58 @@ test "writeFixedFloat2 formats occupancy/b-factor correctly" {
     fbs.reset();
     try writeFixedFloat2(w, 99.99);
     try testing.expectEqualStrings("99.99", fbs.getWritten());
+}
+
+test "writeFixedFloat3 does not panic on NaN, Inf, or overflow" {
+    var buf: [64]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buf);
+    const w = fbs.writer();
+
+    // NaN falls back to std.fmt (must not panic)
+    fbs.reset();
+    try writeFixedFloat3(w, std.math.nan(f32));
+    try testing.expect(fbs.getWritten().len > 0);
+
+    // Positive infinity falls back
+    fbs.reset();
+    try writeFixedFloat3(w, std.math.inf(f32));
+    try testing.expect(fbs.getWritten().len > 0);
+
+    // Negative infinity falls back
+    fbs.reset();
+    try writeFixedFloat3(w, -std.math.inf(f32));
+    try testing.expect(fbs.getWritten().len > 0);
+
+    // Very large value (1e20) falls back
+    fbs.reset();
+    try writeFixedFloat3(w, 1.0e20);
+    try testing.expect(fbs.getWritten().len > 0);
+}
+
+test "writeFixedFloat2 does not panic on NaN, Inf, or overflow" {
+    var buf: [64]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buf);
+    const w = fbs.writer();
+
+    // NaN falls back to std.fmt (must not panic)
+    fbs.reset();
+    try writeFixedFloat2(w, std.math.nan(f32));
+    try testing.expect(fbs.getWritten().len > 0);
+
+    // Positive infinity falls back
+    fbs.reset();
+    try writeFixedFloat2(w, std.math.inf(f32));
+    try testing.expect(fbs.getWritten().len > 0);
+
+    // Negative infinity falls back
+    fbs.reset();
+    try writeFixedFloat2(w, -std.math.inf(f32));
+    try testing.expect(fbs.getWritten().len > 0);
+
+    // Very large value (1e20) falls back
+    fbs.reset();
+    try writeFixedFloat2(w, 1.0e20);
+    try testing.expect(fbs.getWritten().len > 0);
 }
 
 test "writeCifValue quotes special-char-prefixed values" {
