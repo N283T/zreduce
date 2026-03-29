@@ -379,8 +379,9 @@ fn rebuildCellList(
     atoms: []const Atom,
 ) !void {
     syncPositions(positions, atoms);
+    const new_cell_list = try CellList.init(allocator, positions, 5.0);
     cell_list.deinit();
-    cell_list.* = try CellList.init(allocator, positions, 5.0);
+    cell_list.* = new_cell_list;
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -671,4 +672,28 @@ test "optimize brute force sees clashes introduced by moved coordinates" {
     try optimizeBruteForce(allocator, &movers, &clq, &model, .{}, &cl, pos, &scratch);
 
     try testing.expect(!(movers[0].best_orientation == 0 and movers[1].best_orientation == 0));
+}
+
+test "rebuildCellList leaves previous index usable on allocation failure" {
+    const allocator = testing.allocator;
+
+    var model = Model.init(allocator);
+    defer model.deinit();
+    try model.atoms.append(allocator, .{ .pos = .{ .x = 0, .y = 0, .z = 0 } });
+    try model.atoms.append(allocator, .{ .pos = .{ .x = 1, .y = 0, .z = 0 } });
+
+    const positions = try allocator.alloc(math_mod.Vec3(f32), model.atoms.items.len);
+    defer allocator.free(positions);
+    syncPositions(positions, model.atoms.items);
+
+    var cl = try CellList.init(allocator, positions, 5.0);
+    defer cl.deinit();
+
+    var failing = std.testing.FailingAllocator.init(allocator, .{ .fail_index = 0 });
+    try testing.expectError(error.OutOfMemory, rebuildCellList(failing.allocator(), &cl, positions, model.atoms.items));
+
+    var result = std.ArrayListUnmanaged(u32).empty;
+    defer result.deinit(allocator);
+    try cl.neighborsInRadius(model.atoms.items[0].pos, 2.0, &result, allocator, positions);
+    try testing.expect(result.items.len >= 2);
 }
