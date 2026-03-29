@@ -14,12 +14,6 @@ const RunConfig = struct {
     validate: bool = false,
 };
 
-fn readFile(allocator: Allocator, path: []const u8) ![]const u8 {
-    const file = try std.fs.cwd().openFile(path, .{});
-    defer file.close();
-    return try file.readToEndAlloc(allocator, 1024 * 1024 * 1024);
-}
-
 fn parseRunArgs(args: []const []const u8) ?RunConfig {
     var config = RunConfig{ .input_path = undefined };
     var input_set = false;
@@ -161,7 +155,7 @@ fn runSubcommand(allocator: Allocator, args: []const []const u8) void {
     // Load CCD dictionary (once, before processFile)
     var ccd_dict: ?zreduce.ccd.ComponentDict = null;
     if (config.dict_path) |dict_path| {
-        const dict_source = readFile(allocator, dict_path) catch |err| {
+        const dict_source = zreduce.run.readFile(allocator, dict_path) catch |err| {
             std.debug.print("Error: cannot read dictionary '{s}': {s}\n", .{ dict_path, @errorName(err) });
             std.process.exit(1);
         };

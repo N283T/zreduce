@@ -6,7 +6,7 @@ const zreduce = @import("root.zig");
 
 pub const ProcessConfig = struct {
     input_path: []const u8,
-    output_path: ?[]const u8 = null,
+    output_path: ?[]const u8 = null, // must be non-null when called from batch workers (stdout is not thread-safe)
     dict: ?*const zreduce.ccd.ComponentDict = null, // shared read-only; caller owns lifetime
     json_path: ?[]const u8 = null,
     json_version: []const u8 = "", // version string for JSON log (passed from main)
@@ -26,7 +26,7 @@ pub const ProcessResult = struct {
     n_vertex_cut: u32 = 0,
 };
 
-fn readFile(allocator: Allocator, path: []const u8) ![]const u8 {
+pub fn readFile(allocator: Allocator, path: []const u8) ![]const u8 {
     const file = try std.fs.cwd().openFile(path, .{});
     defer file.close();
     return try file.readToEndAlloc(allocator, 1024 * 1024 * 1024);
