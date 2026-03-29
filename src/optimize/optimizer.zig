@@ -48,40 +48,39 @@ const ScoreContext = struct {
     }
 };
 
-/// Arguments for a parallel singleton optimization task.
-const ParallelSingletonArgs = struct {
+/// Arguments shared by parallel singleton and fine-search tasks.
+/// Reused for both phases so a single thread pool handles the whole optimization.
+const ParallelTaskArgs = struct {
     movers: []Mover,
     mover_idx: u32,
     model: *Model,
     config: OptConfig,
     score_ctx: *const ScoreContext,
     allocator: Allocator,
+    /// Output field for fine-search: set by fineSearchMover to the best fine positions
+    /// (allocated with `allocator`), or null if the coarse best is retained.
+    /// The main thread applies and frees this after all tasks join.
+    best_fine_positions: ?[]math_mod.Vec3(f32) = null,
 };
 
 /// Thread pool work function for singleton optimization.
-/// Allocates its own scratch buffer to avoid sharing state across threads.
-fn parallelSingleton(args: *const ParallelSingletonArgs) void {
+/// Uses scoreMoverWithPositions to avoid writing to the shared model during scoring,
+/// eliminating data races when multiple singletons run concurrently.
+/// Only writes `best_orientation` (a per-mover field with no cross-mover aliasing).
+fn parallelSingleton(args: *const ParallelTaskArgs) void {
     var scratch = std.ArrayListUnmanaged(u32).empty;
     defer scratch.deinit(args.allocator);
     optimizeSingleton(args.movers, args.mover_idx, args.model, args.config, args.score_ctx, args.allocator, &scratch);
 }
 
-/// Arguments for a parallel fine search task.
-const ParallelFineSearchArgs = struct {
-    movers: []Mover,
-    mover_idx: u32,
-    model: *Model,
-    config: OptConfig,
-    score_ctx: *const ScoreContext,
-    allocator: Allocator,
-};
-
 /// Thread pool work function for fine search.
-/// Allocates its own scratch buffer to avoid sharing state across threads.
-fn parallelFineSearch(args: *const ParallelFineSearchArgs) void {
+/// Uses scoreMoverWithPositions to avoid writing to the shared model during scoring.
+/// Stores the best fine positions in args.best_fine_positions (if better than coarse best);
+/// the main thread applies and frees them after all tasks join, avoiding write-write races.
+fn parallelFineSearch(args: *ParallelTaskArgs) void {
     var scratch = std.ArrayListUnmanaged(u32).empty;
     defer scratch.deinit(args.allocator);
-    fineSearchMover(args.allocator, args.movers, args.mover_idx, args.model, args.config, args.score_ctx, &scratch);
+    fineSearchMover(args.allocator, args.movers, args.mover_idx, args.model, args.config, args.score_ctx, &scratch, &args.best_fine_positions);
 }
 
 /// Optimize all movers: find best orientations using clique-based search.
@@ -147,10 +146,21 @@ pub fn optimize(
     }
 
     // Dispatch singleton optimization in parallel (or sequentially when not worth the overhead).
+    // Thread safety: optimizeSingleton uses scoreMoverWithPositions which reads other movers'
+    // atoms from model.atoms but does NOT write to model.atoms during scoring. The only
+    // write is to m.best_orientation (a per-mover field; each thread owns a distinct mover).
     const use_parallel = n_threads > 1 and singleton_indices.items.len > 1;
+
+    // Allocate one pool and reuse it for both the singleton and fine-search phases.
+    var pool: std.Thread.Pool = undefined;
+    if (use_parallel) {
+        try pool.init(.{ .allocator = allocator, .n_jobs = n_threads });
+    }
+    defer if (use_parallel) pool.deinit();
+
     if (use_parallel) {
         // Build per-task arg structs (one per singleton) on the heap so thread lifetimes are safe.
-        const singleton_args = try allocator.alloc(ParallelSingletonArgs, singleton_indices.items.len);
+        const singleton_args = try allocator.alloc(ParallelTaskArgs, singleton_indices.items.len);
         defer allocator.free(singleton_args);
         for (singleton_indices.items, 0..) |mi, i| {
             singleton_args[i] = .{
@@ -162,10 +172,6 @@ pub fn optimize(
                 .allocator = allocator,
             };
         }
-
-        var pool: std.Thread.Pool = undefined;
-        try pool.init(.{ .allocator = allocator, .n_jobs = n_threads });
-        defer pool.deinit();
 
         var wg = std.Thread.WaitGroup{};
         for (singleton_args) |*args| {
@@ -185,8 +191,12 @@ pub fn optimize(
     }
 
     // Fine search phase: refine each mover around its coarse best, in parallel when worthwhile.
-    if (use_parallel and movers.len > 1) {
-        const fine_args = try allocator.alloc(ParallelFineSearchArgs, movers.len);
+    // The gate uses n_threads > 1 and movers.len > 1 (independent of singleton count).
+    // Thread safety: fineSearchMover uses scoreMoverWithPositions; the only write to
+    // model.atoms happens after all threads join (the sequential apply-best loop below).
+    const use_parallel_fine = n_threads > 1 and movers.len > 1;
+    if (use_parallel_fine) {
+        const fine_args = try allocator.alloc(ParallelTaskArgs, movers.len);
         defer allocator.free(fine_args);
         for (0..movers.len) |mi| {
             fine_args[mi] = .{
@@ -196,21 +206,37 @@ pub fn optimize(
                 .config = config,
                 .score_ctx = &score_ctx,
                 .allocator = allocator,
+                // best_fine_positions defaults to null; set by parallelFineSearch.
             };
         }
-
-        var pool: std.Thread.Pool = undefined;
-        try pool.init(.{ .allocator = allocator, .n_jobs = n_threads });
-        defer pool.deinit();
 
         var wg = std.Thread.WaitGroup{};
         for (fine_args) |*args| {
             pool.spawnWg(&wg, parallelFineSearch, .{args});
         }
         wg.wait();
+
+        // Apply fine-search results sequentially after all threads have joined.
+        // This avoids write-write races on model.atoms during parallel scoring.
+        for (fine_args) |*args| {
+            if (args.best_fine_positions) |positions| {
+                defer allocator.free(positions);
+                const mi = args.mover_idx;
+                for (movers[mi].atom_indices, 0..) |ai, j| {
+                    model.atoms.items[ai].pos = positions[j];
+                }
+            }
+        }
     } else {
         for (0..movers.len) |mi| {
-            fineSearchMover(allocator, movers, @intCast(mi), model, config, &score_ctx, &scratch);
+            var best_fine_positions: ?[]math_mod.Vec3(f32) = null;
+            fineSearchMover(allocator, movers, @intCast(mi), model, config, &score_ctx, &scratch, &best_fine_positions);
+            if (best_fine_positions) |positions| {
+                defer allocator.free(positions);
+                for (movers[mi].atom_indices, 0..) |ai, j| {
+                    model.atoms.items[ai].pos = positions[j];
+                }
+            }
         }
     }
 
@@ -232,8 +258,10 @@ fn optimizeSingleton(
 
     for (0..m.nOrientations()) |oi| {
         const idx: u16 = @intCast(oi);
-        m.applyOrientation(model.atoms.items, idx);
-        const score = scoreMover(m, mover_idx, movers, model, config, score_ctx, allocator, scratch) - m.orientationPenalty(idx);
+        // Score using the orientation's positions directly — do NOT call applyOrientation,
+        // which would write to model.atoms and race with concurrent threads reading it.
+        const orient_positions = m.orientations[idx].positions;
+        const score = scoreMoverWithPositions(m, mover_idx, orient_positions, movers, model, config, score_ctx, allocator, scratch) - m.orientationPenalty(idx);
         if (score > best_score) {
             best_score = score;
             best_idx = idx;
@@ -244,7 +272,12 @@ fn optimizeSingleton(
 }
 
 /// Refine a mover's best orientation with fine angular search.
-/// Directly updates atom positions if a fine position improves the score.
+///
+/// Thread-safe: does NOT write to model.atoms during scoring. Scoring uses
+/// scoreMoverWithPositions with explicit orientation positions. If a fine position
+/// beats the coarse best, the best positions are allocated and written to
+/// `out_best_positions` for the caller to apply after all parallel tasks join.
+/// The caller is responsible for freeing the slice.
 fn fineSearchMover(
     allocator: Allocator,
     movers: []Mover,
@@ -253,6 +286,7 @@ fn fineSearchMover(
     config: OptConfig,
     score_ctx: *const ScoreContext,
     scratch: *std.ArrayListUnmanaged(u32),
+    out_best_positions: *?[]math_mod.Vec3(f32),
 ) void {
     const m = &movers[mover_idx];
     const atoms = model.atoms.items;
@@ -268,16 +302,15 @@ fn fineSearchMover(
 
     if (fine.len == 0) return;
 
-    // Score current coarse best (already applied)
-    var best_score = scoreMover(m, mover_idx, movers, model, config, score_ctx, allocator, scratch) - m.orientationPenalty(m.best_orientation);
+    // Score current coarse best using the orientation's stored positions — do NOT read
+    // atoms[ai].pos because another thread may be writing it concurrently during fine search.
+    const coarse_positions = m.orientations[m.best_orientation].positions;
+    var best_score = scoreMoverWithPositions(m, mover_idx, coarse_positions, movers, model, config, score_ctx, allocator, scratch) - m.orientationPenalty(m.best_orientation);
 
-    // Score fine orientations
+    // Score fine orientations using their positions directly (no writes to model.atoms).
     var best_fine: ?usize = null;
     for (fine, 0..) |orient, fi| {
-        for (m.atom_indices, 0..) |ai, j| {
-            atoms[ai].pos = orient.positions[j];
-        }
-        const score = scoreMover(m, mover_idx, movers, model, config, score_ctx, allocator, scratch) - orient.penalty;
+        const score = scoreMoverWithPositions(m, mover_idx, orient.positions, movers, model, config, score_ctx, allocator, scratch) - orient.penalty;
         if (score > best_score) {
             best_score = score;
             best_fine = fi;
@@ -285,14 +318,18 @@ fn fineSearchMover(
     }
 
     if (best_fine) |fi| {
-        // Apply the best fine orientation
-        for (m.atom_indices, 0..) |ai, j| {
-            atoms[ai].pos = fine[fi].positions[j];
-        }
-    } else {
-        // Restore coarse best
-        m.applyOrientation(atoms, m.best_orientation);
+        // Copy the best fine positions into a freshly allocated slice; the caller will
+        // apply them to model.atoms after all threads join (avoiding write-write races).
+        const n = m.atom_indices.len;
+        const best = allocator.alloc(math_mod.Vec3(f32), n) catch |err| {
+            std.log.warn("fine-search result alloc failed for mover {d}: {s}", .{ mover_idx, @errorName(err) });
+            return;
+        };
+        @memcpy(best, fine[fi].positions);
+        out_best_positions.* = best;
     }
+    // If no fine orientation improves on the coarse best, leave out_best_positions null.
+    // The coarse best is already applied to model.atoms (done before this phase starts).
 }
 
 fn optimizeBruteForce(
@@ -397,14 +434,23 @@ fn isMoverAtom(m: *const Mover, atom_idx: u32) bool {
     return false;
 }
 
-/// Score a mover's current orientation against the model.
+/// Score a mover against the model using explicit positions for its atoms.
+///
+/// `positions_override` provides the positions for the mover's atoms in the same
+/// order as `m.atom_indices`. This avoids writing to `model.atoms` during scoring,
+/// which is required for thread-safe parallel optimization: concurrent threads can
+/// each call this function with different orientation positions without data races.
+///
+/// Other movers' atoms are read from `model.atoms` at their current positions
+/// (which is their initial or last-applied coarse orientation — acceptable for the
+/// parallel coarse/fine search phases).
+///
 /// Static (non-mover) atoms are queried via CellList spatial index (O(nearby)).
-/// Mover-controlled atoms are scored by direct iteration -- O(M_total) per mover atom,
-/// giving O(M^2) total across all movers. This is acceptable because M (number of
-/// mover-controlled atoms) is small relative to the full atom count.
-fn scoreMover(
+/// Mover-controlled atoms are scored by direct iteration.
+fn scoreMoverWithPositions(
     m: *const Mover,
     mover_idx: u32,
+    positions_override: []const math_mod.Vec3(f32),
     movers: []const Mover,
     model: *const Model,
     config: OptConfig,
@@ -422,8 +468,10 @@ fn scoreMover(
     const my_centroid = score_ctx.mover_centroids[mover_idx];
     const my_radius = score_ctx.mover_radii[mover_idx];
 
-    for (m.atom_indices) |ai| {
-        const a = atoms[ai];
+    for (m.atom_indices, 0..) |ai, j| {
+        // Use the override position for this mover's atom instead of atoms[ai].pos.
+        var a = atoms[ai];
+        a.pos = positions_override[j];
 
         // Static atoms: use spatial index when available, else brute-force scan.
         if (score_ctx.cell_list) |cl| {
@@ -460,6 +508,43 @@ fn scoreMover(
         }
     }
     return total;
+}
+
+/// Score a mover's current orientation against the model.
+/// Reads atom positions from model.atoms — only safe to call sequentially
+/// (e.g. brute-force and greedy clique search where orientations are applied first).
+/// For parallel singleton/fine-search use scoreMoverWithPositions instead.
+fn scoreMover(
+    m: *const Mover,
+    mover_idx: u32,
+    movers: []const Mover,
+    model: *const Model,
+    config: OptConfig,
+    score_ctx: *const ScoreContext,
+    allocator: Allocator,
+    scratch: *std.ArrayListUnmanaged(u32),
+) f32 {
+    return scoreMoverWithPositions(
+        m,
+        mover_idx,
+        blk: {
+            // Build a slice of current positions from model.atoms for this mover.
+            // This is a small, bounded allocation on the stack (up to ~16 atoms per mover).
+            var pos_buf: [64]math_mod.Vec3(f32) = undefined;
+            const n = m.atom_indices.len;
+            std.debug.assert(n <= pos_buf.len);
+            for (m.atom_indices, 0..) |ai, i| {
+                pos_buf[i] = model.atoms.items[ai].pos;
+            }
+            break :blk pos_buf[0..n];
+        },
+        movers,
+        model,
+        config,
+        score_ctx,
+        allocator,
+        scratch,
+    );
 }
 
 fn scorePair(a: Atom, other: Atom, config: OptConfig) f32 {
