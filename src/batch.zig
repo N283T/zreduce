@@ -136,6 +136,7 @@ fn processFileInBatch(
         .no_opt = config.no_opt,
         .no_flip = config.no_flip,
         .opt_threads = 1,
+        .quiet = true, // suppress per-file diagnostics in batch mode
     };
 
     var timer = try std.time.Timer.start();
@@ -428,7 +429,13 @@ fn writeJsonString(writer: anytype, s: []const u8) !void {
         '\n' => try writer.writeAll("\\n"),
         '\r' => try writer.writeAll("\\r"),
         '\t' => try writer.writeAll("\\t"),
-        else => try writer.writeByte(c),
+        else => {
+            if (c < 0x20) {
+                try writer.print("\\u{x:0>4}", .{c});
+            } else {
+                try writer.writeByte(c);
+            }
+        },
     };
     try writer.writeByte('"');
 }
@@ -454,18 +461,6 @@ fn writeJsonlLine(writer: anytype, file_result: FileResult) !void {
             try writer.writeAll("}\n");
         },
     }
-}
-
-pub fn writeJsonlLog(allocator: Allocator, file_results: []const FileResult, path: []const u8) !void {
-    _ = allocator;
-    const file = try std.fs.cwd().createFile(path, .{});
-    defer file.close();
-    var buf: [4096]u8 = undefined;
-    var fw = file.writer(&buf);
-    for (file_results) |r| {
-        try writeJsonlLine(&fw.interface, r);
-    }
-    try fw.interface.flush();
 }
 
 // ---------------------------------------------------------------------------

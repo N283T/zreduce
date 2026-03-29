@@ -14,6 +14,7 @@ pub const ProcessConfig = struct {
     no_flip: bool = false,
     validate_flag: bool = false,
     opt_threads: u32 = 0, // 0 = auto; batch sets to 1
+    quiet: bool = false, // suppress diagnostic prints (batch mode)
 };
 
 pub const ProcessResult = struct {
@@ -97,7 +98,7 @@ pub fn processFile(allocator: Allocator, config: ProcessConfig) !ProcessResult {
         movers_owned = true;
         result.n_movers = @intCast(movers.len);
 
-        if (gen_result.n_skipped > 0) {
+        if (!config.quiet and gen_result.n_skipped > 0) {
             std.debug.print("  Mover generation: {d} skipped (missing atoms or incomplete groups)\n", .{gen_result.n_skipped});
         }
 
@@ -126,7 +127,7 @@ pub fn processFile(allocator: Allocator, config: ProcessConfig) !ProcessResult {
         defer validation.deinit();
 
         if (!validation.ok()) {
-            std.debug.print("  Validation: {d} issue(s) found\n", .{validation.issues.len});
+            if (!config.quiet) std.debug.print("  Validation: {d} issue(s) found\n", .{validation.issues.len});
             if (config.validate_flag) {
                 zreduce.validate.reportIssues(validation.issues, &mdl);
             }
