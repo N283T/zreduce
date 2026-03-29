@@ -338,7 +338,7 @@ fn writeCifValue(writer: anytype, val: []const u8) !void {
         if (c == '\n' or c == '\r') has_newline = true;
     }
     // Starts with special char?
-    if (val[0] == '_' or val[0] == '#' or val[0] == '$' or val[0] == ';') needs_quote = true;
+    if (val[0] == '_' or val[0] == '#' or val[0] == '$' or val[0] == ';' or val[0] == '[') needs_quote = true;
     // Could be confused with CIF keyword?
     if (std.ascii.startsWithIgnoreCase(val, "data_") or
         std.ascii.startsWithIgnoreCase(val, "save_") or
