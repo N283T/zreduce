@@ -66,8 +66,8 @@ pub const BatchResult = struct {
 // Directory scanning
 // ---------------------------------------------------------------------------
 
-fn endsWithCif(name: []const u8) bool {
-    return std.mem.endsWith(u8, name, ".cif");
+fn isCifFile(name: []const u8) bool {
+    return std.mem.endsWith(u8, name, ".cif") or std.mem.endsWith(u8, name, ".cif.gz");
 }
 
 pub fn scanDirectory(allocator: Allocator, dir_path: []const u8) ![][]const u8 {
@@ -84,7 +84,7 @@ pub fn scanDirectory(allocator: Allocator, dir_path: []const u8) ![][]const u8 {
     while (try iter.next()) |entry| {
         if (entry.kind != .file) continue;
         if (entry.name.len == 0 or entry.name[0] == '.') continue;
-        if (!endsWithCif(entry.name)) continue;
+        if (!isCifFile(entry.name)) continue;
         const owned = try allocator.dupe(u8, entry.name);
         try names.append(allocator, owned);
     }
@@ -125,7 +125,12 @@ fn processFileInBatch(
     const input_path = try std.fs.path.join(allocator, &.{ input_dir, filename });
     defer allocator.free(input_path);
 
-    const output_path = try std.fs.path.join(allocator, &.{ output_dir, filename });
+    // Strip .gz extension from output filename (output is always plain CIF)
+    const out_name = if (std.mem.endsWith(u8, filename, ".gz"))
+        filename[0 .. filename.len - 3]
+    else
+        filename;
+    const output_path = try std.fs.path.join(allocator, &.{ output_dir, out_name });
     defer allocator.free(output_path);
 
     const proc_config = run_mod.ProcessConfig{
@@ -505,7 +510,7 @@ pub fn run(allocator: Allocator, config: BatchConfig) !void {
     }
 
     if (files.len == 0) {
-        std.debug.print("Error: no .cif files found in '{s}'\n", .{config.input_dir});
+        std.debug.print("Error: no .cif/.cif.gz files found in '{s}'\n", .{config.input_dir});
         return error.NoFilesFound;
     }
 
@@ -579,13 +584,15 @@ pub fn run(allocator: Allocator, config: BatchConfig) !void {
 // Tests
 // ---------------------------------------------------------------------------
 
-test "endsWithCif" {
-    try std.testing.expect(endsWithCif("test.cif"));
-    try std.testing.expect(endsWithCif("path/to/file.cif"));
-    try std.testing.expect(!endsWithCif("test.pdb"));
-    try std.testing.expect(!endsWithCif("cif"));
-    try std.testing.expect(!endsWithCif(".ci"));
-    try std.testing.expect(!endsWithCif(""));
+test "isCifFile" {
+    try std.testing.expect(isCifFile("test.cif"));
+    try std.testing.expect(isCifFile("path/to/file.cif"));
+    try std.testing.expect(isCifFile("test.cif.gz"));
+    try std.testing.expect(isCifFile("path/to/file.cif.gz"));
+    try std.testing.expect(!isCifFile("test.pdb"));
+    try std.testing.expect(!isCifFile("test.gz"));
+    try std.testing.expect(!isCifFile("cif"));
+    try std.testing.expect(!isCifFile(""));
 }
 
 test "writeJsonlLine ok result" {
@@ -629,7 +636,7 @@ test "scanDirectory finds cif files" {
         try std.testing.expect(std.mem.order(u8, a, b) == .lt);
     }
     for (files) |f| {
-        try std.testing.expect(endsWithCif(f));
+        try std.testing.expect(isCifFile(f));
     }
 }
 
