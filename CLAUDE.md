@@ -9,7 +9,7 @@ A Zig implementation of the [reduce](https://github.com/rlabduke/reduce) hydroge
 ```bash
 zig build                           # Debug build
 zig build -Doptimize=ReleaseFast    # Optimized build
-zig build test --summary all        # Run all tests (250+)
+zig build test --summary all        # Run all tests (253+)
 ```
 
 ## Run
@@ -48,7 +48,8 @@ src/
     topology.zig        Bond topology tables for 20 AAs
     chemistry.zig       Residue/atom-specific chemical annotations
   optimize/             Optimization engine
-    optimizer.zig       Clique-based search + fine angular search + CellList scoring
+    optimizer.zig       Clique-based search + fine angular search + multithreaded optimization
+    scoring.zig         CellList-based scoring with SoA layout + centroid early-exit
     scorer.zig          Dot-sphere bump/H-bond scoring
     mover.zig           Mover struct, Orientation, isAbsentH
     rotator.zig         OH/SH, NH3+, methyl rotators + fine orientations
@@ -83,8 +84,11 @@ examples/
 ## Performance
 
 - ReleaseFast build for benchmarks
-- CellList spatial index for O(N) scoring (not O(N^2))
-- ~1s for 590-residue structure with 543 movers
+- CellList spatial index + centroid early-exit + SoA layout for scoring
+- SIMD Vec3 + fast exp approximation
+- Multithreaded singleton/fine-search optimization
+- ~0.03s for 309-residue, ~1.0s for 2339-residue (Apple Silicon)
+- Batch: 4370 E. coli structures in 72s (file-level parallelism)
 
 ## Open areas
 

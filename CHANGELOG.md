@@ -5,6 +5,47 @@ All notable changes to zreduce will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.3.0] - 2026-03-30
+
+### Added
+
+#### Performance Optimization
+- Mover centroid early-exit: skip distant mover-vs-mover scoring using precomputed bounding spheres (#46)
+- Multithreaded singleton and fine-search optimization via `std.Thread.Pool` (#46)
+- SIMD Vec3 operations using `@Vector(4, T)` for dot/sub/add (#46)
+- Schraudolph's fast exp approximation for contact scoring (#46)
+- Structure-of-Arrays (SoA) layout for cache-efficient scoring (#46)
+- Fixed-point integer arithmetic for mmCIF float formatting (#46)
+
+#### Batch Processing
+- `zreduce batch` subcommand for directory-level parallel processing (#47)
+- File-level parallelism with atomic work-stealing and per-thread arena allocators (#47)
+- Optional `--jsonl` aggregated JSONL log with mutex-protected streaming writer (#47)
+- CCD dictionary loaded once and shared read-only across worker threads (#47)
+- Configurable thread count (`-j N`) with auto-detect default (#47)
+
+### Changed
+- CLI refactored to subcommand structure: `zreduce run` (single file) and `zreduce batch` (directory) (#47)
+- Processing pipeline extracted to `run.zig` as reusable `processFile()` (#47)
+- `OptConfig` gains `n_threads` field (0 = auto-detect, batch sets to 1) (#47)
+- Scoring logic extracted from `optimizer.zig` to `scoring.zig` (#46)
+
+### Fixed
+- CellList `GridTooLarge` handled with pairwise fallback instead of panic (#45)
+- `writeFixedFloat` guarded against NaN/Inf with `std.fmt` fallback (#46)
+- `scoreMover` buffer overflow check at runtime instead of elided `debug.assert` (#46)
+- Thread pool initialization guard covers both singleton and fine-search phases (#46)
+
+### Performance
+
+| Structure | Before | After | Speedup |
+|-----------|--------|-------|---------|
+| AF-P0A9J6 (309 res) | 49s | 0.03s | 1600x |
+| AF-P22523 (1486 res) | 5m17s | 0.39s | 810x |
+| AF-P76347 (2339 res) | 3.1s | 1.0s | 3.2x |
+
+Batch: 4370 E. coli proteome structures in 72s (10.5x CPU utilization).
+
 ## [0.2.0] - 2026-03-29
 
 ### Added
