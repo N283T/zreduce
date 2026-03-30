@@ -441,6 +441,29 @@ test "findPlanForH returns null for unknown atom" {
     try testing.expect(plan == null);
 }
 
+test "findPlanForH finds nucleotide plans" {
+    // Aromatic C-H on adenine
+    const h8 = findPlanForH("DA", "H8");
+    try testing.expect(h8 != null);
+    try testing.expectEqualStrings("H8", trimName(&h8.?.h_name));
+
+    // OH rotator on RNA ribose
+    const ho2 = findPlanForH("A", "HO2'");
+    try testing.expect(ho2 != null);
+    try testing.expectEqual(standard.MoverHint.rotate, ho2.?.mover_hint);
+
+    // Thymine methyl
+    const h71 = findPlanForH("DT", "H71");
+    try testing.expect(h71 != null);
+    try testing.expectEqual(standard.MoverHint.rotate_methyl, h71.?.mover_hint);
+
+    // Standard AA still works
+    try testing.expect(findPlanForH("ALA", "HB1") != null);
+
+    // Unknown returns null
+    try testing.expect(findPlanForH("DA", "HX9") == null);
+}
+
 test "findAtomIdx prefers exact altloc and falls back to blank" {
     const source = @embedFile("../test_data/ala_altloc.cif");
     var mdl = try mmcif.parseModel(testing.allocator, source);

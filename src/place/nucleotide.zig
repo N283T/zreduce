@@ -97,15 +97,17 @@ fn ring_nh(comptime h: []const u8, comptime nn: []const u8, comptime nb1: []cons
 }
 
 /// sp2 NH2 hydrogen (e.g., H61/H62 on N6 of adenine).
-fn amino_h(comptime h: []const u8, comptime nn: []const u8, comptime c: []const u8, comptime c2: []const u8, angle: f32) PlacementPlan {
+/// Two H placed with same angle but different dihedrals (180° and 0°),
+/// matching the standard.zig ASN/GLN/ARG NH2 pattern.
+fn amino_h(comptime h: []const u8, comptime nn: []const u8, comptime c: []const u8, comptime c2: []const u8, dihedral: f32) PlacementPlan {
     return .{
         .h_name = n(h),
         .placement_type = .h3xr,
         .connected = .{ n(nn), n(c), n(c2) },
         .n_connected = 2,
         .bond_len = 1.02,
-        .angle = angle,
-        .dihedral = 180.0,
+        .angle = 120.0,
+        .dihedral = dihedral,
         .atom_type = .Hpol,
     };
 }
@@ -142,8 +144,8 @@ const da_plans = [_]PlacementPlan{
     // Base (adenine)
     aromatic_ch(" H2 ", " C2 ", " N1 ", " N3 "),
     aromatic_ch(" H8 ", " C8 ", " N7 ", " N9 "),
-    amino_h("H61 ", " N6 ", " C6 ", " C5 ", 120.0),
-    amino_h("H62 ", " N6 ", " C6 ", " C5 ", -120.0),
+    amino_h("H61 ", " N6 ", " C6 ", " C5 ", 180.0),
+    amino_h("H62 ", " N6 ", " C6 ", " C5 ", 0.0),
 };
 
 // DC: 2'-deoxycytidine (pyrimidine, glycosidic bond at N1)
@@ -159,8 +161,8 @@ const dc_plans = [_]PlacementPlan{
     // Base (cytosine)
     aromatic_ch(" H5 ", " C5 ", " C4 ", " C6 "),
     aromatic_ch(" H6 ", " C6 ", " C5 ", " N1 "),
-    amino_h("H41 ", " N4 ", " C4 ", " N3 ", 120.0),
-    amino_h("H42 ", " N4 ", " C4 ", " N3 ", -120.0),
+    amino_h("H41 ", " N4 ", " C4 ", " N3 ", 180.0),
+    amino_h("H42 ", " N4 ", " C4 ", " N3 ", 0.0),
 };
 
 // DG: 2'-deoxyguanosine (purine, glycosidic bond at N9)
@@ -176,8 +178,8 @@ const dg_plans = [_]PlacementPlan{
     // Base (guanine)
     aromatic_ch(" H8 ", " C8 ", " N7 ", " N9 "),
     ring_nh(" H1 ", " N1 ", " C6 ", " C2 "),
-    amino_h(" H21", " N2 ", " C2 ", " N1 ", 120.0),
-    amino_h(" H22", " N2 ", " C2 ", " N1 ", -120.0),
+    amino_h(" H21", " N2 ", " C2 ", " N1 ", 180.0),
+    amino_h(" H22", " N2 ", " C2 ", " N1 ", 0.0),
 };
 
 // DT: 2'-deoxythymidine (pyrimidine, glycosidic bond at N1)
@@ -215,8 +217,8 @@ const a_plans = [_]PlacementPlan{
     // Base (adenine)
     aromatic_ch(" H2 ", " C2 ", " N1 ", " N3 "),
     aromatic_ch(" H8 ", " C8 ", " N7 ", " N9 "),
-    amino_h("H61 ", " N6 ", " C6 ", " C5 ", 120.0),
-    amino_h("H62 ", " N6 ", " C6 ", " C5 ", -120.0),
+    amino_h("H61 ", " N6 ", " C6 ", " C5 ", 180.0),
+    amino_h("H62 ", " N6 ", " C6 ", " C5 ", 0.0),
 };
 
 // C: cytidine (pyrimidine, glycosidic bond at N1, ribose with 2'-OH)
@@ -231,8 +233,8 @@ const c_plans = [_]PlacementPlan{
     // Base (cytosine)
     aromatic_ch(" H5 ", " C5 ", " C4 ", " C6 "),
     aromatic_ch(" H6 ", " C6 ", " C5 ", " N1 "),
-    amino_h("H41 ", " N4 ", " C4 ", " N3 ", 120.0),
-    amino_h("H42 ", " N4 ", " C4 ", " N3 ", -120.0),
+    amino_h("H41 ", " N4 ", " C4 ", " N3 ", 180.0),
+    amino_h("H42 ", " N4 ", " C4 ", " N3 ", 0.0),
 };
 
 // G: guanosine (purine, glycosidic bond at N9, ribose with 2'-OH)
@@ -247,8 +249,8 @@ const g_plans = [_]PlacementPlan{
     // Base (guanine)
     aromatic_ch(" H8 ", " C8 ", " N7 ", " N9 "),
     ring_nh(" H1 ", " N1 ", " C6 ", " C2 "),
-    amino_h(" H21", " N2 ", " C2 ", " N1 ", 120.0),
-    amino_h(" H22", " N2 ", " C2 ", " N1 ", -120.0),
+    amino_h(" H21", " N2 ", " C2 ", " N1 ", 180.0),
+    amino_h(" H22", " N2 ", " C2 ", " N1 ", 0.0),
 };
 
 // U: uridine (pyrimidine, glycosidic bond at N1, ribose with 2'-OH)
@@ -379,4 +381,59 @@ test "no polymer linking H in any nucleotide" {
 test "unknown nucleotide returns null" {
     try std.testing.expect(getPlans("XYZ") == null);
     try std.testing.expect(getPlans("ALA") == null);
+}
+
+test "DNA lacks HO2' and RNA lacks H2''" {
+    const dna = [_][]const u8{ "DA", "DC", "DG", "DT" };
+    const rna = [_][]const u8{ "A", "C", "G", "U" };
+    for (dna) |nuc| {
+        for (getPlans(nuc).?) |p| {
+            const h = std.mem.trim(u8, &p.h_name, " ");
+            try std.testing.expect(!std.mem.eql(u8, h, "HO2'"));
+        }
+    }
+    for (rna) |nuc| {
+        for (getPlans(nuc).?) |p| {
+            const h = std.mem.trimRight(u8, &p.h_name, " ");
+            try std.testing.expect(!std.mem.eql(u8, h, "H2''"));
+        }
+    }
+}
+
+test "bond lengths and atom types are correct" {
+    const da = getPlans("DA").?;
+    for (da) |p| {
+        const h = std.mem.trim(u8, &p.h_name, " ");
+        if (std.mem.eql(u8, h, "H8")) {
+            // Aromatic C-H
+            try std.testing.expectEqual(@as(f32, 1.08), p.bond_len);
+            try std.testing.expectEqual(element.AtomType.Har, p.atom_type);
+        } else if (std.mem.eql(u8, h, "H61")) {
+            // NH2 polar
+            try std.testing.expectEqual(@as(f32, 1.02), p.bond_len);
+            try std.testing.expectEqual(element.AtomType.Hpol, p.atom_type);
+        } else if (std.mem.eql(u8, h, "H1'")) {
+            // Sugar sp3 C-H
+            try std.testing.expectEqual(@as(f32, 1.09), p.bond_len);
+            try std.testing.expectEqual(element.AtomType.H, p.atom_type);
+        }
+    }
+    // RNA OH
+    const a = getPlans("A").?;
+    for (a) |p| {
+        const h = std.mem.trim(u8, &p.h_name, " ");
+        if (std.mem.eql(u8, h, "HO2'")) {
+            try std.testing.expectEqual(@as(f32, 0.98), p.bond_len);
+            try std.testing.expectEqual(element.AtomType.Hpol, p.atom_type);
+        }
+    }
+    // Guanine ring NH
+    const dg = getPlans("DG").?;
+    for (dg) |p| {
+        const h = std.mem.trim(u8, &p.h_name, " ");
+        if (std.mem.eql(u8, h, "H1")) {
+            try std.testing.expectEqual(@as(f32, 1.02), p.bond_len);
+            try std.testing.expectEqual(element.AtomType.Hpol, p.atom_type);
+        }
+    }
 }
