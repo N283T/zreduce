@@ -285,7 +285,7 @@ pub fn parseModel(allocator: Allocator, source: []const u8) MmcifError!Model {
 /// Key for looking up a Model atom index from CIF identifiers.
 pub const AtomLookupKey = struct {
     label_asym_id: []const u8,
-    label_seq_id: []const u8,
+    seq_id: []const u8,
     atom_name: []const u8,
 };
 
@@ -295,7 +295,7 @@ pub const AtomLookupContext = struct {
         var hasher = std.hash.Wyhash.init(0);
         hasher.update(key.label_asym_id);
         hasher.update(&[_]u8{0});
-        hasher.update(key.label_seq_id);
+        hasher.update(key.seq_id);
         hasher.update(&[_]u8{0});
         hasher.update(key.atom_name);
         return hasher.final();
@@ -303,7 +303,7 @@ pub const AtomLookupContext = struct {
 
     pub fn eql(_: AtomLookupContext, a: AtomLookupKey, b: AtomLookupKey) bool {
         return std.mem.eql(u8, a.label_asym_id, b.label_asym_id) and
-            std.mem.eql(u8, a.label_seq_id, b.label_seq_id) and
+            std.mem.eql(u8, a.seq_id, b.seq_id) and
             std.mem.eql(u8, a.atom_name, b.atom_name);
     }
 };
@@ -321,7 +321,6 @@ pub fn buildAtomLookup(allocator: Allocator, block: *const cif.Block) !AtomLooku
     const col_asym = loop.findTag("_atom_site.label_asym_id") orelse return MmcifError.MissingCoordinateField;
     const col_seq = loop.findTag("_atom_site.label_seq_id") orelse return MmcifError.MissingCoordinateField;
     const col_atom = loop.findTag("_atom_site.label_atom_id") orelse return MmcifError.MissingCoordinateField;
-    const col_alt = loop.findTag("_atom_site.label_alt_id");
     const col_auth_seq = loop.findTag("_atom_site.auth_seq_id");
 
     var lookup = AtomLookup.initContext(allocator, AtomLookupContext{});
@@ -335,16 +334,13 @@ pub fn buildAtomLookup(allocator: Allocator, block: *const cif.Block) !AtomLooku
         const seq = cif.asString(loop.val(row, col_seq) orelse continue);
         const atom = cif.asString(loop.val(row, col_atom) orelse continue);
 
-        // Skip altloc duplicates: only index first occurrence per key
-        const alt_raw = if (col_alt) |c| cif.asString(loop.val(row, c) orelse ".") else "";
-        _ = alt_raw; // altloc check is implicit: getOrPut skips if key already exists
-
         const idx: u32 = @intCast(row);
 
-        // Primary key: label_asym_id + label_seq_id + atom_name
+        // Primary key: label_asym_id + seq_id + atom_name
+        // getOrPut skips duplicates (altloc), only first occurrence is indexed.
         const key = AtomLookupKey{
             .label_asym_id = asym,
-            .label_seq_id = seq,
+            .seq_id = seq,
             .atom_name = atom,
         };
         const gop = try lookup.getOrPut(key);
@@ -359,7 +355,7 @@ pub fn buildAtomLookup(allocator: Allocator, block: *const cif.Block) !AtomLooku
                 if (auth_seq.len > 0) {
                     const auth_key = AtomLookupKey{
                         .label_asym_id = asym,
-                        .label_seq_id = auth_seq,
+                        .seq_id = auth_seq,
                         .atom_name = atom,
                     };
                     const auth_gop = try lookup.getOrPut(auth_key);
@@ -392,13 +388,13 @@ pub fn isCovalentConnType(conn_type: []const u8) bool {
 pub fn parseStructConn(mdl: *Model, block: *const cif.Block, lookup: *const AtomLookup) !void {
     const sc = block.findLoop("_struct_conn.conn_type_id") orelse return;
 
-    const col_type = sc.findTag("_struct_conn.conn_type_id") orelse return;
-    const col_asym1 = sc.findTag("_struct_conn.ptnr1_label_asym_id") orelse return;
-    const col_seq1 = sc.findTag("_struct_conn.ptnr1_label_seq_id") orelse return;
-    const col_atom1 = sc.findTag("_struct_conn.ptnr1_label_atom_id") orelse return;
-    const col_asym2 = sc.findTag("_struct_conn.ptnr2_label_asym_id") orelse return;
-    const col_seq2 = sc.findTag("_struct_conn.ptnr2_label_seq_id") orelse return;
-    const col_atom2 = sc.findTag("_struct_conn.ptnr2_label_atom_id") orelse return;
+    const col_type = sc.findTag("_struct_conn.conn_type_id") orelse return error.MissingCoordinateField;
+    const col_asym1 = sc.findTag("_struct_conn.ptnr1_label_asym_id") orelse return error.MissingCoordinateField;
+    const col_seq1 = sc.findTag("_struct_conn.ptnr1_label_seq_id") orelse return error.MissingCoordinateField;
+    const col_atom1 = sc.findTag("_struct_conn.ptnr1_label_atom_id") orelse return error.MissingCoordinateField;
+    const col_asym2 = sc.findTag("_struct_conn.ptnr2_label_asym_id") orelse return error.MissingCoordinateField;
+    const col_seq2 = sc.findTag("_struct_conn.ptnr2_label_seq_id") orelse return error.MissingCoordinateField;
+    const col_atom2 = sc.findTag("_struct_conn.ptnr2_label_atom_id") orelse return error.MissingCoordinateField;
     const col_sym1 = sc.findTag("_struct_conn.ptnr1_symmetry");
     const col_sym2 = sc.findTag("_struct_conn.ptnr2_symmetry");
     const col_order = sc.findTag("_struct_conn.pdbx_value_order");
@@ -422,8 +418,8 @@ pub fn parseStructConn(mdl: *Model, block: *const cif.Block, lookup: *const Atom
         const seq2 = cif.asString(sc.val(row, col_seq2) orelse continue);
         const atom2 = cif.asString(sc.val(row, col_atom2) orelse continue);
 
-        const idx1 = lookup.get(.{ .label_asym_id = asym1, .label_seq_id = seq1, .atom_name = atom1 }) orelse continue;
-        const idx2 = lookup.get(.{ .label_asym_id = asym2, .label_seq_id = seq2, .atom_name = atom2 }) orelse continue;
+        const idx1 = lookup.get(.{ .label_asym_id = asym1, .seq_id = seq1, .atom_name = atom1 }) orelse continue;
+        const idx2 = lookup.get(.{ .label_asym_id = asym2, .seq_id = seq2, .atom_name = atom2 }) orelse continue;
 
         const order_str = if (col_order) |c| cif.asString(sc.val(row, c) orelse ".") else "";
         const order = bond_mod.BondOrder.fromString(order_str);
@@ -449,13 +445,13 @@ pub fn parseStructConn(mdl: *Model, block: *const cif.Block, lookup: *const Atom
 pub fn parseBranchLinks(allocator: Allocator, mdl: *Model, block: *const cif.Block, lookup: *const AtomLookup) !void {
     const loop = block.findLoop("_pdbx_entity_branch_link.link_id") orelse return;
 
-    const col_entity = loop.findTag("_pdbx_entity_branch_link.entity_id") orelse return;
-    const col_num1 = loop.findTag("_pdbx_entity_branch_link.entity_branch_list_num_1") orelse return;
-    const col_num2 = loop.findTag("_pdbx_entity_branch_link.entity_branch_list_num_2") orelse return;
-    const col_atom1 = loop.findTag("_pdbx_entity_branch_link.atom_id_1") orelse return;
-    const col_atom2 = loop.findTag("_pdbx_entity_branch_link.atom_id_2") orelse return;
-    const col_leaving1 = loop.findTag("_pdbx_entity_branch_link.leaving_atom_id_1") orelse return;
-    const col_leaving2 = loop.findTag("_pdbx_entity_branch_link.leaving_atom_id_2") orelse return;
+    const col_entity = loop.findTag("_pdbx_entity_branch_link.entity_id") orelse return error.MissingCoordinateField;
+    const col_num1 = loop.findTag("_pdbx_entity_branch_link.entity_branch_list_num_1") orelse return error.MissingCoordinateField;
+    const col_num2 = loop.findTag("_pdbx_entity_branch_link.entity_branch_list_num_2") orelse return error.MissingCoordinateField;
+    const col_atom1 = loop.findTag("_pdbx_entity_branch_link.atom_id_1") orelse return error.MissingCoordinateField;
+    const col_atom2 = loop.findTag("_pdbx_entity_branch_link.atom_id_2") orelse return error.MissingCoordinateField;
+    const col_leaving1 = loop.findTag("_pdbx_entity_branch_link.leaving_atom_id_1") orelse return error.MissingCoordinateField;
+    const col_leaving2 = loop.findTag("_pdbx_entity_branch_link.leaving_atom_id_2") orelse return error.MissingCoordinateField;
 
     // Build entity_id -> [asym_id] mapping from mdl.chains
     var entity_to_asyms = std.StringHashMap(std.ArrayListUnmanaged([]const u8)).init(allocator);
@@ -495,12 +491,12 @@ pub fn parseBranchLinks(allocator: Allocator, mdl: *Model, block: *const cif.Blo
             // Resolve bonding atoms using num (= auth_seq_id for branched entities)
             const idx1 = lookup.get(.{
                 .label_asym_id = asym_id,
-                .label_seq_id = num1_str,
+                .seq_id = num1_str,
                 .atom_name = atom_name1,
             }) orelse continue;
             const idx2 = lookup.get(.{
                 .label_asym_id = asym_id,
-                .label_seq_id = num2_str,
+                .seq_id = num2_str,
                 .atom_name = atom_name2,
             }) orelse continue;
 
@@ -516,14 +512,14 @@ pub fn parseBranchLinks(allocator: Allocator, mdl: *Model, block: *const cif.Blo
             // fall back to the bonding atom.
             const leaving_idx1 = lookup.get(.{
                 .label_asym_id = asym_id,
-                .label_seq_id = num1_str,
+                .seq_id = num1_str,
                 .atom_name = leaving_name1,
             }) orelse idx1;
             mdl.atoms.items[leaving_idx1].flags.bonded_inter_residue = true;
 
             const leaving_idx2 = lookup.get(.{
                 .label_asym_id = asym_id,
-                .label_seq_id = num2_str,
+                .seq_id = num2_str,
                 .atom_name = leaving_name2,
             }) orelse idx2;
             mdl.atoms.items[leaving_idx2].flags.bonded_inter_residue = true;
@@ -569,7 +565,7 @@ pub fn parseInlineComponents(allocator: Allocator, block: *const cif.Block) !?cc
     }
 
     if (block.findLoop("_chem_comp_atom.comp_id")) |atom_loop| {
-        const col_comp = atom_loop.findTag("_chem_comp_atom.comp_id") orelse unreachable;
+        const col_comp = atom_loop.findTag("_chem_comp_atom.comp_id") orelse return null;
         const col_atom = atom_loop.findTag("_chem_comp_atom.atom_id");
         const col_sym = atom_loop.findTag("_chem_comp_atom.type_symbol");
         const col_charge = atom_loop.findTag("_chem_comp_atom.charge");
@@ -634,7 +630,7 @@ pub fn parseInlineComponents(allocator: Allocator, block: *const cif.Block) !?cc
     }
 
     {
-        const col_comp = bond_loop.findTag("_chem_comp_bond.comp_id") orelse unreachable;
+        const col_comp = bond_loop.findTag("_chem_comp_bond.comp_id") orelse return null;
         const col_a1 = bond_loop.findTag("_chem_comp_bond.atom_id_1");
         const col_a2 = bond_loop.findTag("_chem_comp_bond.atom_id_2");
         const col_order = bond_loop.findTag("_chem_comp_bond.value_order");
@@ -898,12 +894,12 @@ test "buildAtomLookup resolves atom indices" {
     defer lookup.deinit();
 
     // SG of CYS residue 1 (seq_id=1) should be atom index 5
-    const sg1 = lookup.get(.{ .label_asym_id = "A", .label_seq_id = "1", .atom_name = "SG" });
+    const sg1 = lookup.get(.{ .label_asym_id = "A", .seq_id = "1", .atom_name = "SG" });
     try testing.expect(sg1 != null);
     try testing.expectEqual(@as(u32, 5), sg1.?);
 
     // SG of CYS residue 2 (seq_id=2) should be atom index 11
-    const sg2 = lookup.get(.{ .label_asym_id = "A", .label_seq_id = "2", .atom_name = "SG" });
+    const sg2 = lookup.get(.{ .label_asym_id = "A", .seq_id = "2", .atom_name = "SG" });
     try testing.expect(sg2 != null);
     try testing.expectEqual(@as(u32, 11), sg2.?);
 }
@@ -984,4 +980,47 @@ test "parseInlineComponents returns null when no inline data" {
     defer if (dict) |*d| d.deinit();
 
     try testing.expect(dict == null);
+}
+
+test "isCovalentConnType accepts covalent types" {
+    try testing.expect(isCovalentConnType("disulf"));
+    try testing.expect(isCovalentConnType("DISULF"));
+    try testing.expect(isCovalentConnType("Disulf"));
+    try testing.expect(isCovalentConnType("covale"));
+    try testing.expect(isCovalentConnType("COVALE"));
+    try testing.expect(isCovalentConnType("covale_base"));
+    try testing.expect(isCovalentConnType("covale_phosph"));
+}
+
+test "isCovalentConnType rejects non-covalent types" {
+    try testing.expect(!isCovalentConnType("hydrog"));
+    try testing.expect(!isCovalentConnType("metalc"));
+    try testing.expect(!isCovalentConnType("mismat"));
+    try testing.expect(!isCovalentConnType("saltbr"));
+    try testing.expect(!isCovalentConnType(""));
+}
+
+test "parseStructConn skips non-covalent connections" {
+    const source = @embedFile("test_data/disulfide_with_hbond.cif");
+    var doc = cif.readString(testing.allocator, source) catch unreachable;
+    defer doc.deinit();
+    const block = &doc.blocks.items[0];
+
+    var mdl = try parseModel(testing.allocator, source);
+    defer mdl.deinit();
+
+    var lookup = try buildAtomLookup(testing.allocator, block);
+    defer lookup.deinit();
+
+    try parseStructConn(&mdl, block, &lookup);
+
+    // Should have exactly 1 bond (disulfide SG-SG), hydrogen bond must be skipped
+    try testing.expectEqual(@as(usize, 1), mdl.bonds.items.len);
+
+    // Verify the bond is the disulfide (SG-SG), not the hydrogen bond (N-O)
+    const bond = mdl.bonds.items[0];
+    const a1 = mdl.atoms.items[bond.atom_1];
+    const a2 = mdl.atoms.items[bond.atom_2];
+    try testing.expectEqualStrings("SG", a1.nameSlice());
+    try testing.expectEqualStrings("SG", a2.nameSlice());
 }
