@@ -9,22 +9,30 @@ A Zig implementation of the [reduce](https://github.com/rlabduke/reduce) hydroge
 ```bash
 zig build                           # Debug build
 zig build -Doptimize=ReleaseFast    # Optimized build
-zig build test --summary all        # Run all tests (225+)
+zig build test --summary all        # Run all tests (250+)
 ```
 
 ## Run
 
 ```bash
-./zig-out/bin/zreduce input.cif -o output.cif
-./zig-out/bin/zreduce input.cif -d components.cif -o output.cif  # with CCD
-./zig-out/bin/zreduce input.cif -o output.cif --validate         # with diagnostics
+# Single file
+./zig-out/bin/zreduce run input.cif -o output.cif
+./zig-out/bin/zreduce run input.cif -d components.cif -o output.cif  # with CCD
+./zig-out/bin/zreduce run input.cif -o output.cif --validate         # with diagnostics
+
+# Batch processing (parallel)
+./zig-out/bin/zreduce batch input_dir/ -o output_dir/
+./zig-out/bin/zreduce batch input_dir/ -d components.cif --jsonl log.jsonl
+./zig-out/bin/zreduce batch input_dir/ -j 4  # limit to 4 threads
 ```
 
 ## Project structure
 
 ```
 src/
-  main.zig              CLI entry point
+  main.zig              CLI entry point (subcommand dispatch: run/batch)
+  run.zig               Single-file processing pipeline
+  batch.zig             Batch processing (parallel, JSONL log)
   root.zig              Library re-exports
   validate.zig          Post-placement model validation
   math.zig              Vec3, rotation, dihedral
