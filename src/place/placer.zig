@@ -121,7 +121,9 @@ pub fn addHydrogens(
             if (effective_component) |comp| {
                 const existing = try collectAtomNames(mdl.allocator, mdl, res);
                 defer mdl.allocator.free(existing);
-                const plans = try ccd_derive.derivePlans(mdl.allocator, &comp, existing);
+                const ir_atoms = try collectInterResidueAtomNames(mdl.allocator, mdl, res);
+                defer mdl.allocator.free(ir_atoms);
+                const plans = try ccd_derive.derivePlans(mdl.allocator, &comp, existing, ir_atoms);
                 defer mdl.allocator.free(plans);
 
                 for (plans) |plan| {
@@ -683,6 +685,20 @@ fn collectAtomNames(allocator: std.mem.Allocator, mdl: *const Model, res: Residu
         result[i] = a.name;
     }
     return result;
+}
+
+/// Collect names of heavy atoms in this residue that carry an inter-residue bond.
+/// Used to inform CCD-derived hybridization about valence contributions from outside the template.
+fn collectInterResidueAtomNames(allocator: std.mem.Allocator, mdl: *const Model, res: Residue) ![]const [4]u8 {
+    var names = std.ArrayListUnmanaged([4]u8){};
+    defer names.deinit(allocator);
+    const atoms = mdl.atoms.items[res.atom_start..res.atom_end];
+    for (atoms) |atom| {
+        if (atom.flags.bonded_inter_residue and !atom.is_hydrogen) {
+            try names.append(allocator, atom.name);
+        }
+    }
+    return try allocator.dupe([4]u8, names.items);
 }
 
 /// Append a new hydrogen atom to the model.

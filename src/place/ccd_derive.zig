@@ -39,6 +39,7 @@ pub fn derivePlans(
     allocator: std.mem.Allocator,
     component: *const ccd.Component,
     existing_atom_names: []const [4]u8,
+    inter_residue_atoms: []const [4]u8,
 ) ![]PlacementPlan {
     var plans = std.ArrayListUnmanaged(PlacementPlan){};
     errdefer plans.deinit(allocator);
@@ -54,8 +55,13 @@ pub fn derivePlans(
         const heavy_idx = findBondedHeavyAtom(component, @intCast(atom_idx)) orelse continue;
         const heavy_atom = component.atoms[heavy_idx];
 
+        // Count inter-residue bonds on this heavy atom
+        var extra: u8 = 0;
+        for (inter_residue_atoms) |bonded_name| {
+            if (std.mem.eql(u8, &heavy_atom.name, &bonded_name)) extra += 1;
+        }
         // Count bonds on heavy atom and determine hybridization
-        const bond_info = analyzeBonds(component, @intCast(heavy_idx));
+        const bond_info = analyzeBonds(component, @intCast(heavy_idx), extra);
 
         // Determine placement type from hybridization
         const plan = deriveSinglePlan(component, atom, @intCast(heavy_idx), heavy_atom, bond_info) orelse continue;
@@ -94,8 +100,33 @@ fn findBondedHeavyAtom(component: *const ccd.Component, h_idx: u16) ?u16 {
     return null;
 }
 
+/// Maximum valence for common elements; returns 0 for unknown/metals (skip check).
+fn maxValence(element_symbol: [2]u8) u8 {
+    return switch (element_symbol[0]) {
+        'H' => 1,
+        'C' => 4,
+        'N' => 3,
+        'O' => 2,
+        'S' => 2,
+        'P' => 3,
+        'F' => 1,
+        'B' => 3,
+        else => 0,
+    };
+}
+
+/// Bond order as a valence contribution.
+fn bondValence(order: ccd.BondOrder) u8 {
+    return switch (order) {
+        .double => 2,
+        .triple => 3,
+        else => 1,
+    };
+}
+
 /// Analyze bonds on the given atom index.
-fn analyzeBonds(component: *const ccd.Component, atom_idx: u16) BondInfo {
+/// extra_bonds: number of inter-residue single bonds not present in the CCD template.
+fn analyzeBonds(component: *const ccd.Component, atom_idx: u16, extra_bonds: u8) BondInfo {
     var info = BondInfo{
         .total_bonds = 0,
         .heavy_neighbor_count = 0,
@@ -130,13 +161,38 @@ fn analyzeBonds(component: *const ccd.Component, atom_idx: u16) BondInfo {
         }
     }
 
-    // Determine hybridization
-    if (info.has_triple or (info.has_double and countDoubleBonds(component, atom_idx) >= 2)) {
-        info.hybridization = .sp;
-    } else if (info.has_double or info.has_aromatic) {
-        info.hybridization = .sp2;
+    // Account for inter-residue bonds not in the CCD template
+    info.total_bonds += extra_bonds;
+    info.heavy_neighbor_count += extra_bonds;
+
+    // Compute template valence to check for overflow
+    var template_valence: u8 = 0;
+    for (component.bonds) |bond| {
+        if (bond.atom_idx_1 == atom_idx or bond.atom_idx_2 == atom_idx) {
+            template_valence += bondValence(bond.order);
+        }
+    }
+    const total_valence = template_valence + extra_bonds;
+    const max_val = maxValence(component.atoms[atom_idx].element_symbol);
+
+    // Determine hybridization, with valence overflow correction
+    if (max_val > 0 and total_valence > max_val) {
+        // Inter-residue bond makes template bond orders impossible.
+        // Demote hybridization: sp→sp2, sp2→sp3, sp3→sp3.
+        if (info.has_triple or (info.has_double and countDoubleBonds(component, atom_idx) >= 2)) {
+            info.hybridization = .sp2;
+        } else {
+            info.hybridization = .sp3;
+        }
     } else {
-        info.hybridization = .sp3;
+        // Normal hybridization
+        if (info.has_triple or (info.has_double and countDoubleBonds(component, atom_idx) >= 2)) {
+            info.hybridization = .sp;
+        } else if (info.has_double or info.has_aromatic) {
+            info.hybridization = .sp2;
+        } else {
+            info.hybridization = .sp3;
+        }
     }
 
     return info;
@@ -383,7 +439,7 @@ test "derivePlans on empty component returns empty" {
         .atoms = &.{},
         .bonds = &.{},
     };
-    const plans = try derivePlans(testing.allocator, &comp, &.{});
+    const plans = try derivePlans(testing.allocator, &comp, &.{}, &.{});
     defer testing.allocator.free(plans);
     try testing.expectEqual(@as(usize, 0), plans.len);
 }
@@ -406,7 +462,7 @@ test "derivePlans skips existing H atoms" {
 
     // H1 already exists
     const existing = [_][4]u8{.{ 'H', '1', ' ', ' ' }};
-    const plans = try derivePlans(testing.allocator, &comp, &existing);
+    const plans = try derivePlans(testing.allocator, &comp, &existing, &.{});
     defer testing.allocator.free(plans);
     try testing.expectEqual(@as(usize, 0), plans.len);
 }
@@ -429,7 +485,7 @@ test "analyzeBonds detects sp2" {
         .atoms = &atoms,
         .bonds = &bonds,
     };
-    const info = analyzeBonds(&comp, 0);
+    const info = analyzeBonds(&comp, 0, 0);
     try testing.expectEqual(Hybridization.sp2, info.hybridization);
     try testing.expectEqual(@as(u8, 2), info.heavy_neighbor_count);
     try testing.expectEqual(@as(u8, 1), info.h_neighbor_count);
@@ -455,7 +511,7 @@ test "analyzeBonds detects sp3" {
         .atoms = &atoms,
         .bonds = &bonds,
     };
-    const info = analyzeBonds(&comp, 0);
+    const info = analyzeBonds(&comp, 0, 0);
     try testing.expectEqual(Hybridization.sp3, info.hybridization);
     try testing.expectEqual(@as(u8, 1), info.heavy_neighbor_count);
     try testing.expectEqual(@as(u8, 3), info.h_neighbor_count);
@@ -477,4 +533,35 @@ test "findBondedHeavyAtom returns correct index" {
     };
     const result = findBondedHeavyAtom(&comp, 1);
     try testing.expectEqual(@as(?u16, 0), result);
+}
+
+test "analyzeBonds demotes sp2 to sp3 on valence overflow" {
+    // C1 has: C2 (single), O (double), H (single) → template valence = 4
+    // With 1 extra inter-residue bond → total valence = 5 > 4 → demote sp2→sp3
+    var atoms = [_]ccd.CompAtom{
+        .{ .name = .{ 'C', '1', ' ', ' ' }, .name_len = 2, .element_symbol = .{ 'C', ' ' } },
+        .{ .name = .{ 'C', '2', ' ', ' ' }, .name_len = 2, .element_symbol = .{ 'C', ' ' } },
+        .{ .name = .{ 'O', ' ', ' ', ' ' }, .name_len = 1, .element_symbol = .{ 'O', ' ' } },
+        .{ .name = .{ 'H', ' ', ' ', ' ' }, .name_len = 1, .element_symbol = .{ 'H', ' ' } },
+    };
+    var bonds = [_]ccd.CompBond{
+        .{ .atom_idx_1 = 0, .atom_idx_2 = 1, .order = .single },
+        .{ .atom_idx_1 = 0, .atom_idx_2 = 2, .order = .double },
+        .{ .atom_idx_1 = 0, .atom_idx_2 = 3, .order = .single },
+    };
+    const comp = ccd.Component{
+        .comp_id = "TST",
+        .comp_type = "non-polymer",
+        .atoms = &atoms,
+        .bonds = &bonds,
+    };
+
+    // Without extra bonds: sp2 (has double bond, valence = 4 which equals max for C)
+    const info_normal = analyzeBonds(&comp, 0, 0);
+    try testing.expectEqual(Hybridization.sp2, info_normal.hybridization);
+
+    // With 1 extra inter-residue bond: valence = 5 > 4 → demote to sp3
+    const info_overflow = analyzeBonds(&comp, 0, 1);
+    try testing.expectEqual(Hybridization.sp3, info_overflow.hybridization);
+    try testing.expectEqual(@as(u8, 3), info_overflow.heavy_neighbor_count); // 2 template + 1 extra
 }
