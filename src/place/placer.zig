@@ -12,6 +12,7 @@ const ccd_mod = @import("../ccd.zig");
 const ComponentDict = ccd_mod.ComponentDict;
 const standard = @import("standard.zig");
 const nucleotide = @import("nucleotide.zig");
+const modified = @import("modified.zig");
 const het = @import("het.zig");
 const geometry = @import("geometry.zig");
 const math_mod = @import("../math.zig");
@@ -114,6 +115,28 @@ pub fn addHydrogens(
 
             for (targets) |alt| {
                 for (plans) |plan| {
+                    if (try executePlan(mdl, res, @intCast(res_idx), &plan, null, alt)) {
+                        result.n_placed += 1;
+                    } else {
+                        result.n_skipped += 1;
+                    }
+                }
+            }
+
+            result.n_residues += 1;
+        } else if (modified.getPlans(comp_id)) |plans| {
+            const altlocs = collectAltlocs(mdl, res);
+
+            const targets: []const u8 = if (altlocs.count == 0)
+                &[_]u8{' '}
+            else
+                altlocs.locs[0..altlocs.count];
+
+            const is_nterm_mod = (res_idx == chain.residue_start) or res.is_chain_break_before;
+            for (targets) |alt| {
+                for (plans) |plan| {
+                    // Skip backbone H for non-N-terminal or PCA (no backbone H in plans)
+                    if (isBackboneH(&plan) and !is_nterm_mod) continue;
                     if (try executePlan(mdl, res, @intCast(res_idx), &plan, null, alt)) {
                         result.n_placed += 1;
                     } else {
