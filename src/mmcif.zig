@@ -278,6 +278,100 @@ pub fn parseModel(allocator: Allocator, source: []const u8) MmcifError!Model {
     return mdl;
 }
 
+// ── Atom Lookup ───────────────────────────────────────────────────────────────
+
+/// Key for looking up a Model atom index from CIF identifiers.
+pub const AtomLookupKey = struct {
+    label_asym_id: []const u8,
+    label_seq_id: []const u8,
+    atom_name: []const u8,
+};
+
+/// Hash context for AtomLookupKey using Wyhash with null-byte separators.
+pub const AtomLookupContext = struct {
+    pub fn hash(_: AtomLookupContext, key: AtomLookupKey) u64 {
+        var hasher = std.hash.Wyhash.init(0);
+        hasher.update(key.label_asym_id);
+        hasher.update(&[_]u8{0});
+        hasher.update(key.label_seq_id);
+        hasher.update(&[_]u8{0});
+        hasher.update(key.atom_name);
+        return hasher.final();
+    }
+
+    pub fn eql(_: AtomLookupContext, a: AtomLookupKey, b: AtomLookupKey) bool {
+        return std.mem.eql(u8, a.label_asym_id, b.label_asym_id) and
+            std.mem.eql(u8, a.label_seq_id, b.label_seq_id) and
+            std.mem.eql(u8, a.atom_name, b.atom_name);
+    }
+};
+
+/// HashMap from (label_asym_id, label_seq_id, atom_name) to Model atom index.
+pub const AtomLookup = std.HashMap(AtomLookupKey, u32, AtomLookupContext, 80);
+
+/// Build an AtomLookup from a pre-parsed CIF block.
+/// Row index in the _atom_site loop == Model atom index (same order as parseModel).
+/// For altloc atoms, only the first occurrence is indexed.
+/// Also registers auth_seq_id entries for branched entities (label_seq_id == ".").
+pub fn buildAtomLookup(allocator: Allocator, block: *const cif.Block) !AtomLookup {
+    const loop = block.findLoop("_atom_site.Cartn_x") orelse return MmcifError.NoAtomSiteLoop;
+
+    const col_asym = loop.findTag("_atom_site.label_asym_id") orelse return MmcifError.MissingCoordinateField;
+    const col_seq = loop.findTag("_atom_site.label_seq_id") orelse return MmcifError.MissingCoordinateField;
+    const col_atom = loop.findTag("_atom_site.label_atom_id") orelse return MmcifError.MissingCoordinateField;
+    const col_alt = loop.findTag("_atom_site.label_alt_id");
+    const col_auth_seq = loop.findTag("_atom_site.auth_seq_id");
+
+    var lookup = AtomLookup.initContext(allocator, AtomLookupContext{});
+    errdefer lookup.deinit();
+
+    const nrows = loop.length();
+    try lookup.ensureTotalCapacity(@intCast(nrows));
+
+    for (0..nrows) |row| {
+        const asym = cif.asString(loop.val(row, col_asym) orelse continue);
+        const seq = cif.asString(loop.val(row, col_seq) orelse continue);
+        const atom = cif.asString(loop.val(row, col_atom) orelse continue);
+
+        // Skip altloc duplicates: only index first occurrence per key
+        const alt_raw = if (col_alt) |c| cif.asString(loop.val(row, c) orelse ".") else "";
+        _ = alt_raw; // altloc check is implicit: getOrPut skips if key already exists
+
+        const idx: u32 = @intCast(row);
+
+        // Primary key: label_asym_id + label_seq_id + atom_name
+        const key = AtomLookupKey{
+            .label_asym_id = asym,
+            .label_seq_id = seq,
+            .atom_name = atom,
+        };
+        const gop = try lookup.getOrPut(key);
+        if (!gop.found_existing) {
+            gop.value_ptr.* = idx;
+        }
+
+        // Also register auth_seq_id entry for branched entities (label_seq_id == ".")
+        if (seq.len == 0) {
+            if (col_auth_seq) |c| {
+                const auth_seq = cif.asString(loop.val(row, c) orelse ".");
+                if (auth_seq.len > 0) {
+                    const auth_key = AtomLookupKey{
+                        .label_asym_id = asym,
+                        .label_seq_id = auth_seq,
+                        .atom_name = atom,
+                    };
+                    const auth_gop = try lookup.getOrPut(auth_key);
+                    if (!auth_gop.found_existing) {
+                        auth_gop.value_ptr.* = idx;
+                    }
+                }
+            }
+        }
+    }
+
+    return lookup;
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 const testing = std.testing;
@@ -413,4 +507,27 @@ test "insertion code splits residues with same seq_id" {
     // Second residue: GLY with ins_code='A'
     try testing.expectEqualStrings("GLY", mdl.residues.items[1].compIdSlice());
     try testing.expectEqual(@as(u8, 'A'), mdl.residues.items[1].ins_code);
+}
+
+test "buildAtomLookup resolves atom indices" {
+    const source = @embedFile("test_data/disulfide.cif");
+    var doc = cif.readString(testing.allocator, source) catch unreachable;
+    defer doc.deinit();
+    const block = &doc.blocks.items[0];
+
+    var mdl = try parseModel(testing.allocator, source);
+    defer mdl.deinit();
+
+    var lookup = try buildAtomLookup(testing.allocator, block);
+    defer lookup.deinit();
+
+    // SG of CYS residue 1 (seq_id=1) should be atom index 5
+    const sg1 = lookup.get(.{ .label_asym_id = "A", .label_seq_id = "1", .atom_name = "SG" });
+    try testing.expect(sg1 != null);
+    try testing.expectEqual(@as(u32, 5), sg1.?);
+
+    // SG of CYS residue 2 (seq_id=2) should be atom index 11
+    const sg2 = lookup.get(.{ .label_asym_id = "A", .label_seq_id = "2", .atom_name = "SG" });
+    try testing.expect(sg2 != null);
+    try testing.expectEqual(@as(u32, 11), sg2.?);
 }
