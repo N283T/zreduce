@@ -16,6 +16,7 @@ const Mover = mover_mod.Mover;
 const rotator = @import("rotator.zig");
 const flipper = @import("flipper.zig");
 const standard = @import("../place/standard.zig");
+const nucleotide = @import("../place/nucleotide.zig");
 const ccd_mod = @import("../ccd.zig");
 const ComponentDict = ccd_mod.ComponentDict;
 
@@ -35,7 +36,9 @@ fn trimName(name: *const [4]u8) []const u8 {
 
 /// Find a PlacementPlan for a given H atom name within a comp_id.
 fn findPlanForH(comp_id: []const u8, h_name: []const u8) ?*const standard.PlacementPlan {
-    const plans = standard.getPlans(comp_id) orelse return null;
+    const plans = standard.getPlans(comp_id) orelse
+        nucleotide.getPlans(comp_id) orelse
+        return null;
     for (plans) |*plan| {
         if (std.mem.eql(u8, trimName(&plan.h_name), h_name)) return plan;
     }
