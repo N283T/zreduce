@@ -40,6 +40,7 @@ const AtomSiteColumns = struct {
     id: ?usize = null,
     pdbx_PDB_ins_code: ?usize = null,
     label_entity_id: ?usize = null,
+    auth_seq_id: ?usize = null,
 };
 
 /// Compare a Chain's label_asym_id with a string from the CIF data.
@@ -123,6 +124,7 @@ pub fn parseModel(allocator: Allocator, source: []const u8) MmcifError!Model {
     cols.id = loop.findTag("_atom_site.id");
     cols.pdbx_PDB_ins_code = loop.findTag("_atom_site.pdbx_PDB_ins_code");
     cols.label_entity_id = loop.findTag("_atom_site.label_entity_id");
+    cols.auth_seq_id = loop.findTag("_atom_site.auth_seq_id");
 
     // Require x, y, z
     if (cols.cartn_x == null or cols.cartn_y == null or cols.cartn_z == null) {
@@ -139,6 +141,7 @@ pub fn parseModel(allocator: Allocator, source: []const u8) MmcifError!Model {
     var cur_seq_id: []const u8 = "";
     var cur_comp_id: []const u8 = "";
     var cur_ins_code: []const u8 = "";
+    var cur_auth_seq: []const u8 = "";
     var res_atom_start: u32 = 0;
     var in_chain = false;
     var in_residue = false;
@@ -158,6 +161,7 @@ pub fn parseModel(allocator: Allocator, source: []const u8) MmcifError!Model {
         const comp_id = if (cols.label_comp_id) |c| cif.asString(loop.val(row, c) orelse ".") else "";
         const label_asym = if (cols.label_asym_id) |c| cif.asString(loop.val(row, c) orelse ".") else "";
         const seq_id = if (cols.label_seq_id) |c| cif.asString(loop.val(row, c) orelse ".") else "";
+        const auth_seq = if (cols.auth_seq_id) |c| cif.asString(loop.val(row, c) orelse ".") else "";
         const auth_asym = if (cols.auth_asym_id) |c| cif.asString(loop.val(row, c) orelse ".") else "";
         const alt_loc_str = if (cols.label_alt_id) |c| loop.val(row, c) orelse "." else ".";
         const occ_str = if (cols.occupancy) |c| loop.val(row, c) orelse "1.0" else "1.0";
@@ -194,13 +198,15 @@ pub fn parseModel(allocator: Allocator, source: []const u8) MmcifError!Model {
             cur_seq_id = "";
             cur_comp_id = "";
             cur_ins_code = "";
+            cur_auth_seq = "";
         }
 
-        // Residue boundary detection (includes insertion code)
+        // Residue boundary detection (includes insertion code and auth_seq for non-polymer)
         const new_residue = !in_residue or
             !std.mem.eql(u8, seq_id, cur_seq_id) or
             !std.mem.eql(u8, comp_id, cur_comp_id) or
-            !std.mem.eql(u8, ins_code_str, cur_ins_code);
+            !std.mem.eql(u8, ins_code_str, cur_ins_code) or
+            !std.mem.eql(u8, auth_seq, cur_auth_seq);
 
         if (new_residue) {
             // Close previous residue
@@ -213,7 +219,10 @@ pub fn parseModel(allocator: Allocator, source: []const u8) MmcifError!Model {
             res_atom_start = @intCast(mdl.atoms.items.len);
             var new_res = Residue{};
             new_res.setCompId(comp_id);
-            new_res.seq_id = cif.value.asIntOr(i32, seq_id, 0);
+            const label_seq_int = cif.value.asIntOr(i32, seq_id, 0);
+            const auth_seq_int = cif.value.asIntOr(i32, auth_seq, 0);
+            new_res.seq_id = if (seq_id.len == 0) auth_seq_int else label_seq_int;
+            new_res.auth_seq_id = auth_seq_int;
             new_res.ins_code = if (ins_code_str.len > 0) ins_code_str[0] else ' ';
             new_res.chain_idx = @intCast(mdl.chains.items.len - 1);
             new_res.atom_start = res_atom_start;
@@ -222,6 +231,7 @@ pub fn parseModel(allocator: Allocator, source: []const u8) MmcifError!Model {
             cur_seq_id = seq_id;
             cur_comp_id = comp_id;
             cur_ins_code = ins_code_str;
+            cur_auth_seq = auth_seq;
             in_residue = true;
         }
 
@@ -1023,4 +1033,29 @@ test "parseStructConn skips non-covalent connections" {
     const a2 = mdl.atoms.items[bond.atom_2];
     try testing.expectEqualStrings("SG", a1.nameSlice());
     try testing.expectEqualStrings("SG", a2.nameSlice());
+}
+
+test "parseModel stores auth_seq_id and falls back" {
+    const source = @embedFile("test_data/entity_type.cif");
+    var mdl = try parseModel(testing.allocator, source);
+    defer mdl.deinit();
+
+    // Polymer ALA: label_seq_id=1, auth_seq_id=1
+    try testing.expectEqual(@as(i32, 1), mdl.residues.items[0].seq_id);
+    try testing.expectEqual(@as(i32, 1), mdl.residues.items[0].auth_seq_id);
+
+    // Non-polymer EDO: label_seq_id="." -> fallback to auth_seq_id=1
+    try testing.expectEqual(@as(i32, 1), mdl.residues.items[1].seq_id);
+    try testing.expectEqual(@as(i32, 1), mdl.residues.items[1].auth_seq_id);
+
+    // Water HOH: label_seq_id="." -> fallback to auth_seq_id=1
+    try testing.expectEqual(@as(i32, 1), mdl.residues.items[2].seq_id);
+
+    // Branched NAG residue 1: label_seq_id="." -> fallback to auth_seq_id=1
+    try testing.expectEqual(@as(i32, 1), mdl.residues.items[3].seq_id);
+    try testing.expectEqual(@as(i32, 1), mdl.residues.items[3].auth_seq_id);
+
+    // Branched NAG residue 2: label_seq_id="." -> fallback to auth_seq_id=2
+    try testing.expectEqual(@as(i32, 2), mdl.residues.items[4].seq_id);
+    try testing.expectEqual(@as(i32, 2), mdl.residues.items[4].auth_seq_id);
 }
