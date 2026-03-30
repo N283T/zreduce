@@ -483,7 +483,7 @@ test "generateMovers creates methyl rotator for ALA" {
     defer mdl.deinit();
 
     placer.applyChemistry(&mdl);
-    _ = try placer.addHydrogens(&mdl, null);
+    _ = try placer.addHydrogens(&mdl, null, null);
 
     const gen_result = try generateMovers(testing.allocator, &mdl, false, null);
     const movers = gen_result.movers;
@@ -506,7 +506,7 @@ test "generateMovers creates separate methyl rotators per altloc conformer" {
     defer mdl.deinit();
 
     placer.applyChemistry(&mdl);
-    _ = try placer.addHydrogens(&mdl, null);
+    _ = try placer.addHydrogens(&mdl, null, null);
 
     const gen_result = try generateMovers(testing.allocator, &mdl, false, null);
     const movers = gen_result.movers;
@@ -537,7 +537,7 @@ test "generateMovers total count for ALA" {
     defer mdl.deinit();
 
     placer.applyChemistry(&mdl);
-    _ = try placer.addHydrogens(&mdl, null);
+    _ = try placer.addHydrogens(&mdl, null, null);
 
     const gen_result = try generateMovers(testing.allocator, &mdl, false, null);
     const movers = gen_result.movers;
@@ -560,7 +560,7 @@ test "optimizer pipeline runs without error on ALA" {
     defer mdl.deinit();
 
     placer.applyChemistry(&mdl);
-    _ = try placer.addHydrogens(&mdl, null);
+    _ = try placer.addHydrogens(&mdl, null, null);
 
     const gen_result = try generateMovers(testing.allocator, &mdl, false, null);
     const movers = gen_result.movers;
@@ -582,7 +582,7 @@ test "methyl rotator controls 3 atoms" {
     defer mdl.deinit();
 
     placer.applyChemistry(&mdl);
-    _ = try placer.addHydrogens(&mdl, null);
+    _ = try placer.addHydrogens(&mdl, null, null);
 
     const gen_result = try generateMovers(testing.allocator, &mdl, false, null);
     const movers = gen_result.movers;
@@ -605,7 +605,7 @@ test "generateMovers creates amide flipper for ASN" {
     defer mdl.deinit();
 
     placer.applyChemistry(&mdl);
-    _ = try placer.addHydrogens(&mdl, null);
+    _ = try placer.addHydrogens(&mdl, null, null);
 
     const gen_result = try generateMovers(testing.allocator, &mdl, false, null);
     const movers = gen_result.movers;
@@ -627,7 +627,7 @@ test "no_flip suppresses flip movers" {
     defer mdl.deinit();
 
     placer.applyChemistry(&mdl);
-    _ = try placer.addHydrogens(&mdl, null);
+    _ = try placer.addHydrogens(&mdl, null, null);
 
     const gen_result = try generateMovers(testing.allocator, &mdl, true, null);
     const movers = gen_result.movers;
@@ -648,7 +648,7 @@ test "generateMovers creates His flipper" {
     defer mdl.deinit();
 
     placer.applyChemistry(&mdl);
-    _ = try placer.addHydrogens(&mdl, null);
+    _ = try placer.addHydrogens(&mdl, null, null);
 
     const gen_result = try generateMovers(testing.allocator, &mdl, false, null);
     const movers = gen_result.movers;

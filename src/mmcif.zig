@@ -389,7 +389,7 @@ pub fn isCovalentConnType(conn_type: []const u8) bool {
 
 /// Parse _struct_conn loop and add inter-residue bonds to Model.bonds.
 /// Sets bonded_inter_residue = true on both partner atoms.
-pub fn parseStructConn(allocator: Allocator, mdl: *Model, block: *const cif.Block) !void {
+pub fn parseStructConn(mdl: *Model, block: *const cif.Block, lookup: *const AtomLookup) !void {
     const sc = block.findLoop("_struct_conn.conn_type_id") orelse return;
 
     const col_type = sc.findTag("_struct_conn.conn_type_id") orelse return;
@@ -402,9 +402,6 @@ pub fn parseStructConn(allocator: Allocator, mdl: *Model, block: *const cif.Bloc
     const col_sym1 = sc.findTag("_struct_conn.ptnr1_symmetry");
     const col_sym2 = sc.findTag("_struct_conn.ptnr2_symmetry");
     const col_order = sc.findTag("_struct_conn.pdbx_value_order");
-
-    var lookup = try buildAtomLookup(allocator, block);
-    defer lookup.deinit();
 
     const nrows = sc.length();
     for (0..nrows) |row| {
@@ -449,7 +446,7 @@ pub fn parseStructConn(allocator: Allocator, mdl: *Model, block: *const cif.Bloc
 /// Sets bonded_inter_residue = true on the leaving atoms of each bond partner.
 /// If the leaving atom is not present in the model (e.g. the hydrogen was never
 /// modeled), the flag falls back to the bonding atom instead.
-pub fn parseBranchLinks(allocator: Allocator, mdl: *Model, block: *const cif.Block) !void {
+pub fn parseBranchLinks(allocator: Allocator, mdl: *Model, block: *const cif.Block, lookup: *const AtomLookup) !void {
     const loop = block.findLoop("_pdbx_entity_branch_link.link_id") orelse return;
 
     const col_entity = loop.findTag("_pdbx_entity_branch_link.entity_id") orelse return;
@@ -459,9 +456,6 @@ pub fn parseBranchLinks(allocator: Allocator, mdl: *Model, block: *const cif.Blo
     const col_atom2 = loop.findTag("_pdbx_entity_branch_link.atom_id_2") orelse return;
     const col_leaving1 = loop.findTag("_pdbx_entity_branch_link.leaving_atom_id_1") orelse return;
     const col_leaving2 = loop.findTag("_pdbx_entity_branch_link.leaving_atom_id_2") orelse return;
-
-    var lookup = try buildAtomLookup(allocator, block);
-    defer lookup.deinit();
 
     // Build entity_id -> [asym_id] mapping from mdl.chains
     var entity_to_asyms = std.StringHashMap(std.ArrayListUnmanaged([]const u8)).init(allocator);
@@ -923,7 +917,10 @@ test "parseStructConn disulfide bond" {
     var mdl = try parseModel(testing.allocator, source);
     defer mdl.deinit();
 
-    try parseStructConn(testing.allocator, &mdl, block);
+    var lookup = try buildAtomLookup(testing.allocator, block);
+    defer lookup.deinit();
+
+    try parseStructConn(&mdl, block, &lookup);
 
     // Should have 1 bond (disulfide SG-SG)
     try testing.expectEqual(@as(usize, 1), mdl.bonds.items.len);
@@ -944,7 +941,10 @@ test "parseBranchLinks glycan bond" {
     var mdl = try parseModel(testing.allocator, source);
     defer mdl.deinit();
 
-    try parseBranchLinks(testing.allocator, &mdl, block);
+    var lookup = try buildAtomLookup(testing.allocator, block);
+    defer lookup.deinit();
+
+    try parseBranchLinks(testing.allocator, &mdl, block, &lookup);
 
     // Should have 1 bond (NAG O4 — GAL C1)
     try testing.expectEqual(@as(usize, 1), mdl.bonds.items.len);

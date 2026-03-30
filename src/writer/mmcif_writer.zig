@@ -694,7 +694,7 @@ test "writeWithDocument preserves multiline pair and loop values" {
 
     var mdl = try mmcif.parseModel(testing.allocator, source);
     defer mdl.deinit();
-    _ = try place.addHydrogens(&mdl, null);
+    _ = try place.addHydrogens(&mdl, null, null);
 
     var buf: std.ArrayListUnmanaged(u8) = .empty;
     defer buf.deinit(testing.allocator);
@@ -724,7 +724,7 @@ test "writeWithDocument preserves added hydrogen altloc" {
     var mdl = try mmcif.parseModel(testing.allocator, source);
     defer mdl.deinit();
     place.applyChemistry(&mdl);
-    _ = try place.addHydrogens(&mdl, null);
+    _ = try place.addHydrogens(&mdl, null, null);
 
     var buf: std.ArrayListUnmanaged(u8) = .empty;
     defer buf.deinit(testing.allocator);

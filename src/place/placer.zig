@@ -53,10 +53,12 @@ fn collectAltlocs(mdl: *const Model, res: Residue) AltlocSet {
 
 /// Add hydrogens to the model.
 /// Uses hardcoded plans (standard AA, nucleotides, modified), CCD-derived plans as fallback.
+/// For CCD-derived placement, inline_dict is checked first, then ccd_dict (per-component fallback).
 /// New atoms are appended to the end of model.atoms. Each new atom carries its residue_idx.
 pub fn addHydrogens(
     mdl: *Model,
     ccd_dict: ?*const ComponentDict,
+    inline_dict: ?*const ComponentDict,
 ) !PlacementResult {
     var result = PlacementResult{};
 
@@ -112,11 +114,14 @@ pub fn addHydrogens(
             }
 
             result.n_residues += 1;
-        } else if (ccd_dict) |dict| {
-            if (dict.get(comp_id)) |component| {
+        } else {
+            // Try inline dict first, then fall back to external CCD (per-component fallback)
+            const component = if (inline_dict) |d| d.get(comp_id) else null;
+            const effective_component = component orelse if (ccd_dict) |d| d.get(comp_id) else null;
+            if (effective_component) |comp| {
                 const existing = try collectAtomNames(mdl.allocator, mdl, res);
                 defer mdl.allocator.free(existing);
-                const plans = try ccd_derive.derivePlans(mdl.allocator, &component, existing);
+                const plans = try ccd_derive.derivePlans(mdl.allocator, &comp, existing);
                 defer mdl.allocator.free(plans);
 
                 for (plans) |plan| {
@@ -729,7 +734,7 @@ test "place hydrogens on ALA" {
     const initial_count = mdl.atoms.items.len;
     try testing.expectEqual(@as(usize, 5), initial_count);
 
-    const result = try addHydrogens(&mdl, null);
+    const result = try addHydrogens(&mdl, null, null);
 
     // ALA should get H atoms added
     try testing.expect(result.n_placed > 0);
@@ -756,7 +761,7 @@ test "placed atoms have correct metadata" {
     var mdl = try mmcif.parseModel(testing.allocator, source);
     defer mdl.deinit();
 
-    _ = try addHydrogens(&mdl, null);
+    _ = try addHydrogens(&mdl, null, null);
 
     // Check that newly added atoms have correct flags
     for (mdl.atoms.items[5..]) |atom| {
@@ -771,7 +776,7 @@ test "PlacementResult tracks counts" {
     var mdl = try mmcif.parseModel(testing.allocator, source);
     defer mdl.deinit();
 
-    const result = try addHydrogens(&mdl, null);
+    const result = try addHydrogens(&mdl, null, null);
 
     // ALA has 5 plans; backbone H skipped on N-term but NH3+ (H1,H2,H3) added = 4+3=7
     try testing.expectEqual(@as(u32, 7), result.n_placed + result.n_skipped);
@@ -802,7 +807,7 @@ test "placed H inherits parent atom metadata" {
     defer mdl.deinit();
 
     // tiny.cif atoms have occupancy=1.0, b_factor=10.0, altloc=' '
-    _ = try addHydrogens(&mdl, null);
+    _ = try addHydrogens(&mdl, null, null);
 
     // All placed H atoms should inherit b_factor=10.0 from parent
     for (mdl.atoms.items) |atom| {
@@ -818,7 +823,7 @@ test "duplicate H atoms are not placed" {
     var mdl = try mmcif.parseModel(testing.allocator, source);
     defer mdl.deinit();
 
-    _ = try addHydrogens(&mdl, null);
+    _ = try addHydrogens(&mdl, null, null);
 
     // Count HA atoms — should be exactly 1 (the pre-existing one)
     var ha_count: u32 = 0;
@@ -858,7 +863,7 @@ test "PlacementResult counts duplicates as skipped" {
     var mdl = try mmcif.parseModel(testing.allocator, source);
     defer mdl.deinit();
 
-    const result = try addHydrogens(&mdl, null);
+    const result = try addHydrogens(&mdl, null, null);
 
     // HA was pre-existing so should be counted as skipped
     // Total plans attempted should still be the same as clean ALA
@@ -943,7 +948,7 @@ test "placement succeeds on stretched geometry with bond topology" {
     var mdl = try mmcif.parseModel(testing.allocator, source);
     defer mdl.deinit();
 
-    _ = try addHydrogens(&mdl, null);
+    _ = try addHydrogens(&mdl, null, null);
 
     // With bond topology, HA should be placed even though CB is >1.9A from CA
     // (HA placement type is hxr3 which needs the 3rd neighbor = CB)
@@ -999,7 +1004,7 @@ test "placed H atoms have correct flags from element table" {
     defer mdl.deinit();
 
     applyChemistry(&mdl);
-    _ = try addHydrogens(&mdl, null);
+    _ = try addHydrogens(&mdl, null, null);
 
     for (mdl.atoms.items) |atom| {
         if (atom.is_added and atom.is_hydrogen) {
@@ -1093,7 +1098,7 @@ test "OXT does not receive hydrogen atoms" {
     defer mdl.deinit();
 
     applyChemistry(&mdl);
-    _ = try addHydrogens(&mdl, null);
+    _ = try addHydrogens(&mdl, null, null);
 
     // No hydrogen should be bonded to OXT
     for (mdl.atoms.items) |atom| {
@@ -1135,7 +1140,7 @@ test "multi-conformer residue places H per conformer" {
     defer mdl.deinit();
 
     applyChemistry(&mdl);
-    const result = try addHydrogens(&mdl, null);
+    const result = try addHydrogens(&mdl, null, null);
 
     // Should place H for both conformers A and B
     var ha_a_count: u32 = 0;
@@ -1157,7 +1162,7 @@ test "conformer A and B H atoms have different positions" {
     defer mdl.deinit();
 
     applyChemistry(&mdl);
-    _ = try addHydrogens(&mdl, null);
+    _ = try addHydrogens(&mdl, null, null);
 
     var ha_a_pos: ?Vec3f32 = null;
     var ha_b_pos: ?Vec3f32 = null;
@@ -1179,7 +1184,7 @@ test "placed H atoms have correct mover_hint" {
     defer mdl.deinit();
 
     applyChemistry(&mdl);
-    _ = try addHydrogens(&mdl, null);
+    _ = try addHydrogens(&mdl, null, null);
 
     // ALA methyl H (HB1/HB2/HB3) should have rotate_methyl hint
     var methyl_count: u32 = 0;
@@ -1198,7 +1203,7 @@ test "chain break residue gets NH3+ placement" {
     defer mdl.deinit();
 
     applyChemistry(&mdl);
-    _ = try addHydrogens(&mdl, null);
+    _ = try addHydrogens(&mdl, null, null);
 
     // Second residue (seq_id 3, index 1) should be N-terminal after chain break
     // -> should have H1, H2, H3 (NH3+)
@@ -1243,7 +1248,7 @@ test "addHydrogens skips H on bonded_inter_residue atom" {
     mdl.atoms.items[5].flags.bonded_inter_residue = true;
     mdl.atoms.items[11].flags.bonded_inter_residue = true;
 
-    const result = try addHydrogens(&mdl, null);
+    const result = try addHydrogens(&mdl, null, null);
 
     // Verify no HG was placed on either CYS SG
     for (mdl.atoms.items) |atom| {

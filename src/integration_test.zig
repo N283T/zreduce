@@ -16,7 +16,7 @@ test "end-to-end: tiny.cif placement" {
     defer model.deinit();
 
     // Place hydrogens
-    const result = try place.addHydrogens(&model, null);
+    const result = try place.addHydrogens(&model, null, null);
 
     // ALA should get H atoms placed
     try testing.expect(result.n_placed > 0);
@@ -47,7 +47,7 @@ test "end-to-end: multi-chain placement" {
     const initial_atoms = model.atoms.items.len;
     try testing.expectEqual(@as(usize, 11), initial_atoms);
 
-    const result = try place.addHydrogens(&model, null);
+    const result = try place.addHydrogens(&model, null, null);
 
     // Should place H on multiple residues
     try testing.expect(result.n_residues >= 2);
@@ -99,7 +99,7 @@ test "end-to-end: H bond lengths are physical" {
     defer model.deinit();
 
     const initial_count = model.atoms.items.len;
-    _ = try place.addHydrogens(&model, null);
+    _ = try place.addHydrogens(&model, null, null);
 
     // Should have added at least one H
     try testing.expect(model.atoms.items.len > initial_count);
@@ -129,7 +129,7 @@ test "end-to-end: JSON log output" {
     var model = try mmcif.parseModel(testing.allocator, source);
     defer model.deinit();
 
-    const result = try place.addHydrogens(&model, null);
+    const result = try place.addHydrogens(&model, null, null);
     const n_added: u32 = @intCast(model.atoms.items.len - 5);
 
     var buf: std.ArrayListUnmanaged(u8) = .empty;
@@ -162,8 +162,10 @@ test "integration: disulfide SG-HG not placed" {
 
     // Full pipeline: chemistry first, then bond parsing, then placement
     place.applyChemistry(&mdl);
-    try mmcif.parseStructConn(testing.allocator, &mdl, block);
-    _ = try place.addHydrogens(&mdl, null);
+    var lookup = try mmcif.buildAtomLookup(testing.allocator, block);
+    defer lookup.deinit();
+    try mmcif.parseStructConn(&mdl, block, &lookup);
+    _ = try place.addHydrogens(&mdl, null, null);
 
     // Check no HG atom was placed on bonded SG atoms
     for (mdl.atoms.items) |atom| {
@@ -186,7 +188,7 @@ test "integration: inline dict used for placement" {
     defer if (inline_dict) |*d| d.deinit();
 
     place.applyChemistry(&mdl);
-    const result = try place.addHydrogens(&mdl, if (inline_dict) |*d| d else null);
+    const result = try place.addHydrogens(&mdl, null, if (inline_dict) |*d| d else null);
 
     // ALA should have hydrogens placed via inline dict
     try testing.expect(result.n_placed > 0);
@@ -198,7 +200,7 @@ test "end-to-end: HIS sentinel cleanup matches output and JSON count" {
     defer model.deinit();
 
     place.applyChemistry(&model);
-    _ = try place.addHydrogens(&model, null);
+    _ = try place.addHydrogens(&model, null, null);
 
     const gen_result = try optimize.generateMovers(testing.allocator, &model, false, null);
     const movers = gen_result.movers;
