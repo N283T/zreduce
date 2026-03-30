@@ -102,17 +102,21 @@ fn findBondedHeavyAtom(component: *const ccd.Component, h_idx: u16) ?u16 {
 
 /// Maximum valence for common elements; returns 0 for unknown/metals (skip check).
 fn maxValence(element_symbol: [2]u8) u8 {
-    return switch (element_symbol[0]) {
-        'H' => 1,
-        'C' => 4,
-        'N' => 3,
-        'O' => 2,
-        'S' => 2,
-        'P' => 3,
-        'F' => 1,
-        'B' => 3,
-        else => 0,
-    };
+    const e0 = element_symbol[0];
+    const e1 = element_symbol[1];
+    if (e0 == 'H' and e1 == ' ') return 1;
+    if (e0 == 'C' and e1 == ' ') return 4;
+    if (e0 == 'C' and e1 == 'l') return 1;
+    if (e0 == 'N' and e1 == ' ') return 3;
+    if (e0 == 'O' and e1 == ' ') return 2;
+    if (e0 == 'S' and e1 == ' ') return 2;
+    if (e0 == 'S' and e1 == 'e') return 2;
+    if (e0 == 'P' and e1 == ' ') return 3;
+    if (e0 == 'F' and e1 == ' ') return 1;
+    if (e0 == 'B' and e1 == 'r') return 1;
+    if (e0 == 'B' and e1 == ' ') return 3;
+    if (e0 == 'I' and e1 == ' ') return 1;
+    return 0;
 }
 
 /// Bond order as a valence contribution.
@@ -137,6 +141,7 @@ fn analyzeBonds(component: *const ccd.Component, atom_idx: u16, extra_bonds: u8)
         .hybridization = .unknown,
     };
 
+    var template_valence: u8 = 0;
     for (component.bonds) |bond| {
         const neighbor_idx: ?u16 = if (bond.atom_idx_1 == atom_idx)
             bond.atom_idx_2
@@ -147,6 +152,7 @@ fn analyzeBonds(component: *const ccd.Component, atom_idx: u16, extra_bonds: u8)
 
         if (neighbor_idx) |ni| {
             info.total_bonds += 1;
+            template_valence += bondValence(bond.order);
             if (component.atoms[ni].element_symbol[0] == 'H') {
                 info.h_neighbor_count += 1;
             } else {
@@ -165,13 +171,6 @@ fn analyzeBonds(component: *const ccd.Component, atom_idx: u16, extra_bonds: u8)
     info.total_bonds += extra_bonds;
     info.heavy_neighbor_count += extra_bonds;
 
-    // Compute template valence to check for overflow
-    var template_valence: u8 = 0;
-    for (component.bonds) |bond| {
-        if (bond.atom_idx_1 == atom_idx or bond.atom_idx_2 == atom_idx) {
-            template_valence += bondValence(bond.order);
-        }
-    }
     const total_valence = template_valence + extra_bonds;
     const max_val = maxValence(component.atoms[atom_idx].element_symbol);
 
@@ -533,6 +532,56 @@ test "findBondedHeavyAtom returns correct index" {
     };
     const result = findBondedHeavyAtom(&comp, 1);
     try testing.expectEqual(@as(?u16, 0), result);
+}
+
+test "analyzeBonds demotes sp to sp2 on valence overflow" {
+    // C1 has: C2 (triple) → template valence = 3, sp
+    // With 2 extra bonds → valence = 5 > 4 → demote sp→sp2
+    var atoms = [_]ccd.CompAtom{
+        .{ .name = .{ 'C', '1', ' ', ' ' }, .name_len = 2, .element_symbol = .{ 'C', ' ' } },
+        .{ .name = .{ 'C', '2', ' ', ' ' }, .name_len = 2, .element_symbol = .{ 'C', ' ' } },
+    };
+    var bonds = [_]ccd.CompBond{
+        .{ .atom_idx_1 = 0, .atom_idx_2 = 1, .order = .triple },
+    };
+    const comp = ccd.Component{
+        .comp_id = "TST",
+        .comp_type = "non-polymer",
+        .atoms = &atoms,
+        .bonds = &bonds,
+    };
+
+    const info_normal = analyzeBonds(&comp, 0, 0);
+    try testing.expectEqual(Hybridization.sp, info_normal.hybridization);
+
+    const info_overflow = analyzeBonds(&comp, 0, 2);
+    try testing.expectEqual(Hybridization.sp2, info_overflow.hybridization);
+}
+
+test "analyzeBonds demotes N sp2 to sp3 on valence overflow" {
+    // N has: C (double), C2 (single) → template valence = 3, sp2
+    // With 1 extra bond → valence = 4 > 3 → demote sp2→sp3
+    var atoms = [_]ccd.CompAtom{
+        .{ .name = .{ 'N', ' ', ' ', ' ' }, .name_len = 1, .element_symbol = .{ 'N', ' ' } },
+        .{ .name = .{ 'C', '1', ' ', ' ' }, .name_len = 2, .element_symbol = .{ 'C', ' ' } },
+        .{ .name = .{ 'C', '2', ' ', ' ' }, .name_len = 2, .element_symbol = .{ 'C', ' ' } },
+    };
+    var bonds = [_]ccd.CompBond{
+        .{ .atom_idx_1 = 0, .atom_idx_2 = 1, .order = .double },
+        .{ .atom_idx_1 = 0, .atom_idx_2 = 2, .order = .single },
+    };
+    const comp = ccd.Component{
+        .comp_id = "TST",
+        .comp_type = "non-polymer",
+        .atoms = &atoms,
+        .bonds = &bonds,
+    };
+
+    const info_normal = analyzeBonds(&comp, 0, 0);
+    try testing.expectEqual(Hybridization.sp2, info_normal.hybridization);
+
+    const info_overflow = analyzeBonds(&comp, 0, 1);
+    try testing.expectEqual(Hybridization.sp3, info_overflow.hybridization);
 }
 
 test "analyzeBonds demotes sp2 to sp3 on valence overflow" {

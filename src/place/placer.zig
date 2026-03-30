@@ -688,14 +688,22 @@ fn collectAtomNames(allocator: std.mem.Allocator, mdl: *const Model, res: Residu
 }
 
 /// Collect names of heavy atoms in this residue that carry an inter-residue bond.
-/// Used to inform CCD-derived hybridization about valence contributions from outside the template.
+/// Iterates mdl.bonds so that an atom involved in multiple inter-residue bonds
+/// produces multiple entries (one per bond), giving correct valence accounting.
 fn collectInterResidueAtomNames(allocator: std.mem.Allocator, mdl: *const Model, res: Residue) ![]const [4]u8 {
+    const bond_mod = @import("../model/bond.zig");
     var names = std.ArrayListUnmanaged([4]u8){};
     defer names.deinit(allocator);
-    const atoms = mdl.atoms.items[res.atom_start..res.atom_end];
-    for (atoms) |atom| {
-        if (atom.flags.bonded_inter_residue and !atom.is_hydrogen) {
-            try names.append(allocator, atom.name);
+    for (mdl.bonds.items) |bond| {
+        if (bond.source == bond_mod.BondSource.struct_conn or bond.source == bond_mod.BondSource.branch_link) {
+            if (bond.atom_1 >= res.atom_start and bond.atom_1 < res.atom_end) {
+                const atom = mdl.atoms.items[bond.atom_1];
+                if (!atom.is_hydrogen) try names.append(allocator, atom.name);
+            }
+            if (bond.atom_2 >= res.atom_start and bond.atom_2 < res.atom_end) {
+                const atom = mdl.atoms.items[bond.atom_2];
+                if (!atom.is_hydrogen) try names.append(allocator, atom.name);
+            }
         }
     }
     return try allocator.dupe([4]u8, names.items);
