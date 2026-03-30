@@ -107,13 +107,13 @@ pub fn processFile(allocator: Allocator, config: ProcessConfig) !ProcessResult {
     }
 
     if (!config.no_opt) {
-        // Movers use CCD for rotator atom resolution; inline-first fallback for consistency
-        const mover_dict = if (inline_dict) |*d| @as(?*const zreduce.ccd.ComponentDict, d) else config.dict;
+        // Movers use per-component fallback: inline_dict first, then external CCD dict.
         const gen_result = try zreduce.optimize.generateMovers(
             allocator,
             &mdl,
             config.no_flip,
-            mover_dict,
+            config.dict,
+            if (inline_dict) |*d| d else null,
         );
         movers = gen_result.movers;
         movers_owned = true;

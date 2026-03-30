@@ -159,10 +159,12 @@ pub fn applyChemistry(mdl: *Model) void {
         for (atoms) |*atom| {
             if (atom.is_hydrogen) continue;
 
-            // Apply standard residue annotations (replace)
+            // Apply standard residue annotations (replace flags, but preserve bonded_inter_residue)
             const has_std_ann = if (chemistry.getAnnotation(comp_id, atom.name)) |ann| blk: {
                 atom.element_type = ann.atom_type;
+                const keep_bonded = atom.flags.bonded_inter_residue;
                 atom.flags = ann.flags;
+                atom.flags.bonded_inter_residue = keep_bonded;
                 atom.vdw_radius = ann.atom_type.info().explicit_radius;
                 break :blk true;
             } else false;

@@ -202,7 +202,7 @@ test "end-to-end: HIS sentinel cleanup matches output and JSON count" {
     place.applyChemistry(&model);
     _ = try place.addHydrogens(&model, null, null);
 
-    const gen_result = try optimize.generateMovers(testing.allocator, &model, false, null);
+    const gen_result = try optimize.generateMovers(testing.allocator, &model, false, null, null);
     const movers = gen_result.movers;
     defer {
         for (0..movers.len) |i| @constCast(&movers[i]).deinit();
