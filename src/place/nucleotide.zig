@@ -316,7 +316,7 @@ test "DA has adenine base H atoms" {
     var has_h61 = false;
     var has_h62 = false;
     for (plans) |p| {
-        const h = std.mem.trimRight(u8, &p.h_name, " ");
+        const h = std.mem.trim(u8, &p.h_name, " ");
         if (std.mem.eql(u8, h, "H2")) has_h2 = true;
         if (std.mem.eql(u8, h, "H8")) has_h8 = true;
         if (std.mem.eql(u8, h, "H61")) has_h61 = true;
