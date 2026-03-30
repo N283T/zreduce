@@ -16,6 +16,7 @@ const Mover = mover_mod.Mover;
 const rotator = @import("rotator.zig");
 const flipper = @import("flipper.zig");
 const standard = @import("../place/standard.zig");
+const nucleotide = @import("../place/nucleotide.zig");
 const ccd_mod = @import("../ccd.zig");
 const ComponentDict = ccd_mod.ComponentDict;
 
@@ -35,7 +36,9 @@ fn trimName(name: *const [4]u8) []const u8 {
 
 /// Find a PlacementPlan for a given H atom name within a comp_id.
 fn findPlanForH(comp_id: []const u8, h_name: []const u8) ?*const standard.PlacementPlan {
-    const plans = standard.getPlans(comp_id) orelse return null;
+    const plans = standard.getPlans(comp_id) orelse
+        nucleotide.getPlans(comp_id) orelse
+        return null;
     for (plans) |*plan| {
         if (std.mem.eql(u8, trimName(&plan.h_name), h_name)) return plan;
     }
@@ -436,6 +439,29 @@ test "findPlanForH returns correct plan for ALA HB1" {
 test "findPlanForH returns null for unknown atom" {
     const plan = findPlanForH("ALA", "HX9");
     try testing.expect(plan == null);
+}
+
+test "findPlanForH finds nucleotide plans" {
+    // Aromatic C-H on adenine
+    const h8 = findPlanForH("DA", "H8");
+    try testing.expect(h8 != null);
+    try testing.expectEqualStrings("H8", trimName(&h8.?.h_name));
+
+    // OH rotator on RNA ribose
+    const ho2 = findPlanForH("A", "HO2'");
+    try testing.expect(ho2 != null);
+    try testing.expectEqual(standard.MoverHint.rotate, ho2.?.mover_hint);
+
+    // Thymine methyl
+    const h71 = findPlanForH("DT", "H71");
+    try testing.expect(h71 != null);
+    try testing.expectEqual(standard.MoverHint.rotate_methyl, h71.?.mover_hint);
+
+    // Standard AA still works
+    try testing.expect(findPlanForH("ALA", "HB1") != null);
+
+    // Unknown returns null
+    try testing.expect(findPlanForH("DA", "HX9") == null);
 }
 
 test "findAtomIdx prefers exact altloc and falls back to blank" {
