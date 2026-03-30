@@ -416,7 +416,11 @@ pub fn buildAtomLookup(allocator: Allocator, block: *const cif.Block) !AtomLooku
 
 // ── Struct Conn ───────────────────────────────────────────────────────────────
 
-/// Returns true if the connection type is covalent (covale* or disulf).
+/// Returns true if the connection type should be treated as a structural bond
+/// for hydrogen placement purposes: covale*, disulf, or metalc.
+/// metalc (metal coordination) bonds are included so that coordinating atoms
+/// (e.g. CYS SG, HIS NE2) receive the bonded_inter_residue flag and are
+/// excluded from hydrogen placement.
 pub fn isCovalentConnType(conn_type: []const u8) bool {
     var buf: [32]u8 = undefined;
     const len = @min(conn_type.len, buf.len);
@@ -424,7 +428,10 @@ pub fn isCovalentConnType(conn_type: []const u8) bool {
         buf[i] = std.ascii.toLower(conn_type[i]);
     }
     const lower = buf[0..len];
-    return std.mem.startsWith(u8, lower, "covale") or std.mem.eql(u8, lower, "disulf");
+    if (std.mem.startsWith(u8, lower, "covale")) return true;
+    if (std.mem.eql(u8, lower, "disulf")) return true;
+    if (std.mem.eql(u8, lower, "metalc")) return true; // metal coordination bonds
+    return false;
 }
 
 /// Parse _struct_conn loop and add inter-residue bonds to Model.bonds.
@@ -1075,11 +1082,13 @@ test "isCovalentConnType accepts covalent types" {
     try testing.expect(isCovalentConnType("COVALE"));
     try testing.expect(isCovalentConnType("covale_base"));
     try testing.expect(isCovalentConnType("covale_phosph"));
+    try testing.expect(isCovalentConnType("metalc"));
+    try testing.expect(isCovalentConnType("METALC"));
+    try testing.expect(isCovalentConnType("Metalc"));
 }
 
 test "isCovalentConnType rejects non-covalent types" {
     try testing.expect(!isCovalentConnType("hydrog"));
-    try testing.expect(!isCovalentConnType("metalc"));
     try testing.expect(!isCovalentConnType("mismat"));
     try testing.expect(!isCovalentConnType("saltbr"));
     try testing.expect(!isCovalentConnType(""));
