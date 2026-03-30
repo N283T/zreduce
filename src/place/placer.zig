@@ -121,7 +121,9 @@ pub fn addHydrogens(
             if (effective_component) |comp| {
                 const existing = try collectAtomNames(mdl.allocator, mdl, res);
                 defer mdl.allocator.free(existing);
-                const plans = try ccd_derive.derivePlans(mdl.allocator, &comp, existing);
+                const ir_atoms = try collectInterResidueAtomNames(mdl.allocator, mdl, res);
+                defer mdl.allocator.free(ir_atoms);
+                const plans = try ccd_derive.derivePlans(mdl.allocator, &comp, existing, ir_atoms);
                 defer mdl.allocator.free(plans);
 
                 for (plans) |plan| {
@@ -683,6 +685,28 @@ fn collectAtomNames(allocator: std.mem.Allocator, mdl: *const Model, res: Residu
         result[i] = a.name;
     }
     return result;
+}
+
+/// Collect names of heavy atoms in this residue that carry an inter-residue bond.
+/// Iterates mdl.bonds so that an atom involved in multiple inter-residue bonds
+/// produces multiple entries (one per bond), giving correct valence accounting.
+fn collectInterResidueAtomNames(allocator: std.mem.Allocator, mdl: *const Model, res: Residue) ![]const [4]u8 {
+    const bond_mod = @import("../model/bond.zig");
+    var names = std.ArrayListUnmanaged([4]u8){};
+    defer names.deinit(allocator);
+    for (mdl.bonds.items) |bond| {
+        if (bond.source == bond_mod.BondSource.struct_conn or bond.source == bond_mod.BondSource.branch_link) {
+            if (bond.atom_1 >= res.atom_start and bond.atom_1 < res.atom_end) {
+                const atom = mdl.atoms.items[bond.atom_1];
+                if (!atom.is_hydrogen) try names.append(allocator, atom.name);
+            }
+            if (bond.atom_2 >= res.atom_start and bond.atom_2 < res.atom_end) {
+                const atom = mdl.atoms.items[bond.atom_2];
+                if (!atom.is_hydrogen) try names.append(allocator, atom.name);
+            }
+        }
+    }
+    return try allocator.dupe([4]u8, names.items);
 }
 
 /// Append a new hydrogen atom to the model.
