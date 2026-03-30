@@ -1,0 +1,37 @@
+data_BRANCH
+#
+loop_
+_atom_site.group_PDB
+_atom_site.id
+_atom_site.type_symbol
+_atom_site.label_atom_id
+_atom_site.label_comp_id
+_atom_site.label_asym_id
+_atom_site.label_entity_id
+_atom_site.label_seq_id
+_atom_site.Cartn_x
+_atom_site.Cartn_y
+_atom_site.Cartn_z
+_atom_site.occupancy
+_atom_site.B_iso_or_equiv
+_atom_site.auth_seq_id
+_atom_site.label_alt_id
+_atom_site.pdbx_PDB_ins_code
+HETATM 1  C C1  NAG B 2 . 1.0 0.0 0.0 1.0 0.0 1 . .
+HETATM 2  O O4  NAG B 2 . 2.0 0.0 0.0 1.0 0.0 1 . .
+HETATM 3  C C1  GAL B 2 . 3.0 0.0 0.0 1.0 0.0 2 . .
+HETATM 4  O O1  GAL B 2 . 4.0 0.0 0.0 1.0 0.0 2 . .
+#
+loop_
+_pdbx_entity_branch_link.link_id
+_pdbx_entity_branch_link.entity_id
+_pdbx_entity_branch_link.entity_branch_list_num_1
+_pdbx_entity_branch_link.comp_id_1
+_pdbx_entity_branch_link.atom_id_1
+_pdbx_entity_branch_link.leaving_atom_id_1
+_pdbx_entity_branch_link.entity_branch_list_num_2
+_pdbx_entity_branch_link.comp_id_2
+_pdbx_entity_branch_link.atom_id_2
+_pdbx_entity_branch_link.leaving_atom_id_2
+1 2 1 NAG O4 HO4 2 GAL C1 O1
+#
