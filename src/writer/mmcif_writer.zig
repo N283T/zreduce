@@ -484,8 +484,8 @@ fn writeAtomSite(writer: anytype, model: *const Model) !void {
 fn writeAtomRow(writer: anytype, model: *const Model, atom: Atom, res: Residue, serial: u32) !void {
     const chain = model.chains.items[res.chain_idx];
     const group = switch (res.entity_type) {
-        .water, .non_polymer => "HETATM",
-        else => "ATOM",
+        .water, .non_polymer, .branched => "HETATM",
+        .polymer, .unknown => "ATOM",
     };
     const elem_str = elementSymbol(atom.element_type);
     try writer.print(

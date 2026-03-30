@@ -1115,3 +1115,24 @@ test "parseModel sets entity_type from _entity loop" {
     try testing.expectEqual(EntityType.branched, mdl.residues.items[3].entity_type);
     try testing.expectEqual(EntityType.branched, mdl.residues.items[4].entity_type);
 }
+
+test "parseModel without _entity loop keeps entity_type unknown" {
+    const source = @embedFile("test_data/tiny.cif");
+    var mdl = try parseModel(testing.allocator, source);
+    defer mdl.deinit();
+
+    // tiny.cif has no _entity loop — all residues should stay .unknown
+    for (mdl.residues.items) |res| {
+        try testing.expectEqual(EntityType.unknown, res.entity_type);
+    }
+}
+
+test "entityTypeFromString maps correctly" {
+    try testing.expectEqual(EntityType.polymer, entityTypeFromString("polymer"));
+    try testing.expectEqual(EntityType.polymer, entityTypeFromString("POLYMER"));
+    try testing.expectEqual(EntityType.non_polymer, entityTypeFromString("non-polymer"));
+    try testing.expectEqual(EntityType.branched, entityTypeFromString("branched"));
+    try testing.expectEqual(EntityType.water, entityTypeFromString("water"));
+    try testing.expectEqual(EntityType.unknown, entityTypeFromString("macrolide"));
+    try testing.expectEqual(EntityType.unknown, entityTypeFromString(""));
+}
