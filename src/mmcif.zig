@@ -442,6 +442,100 @@ pub fn parseStructConn(allocator: Allocator, mdl: *Model, block: *const cif.Bloc
     }
 }
 
+// ── Branch Links ─────────────────────────────────────────────────────────────
+
+/// Parse _pdbx_entity_branch_link loop and add branch bonds to Model.bonds.
+/// Sets bonded_inter_residue = true on the leaving atoms of each bond partner.
+/// If the leaving atom is not present in the model (e.g. the hydrogen was never
+/// modeled), the flag falls back to the bonding atom instead.
+pub fn parseBranchLinks(allocator: Allocator, mdl: *Model, block: *const cif.Block) !void {
+    const loop = block.findLoop("_pdbx_entity_branch_link.link_id") orelse return;
+
+    const col_entity = loop.findTag("_pdbx_entity_branch_link.entity_id") orelse return;
+    const col_num1 = loop.findTag("_pdbx_entity_branch_link.entity_branch_list_num_1") orelse return;
+    const col_num2 = loop.findTag("_pdbx_entity_branch_link.entity_branch_list_num_2") orelse return;
+    const col_atom1 = loop.findTag("_pdbx_entity_branch_link.atom_id_1") orelse return;
+    const col_atom2 = loop.findTag("_pdbx_entity_branch_link.atom_id_2") orelse return;
+    const col_leaving1 = loop.findTag("_pdbx_entity_branch_link.leaving_atom_id_1") orelse return;
+    const col_leaving2 = loop.findTag("_pdbx_entity_branch_link.leaving_atom_id_2") orelse return;
+
+    var lookup = try buildAtomLookup(allocator, block);
+    defer lookup.deinit();
+
+    // Build entity_id -> [asym_id] mapping from mdl.chains
+    var entity_to_asyms = std.StringHashMap(std.ArrayListUnmanaged([]const u8)).init(allocator);
+    defer {
+        var it = entity_to_asyms.valueIterator();
+        while (it.next()) |list| {
+            list.deinit(allocator);
+        }
+        entity_to_asyms.deinit();
+    }
+
+    for (mdl.chains.items) |*chain| {
+        const entity_id = chain.entityIdSlice();
+        const asym_id = chain.labelSlice();
+        if (entity_id.len == 0) continue;
+
+        const gop = try entity_to_asyms.getOrPut(entity_id);
+        if (!gop.found_existing) {
+            gop.value_ptr.* = .empty;
+        }
+        try gop.value_ptr.append(allocator, asym_id);
+    }
+
+    const nrows = loop.length();
+    for (0..nrows) |row| {
+        const entity_id = cif.asString(loop.val(row, col_entity) orelse continue);
+        const num1_str = cif.asString(loop.val(row, col_num1) orelse continue);
+        const num2_str = cif.asString(loop.val(row, col_num2) orelse continue);
+        const atom_name1 = cif.asString(loop.val(row, col_atom1) orelse continue);
+        const atom_name2 = cif.asString(loop.val(row, col_atom2) orelse continue);
+        const leaving_name1 = cif.asString(loop.val(row, col_leaving1) orelse continue);
+        const leaving_name2 = cif.asString(loop.val(row, col_leaving2) orelse continue);
+
+        const asyms = entity_to_asyms.get(entity_id) orelse continue;
+
+        for (asyms.items) |asym_id| {
+            // Resolve bonding atoms using num (= auth_seq_id for branched entities)
+            const idx1 = lookup.get(.{
+                .label_asym_id = asym_id,
+                .label_seq_id = num1_str,
+                .atom_name = atom_name1,
+            }) orelse continue;
+            const idx2 = lookup.get(.{
+                .label_asym_id = asym_id,
+                .label_seq_id = num2_str,
+                .atom_name = atom_name2,
+            }) orelse continue;
+
+            try mdl.bonds.append(mdl.allocator, bond_mod.Bond{
+                .atom_1 = idx1,
+                .atom_2 = idx2,
+                .order = .single,
+                .source = .branch_link,
+            });
+
+            // Set bonded_inter_residue on leaving atoms.
+            // If the leaving atom is absent (e.g. hydrogen not in model),
+            // fall back to the bonding atom.
+            const leaving_idx1 = lookup.get(.{
+                .label_asym_id = asym_id,
+                .label_seq_id = num1_str,
+                .atom_name = leaving_name1,
+            }) orelse idx1;
+            mdl.atoms.items[leaving_idx1].flags.bonded_inter_residue = true;
+
+            const leaving_idx2 = lookup.get(.{
+                .label_asym_id = asym_id,
+                .label_seq_id = num2_str,
+                .atom_name = leaving_name2,
+            }) orelse idx2;
+            mdl.atoms.items[leaving_idx2].flags.bonded_inter_residue = true;
+        }
+    }
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 const testing = std.testing;
@@ -621,4 +715,27 @@ test "parseStructConn disulfide bond" {
     // Both SG atoms should have bonded_inter_residue flag
     try testing.expect(mdl.atoms.items[bond.atom_1].flags.bonded_inter_residue);
     try testing.expect(mdl.atoms.items[bond.atom_2].flags.bonded_inter_residue);
+}
+
+test "parseBranchLinks glycan bond" {
+    const source = @embedFile("test_data/branch_link.cif");
+    var doc = cif.readString(testing.allocator, source) catch unreachable;
+    defer doc.deinit();
+    const block = &doc.blocks.items[0];
+
+    var mdl = try parseModel(testing.allocator, source);
+    defer mdl.deinit();
+
+    try parseBranchLinks(testing.allocator, &mdl, block);
+
+    // Should have 1 bond (NAG O4 — GAL C1)
+    try testing.expectEqual(@as(usize, 1), mdl.bonds.items.len);
+    const bond = mdl.bonds.items[0];
+    try testing.expectEqual(bond_mod.BondSource.branch_link, bond.source);
+
+    // Leaving atoms should have bonded_inter_residue flag.
+    // leaving_atom_id_1=HO4 is absent in model → falls back to bonding atom O4 (index 1).
+    // leaving_atom_id_2=O1 is present at index 3.
+    try testing.expect(mdl.atoms.items[1].flags.bonded_inter_residue); // NAG O4 (leaving fallback)
+    try testing.expect(mdl.atoms.items[3].flags.bonded_inter_residue); // GAL O1 (leaving)
 }
