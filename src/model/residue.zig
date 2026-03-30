@@ -2,13 +2,14 @@
 
 const std = @import("std");
 
-pub const EntityType = enum { polymer, non_polymer, water, unknown };
+pub const EntityType = enum { polymer, non_polymer, branched, water, unknown };
 
 pub const Residue = struct {
     comp_id: [3]u8 = .{ ' ', ' ', ' ' },
     comp_id_len: u3 = 0,
     chain_idx: u16 = 0,
     seq_id: i32 = 0,
+    auth_seq_id: i32 = 0,
     ins_code: u8 = ' ',
     atom_start: u32 = 0,
     atom_end: u32 = 0,
@@ -43,4 +44,14 @@ test "Residue setCompId and compIdSlice" {
 test "Residue atomCount" {
     const r = Residue{ .atom_start = 10, .atom_end = 18 };
     try std.testing.expectEqual(@as(u32, 8), r.atomCount());
+}
+
+test "EntityType has branched variant" {
+    const e: EntityType = .branched;
+    try std.testing.expect(e == .branched);
+}
+
+test "Residue auth_seq_id default" {
+    const r = Residue{};
+    try std.testing.expectEqual(@as(i32, 0), r.auth_seq_id);
 }
