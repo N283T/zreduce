@@ -151,6 +151,47 @@ test "end-to-end: JSON log output" {
     _ = result;
 }
 
+test "integration: disulfide SG-HG not placed" {
+    const source = @embedFile("test_data/disulfide.cif");
+    var doc = cif.readString(testing.allocator, source) catch unreachable;
+    defer doc.deinit();
+    const block = &doc.blocks.items[0];
+
+    var mdl = try mmcif.parseModel(testing.allocator, source);
+    defer mdl.deinit();
+
+    // Full pipeline: chemistry first, then bond parsing, then placement
+    place.applyChemistry(&mdl);
+    try mmcif.parseStructConn(testing.allocator, &mdl, block);
+    _ = try place.addHydrogens(&mdl, null);
+
+    // Check no HG atom was placed on bonded SG atoms
+    for (mdl.atoms.items) |atom| {
+        if (atom.is_added and std.mem.eql(u8, atom.nameSlice(), "HG")) {
+            try testing.expect(false); // unexpected HG placement on disulfide SG
+        }
+    }
+}
+
+test "integration: inline dict used for placement" {
+    const source = @embedFile("test_data/inline_comp.cif");
+    var doc = cif.readString(testing.allocator, source) catch unreachable;
+    defer doc.deinit();
+    const block = &doc.blocks.items[0];
+
+    var mdl = try mmcif.parseModel(testing.allocator, source);
+    defer mdl.deinit();
+
+    var inline_dict = try mmcif.parseInlineComponents(testing.allocator, block);
+    defer if (inline_dict) |*d| d.deinit();
+
+    place.applyChemistry(&mdl);
+    const result = try place.addHydrogens(&mdl, if (inline_dict) |*d| d else null);
+
+    // ALA should have hydrogens placed via inline dict
+    try testing.expect(result.n_placed > 0);
+}
+
 test "end-to-end: HIS sentinel cleanup matches output and JSON count" {
     const source = @embedFile("test_data/his.cif");
     var model = try mmcif.parseModel(testing.allocator, source);
