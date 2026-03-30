@@ -37,6 +37,7 @@ const AtomSiteColumns = struct {
     group_pdb: ?usize = null,
     id: ?usize = null,
     pdbx_PDB_ins_code: ?usize = null,
+    label_entity_id: ?usize = null,
 };
 
 /// Compare a Chain's label_asym_id with a string from the CIF data.
@@ -119,6 +120,7 @@ pub fn parseModel(allocator: Allocator, source: []const u8) MmcifError!Model {
     cols.group_pdb = loop.findTag("_atom_site.group_PDB");
     cols.id = loop.findTag("_atom_site.id");
     cols.pdbx_PDB_ins_code = loop.findTag("_atom_site.pdbx_PDB_ins_code");
+    cols.label_entity_id = loop.findTag("_atom_site.label_entity_id");
 
     // Require x, y, z
     if (cols.cartn_x == null or cols.cartn_y == null or cols.cartn_z == null) {
@@ -180,6 +182,8 @@ pub fn parseModel(allocator: Allocator, source: []const u8) MmcifError!Model {
             var new_chain = Chain{};
             new_chain.setLabelAsymId(label_asym);
             new_chain.setAuthAsymId(auth_asym);
+            const entity_id_str = if (cols.label_entity_id) |c| cif.asString(loop.val(row, c) orelse ".") else "";
+            new_chain.setEntityId(entity_id_str);
             new_chain.residue_start = @intCast(mdl.residues.items.len);
             try mdl.chains.append(mdl.allocator, new_chain);
             cur_label_asym_id = label_asym;
