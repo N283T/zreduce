@@ -6,6 +6,7 @@ const Allocator = std.mem.Allocator;
 const cif = @import("cif.zig");
 const model_mod = @import("model.zig");
 const element = @import("element.zig");
+const bond_mod = @import("model/bond.zig");
 
 const Model = model_mod.Model;
 const Atom = model_mod.Atom;
@@ -372,6 +373,75 @@ pub fn buildAtomLookup(allocator: Allocator, block: *const cif.Block) !AtomLooku
     return lookup;
 }
 
+// ── Struct Conn ───────────────────────────────────────────────────────────────
+
+/// Returns true if the connection type is covalent (covale* or disulf).
+pub fn isCovalentConnType(conn_type: []const u8) bool {
+    var buf: [32]u8 = undefined;
+    const len = @min(conn_type.len, buf.len);
+    for (0..len) |i| {
+        buf[i] = std.ascii.toLower(conn_type[i]);
+    }
+    const lower = buf[0..len];
+    return std.mem.startsWith(u8, lower, "covale") or std.mem.eql(u8, lower, "disulf");
+}
+
+/// Parse _struct_conn loop and add inter-residue bonds to Model.bonds.
+/// Sets bonded_inter_residue = true on both partner atoms.
+pub fn parseStructConn(allocator: Allocator, mdl: *Model, block: *const cif.Block) !void {
+    const sc = block.findLoop("_struct_conn.conn_type_id") orelse return;
+
+    const col_type = sc.findTag("_struct_conn.conn_type_id") orelse return;
+    const col_asym1 = sc.findTag("_struct_conn.ptnr1_label_asym_id") orelse return;
+    const col_seq1 = sc.findTag("_struct_conn.ptnr1_label_seq_id") orelse return;
+    const col_atom1 = sc.findTag("_struct_conn.ptnr1_label_atom_id") orelse return;
+    const col_asym2 = sc.findTag("_struct_conn.ptnr2_label_asym_id") orelse return;
+    const col_seq2 = sc.findTag("_struct_conn.ptnr2_label_seq_id") orelse return;
+    const col_atom2 = sc.findTag("_struct_conn.ptnr2_label_atom_id") orelse return;
+    const col_sym1 = sc.findTag("_struct_conn.ptnr1_symmetry");
+    const col_sym2 = sc.findTag("_struct_conn.ptnr2_symmetry");
+    const col_order = sc.findTag("_struct_conn.pdbx_value_order");
+
+    var lookup = try buildAtomLookup(allocator, block);
+    defer lookup.deinit();
+
+    const nrows = sc.length();
+    for (0..nrows) |row| {
+        const conn_type = cif.asString(sc.val(row, col_type) orelse continue);
+        if (!isCovalentConnType(conn_type)) continue;
+
+        // Skip inter-symmetry bonds
+        if (col_sym1 != null and col_sym2 != null) {
+            const sym1 = cif.asString(sc.val(row, col_sym1.?) orelse ".");
+            const sym2 = cif.asString(sc.val(row, col_sym2.?) orelse ".");
+            if (sym1.len > 0 and sym2.len > 0 and !std.mem.eql(u8, sym1, sym2)) continue;
+        }
+
+        const asym1 = cif.asString(sc.val(row, col_asym1) orelse continue);
+        const seq1 = cif.asString(sc.val(row, col_seq1) orelse continue);
+        const atom1 = cif.asString(sc.val(row, col_atom1) orelse continue);
+        const asym2 = cif.asString(sc.val(row, col_asym2) orelse continue);
+        const seq2 = cif.asString(sc.val(row, col_seq2) orelse continue);
+        const atom2 = cif.asString(sc.val(row, col_atom2) orelse continue);
+
+        const idx1 = lookup.get(.{ .label_asym_id = asym1, .label_seq_id = seq1, .atom_name = atom1 }) orelse continue;
+        const idx2 = lookup.get(.{ .label_asym_id = asym2, .label_seq_id = seq2, .atom_name = atom2 }) orelse continue;
+
+        const order_str = if (col_order) |c| cif.asString(sc.val(row, c) orelse ".") else "";
+        const order = bond_mod.BondOrder.fromString(order_str);
+
+        try mdl.bonds.append(mdl.allocator, bond_mod.Bond{
+            .atom_1 = idx1,
+            .atom_2 = idx2,
+            .order = order,
+            .source = .struct_conn,
+        });
+
+        mdl.atoms.items[idx1].flags.bonded_inter_residue = true;
+        mdl.atoms.items[idx2].flags.bonded_inter_residue = true;
+    }
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 const testing = std.testing;
@@ -530,4 +600,25 @@ test "buildAtomLookup resolves atom indices" {
     const sg2 = lookup.get(.{ .label_asym_id = "A", .label_seq_id = "2", .atom_name = "SG" });
     try testing.expect(sg2 != null);
     try testing.expectEqual(@as(u32, 11), sg2.?);
+}
+
+test "parseStructConn disulfide bond" {
+    const source = @embedFile("test_data/disulfide.cif");
+    var doc = cif.readString(testing.allocator, source) catch unreachable;
+    defer doc.deinit();
+    const block = &doc.blocks.items[0];
+
+    var mdl = try parseModel(testing.allocator, source);
+    defer mdl.deinit();
+
+    try parseStructConn(testing.allocator, &mdl, block);
+
+    // Should have 1 bond (disulfide SG-SG)
+    try testing.expectEqual(@as(usize, 1), mdl.bonds.items.len);
+    const bond = mdl.bonds.items[0];
+    try testing.expectEqual(bond_mod.BondSource.struct_conn, bond.source);
+
+    // Both SG atoms should have bonded_inter_residue flag
+    try testing.expect(mdl.atoms.items[bond.atom_1].flags.bonded_inter_residue);
+    try testing.expect(mdl.atoms.items[bond.atom_2].flags.bonded_inter_residue);
 }
