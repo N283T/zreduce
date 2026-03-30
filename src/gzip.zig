@@ -7,7 +7,7 @@
 const std = @import("std");
 const c = @cImport(@cInclude("zlib.h"));
 
-pub const GzipError = error{ GzipOpenFailed, GzipReadFailed, FileTooLarge, OutOfMemory };
+pub const GzipError = error{ GzipOpenFailed, GzipReadFailed, GzipCorruptData, FileTooLarge, OutOfMemory };
 
 const CHUNK_SIZE = 64 * 1024; // 64 KB read chunks
 
@@ -48,8 +48,7 @@ pub fn readGzipLimited(allocator: std.mem.Allocator, path: []const u8, max_size:
     const close_result = c.gzclose(gz);
     gz_closed = true;
     if (close_result != c.Z_OK) {
-        buf.deinit(allocator);
-        return error.GzipReadFailed;
+        return error.GzipCorruptData; // errdefer handles buf.deinit
     }
     return buf.toOwnedSlice(allocator);
 }
@@ -107,4 +106,36 @@ test "readGzipLimited returns FileTooLarge when limit exceeded" {
     // Limit to 5 bytes — "Hello world\n" is 12 bytes, should fail
     const result = readGzipLimited(allocator, tmp_path, 5);
     try std.testing.expectError(error.FileTooLarge, result);
+}
+
+test "readGzip reads non-gzip file transparently" {
+    // zlib's gzopen transparently reads non-gzip files as raw data.
+    // This is acceptable — a plain .cif named .cif.gz still works.
+    const allocator = std.testing.allocator;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    try tmp_dir.dir.writeFile(.{ .sub_path = "plain.gz", .data = "raw content" });
+
+    const tmp_path = try tmp_dir.dir.realpathAlloc(allocator, "plain.gz");
+    defer allocator.free(tmp_path);
+
+    const content = try readGzip(allocator, tmp_path);
+    defer allocator.free(content);
+    try std.testing.expectEqualStrings("raw content", content);
+}
+
+test "readGzip returns empty slice for empty file" {
+    const allocator = std.testing.allocator;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    try tmp_dir.dir.writeFile(.{ .sub_path = "empty.gz", .data = "" });
+
+    const tmp_path = try tmp_dir.dir.realpathAlloc(allocator, "empty.gz");
+    defer allocator.free(tmp_path);
+
+    const content = try readGzip(allocator, tmp_path);
+    defer allocator.free(content);
+    try std.testing.expectEqual(@as(usize, 0), content.len);
 }

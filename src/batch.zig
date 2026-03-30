@@ -125,7 +125,12 @@ fn processFileInBatch(
     const input_path = try std.fs.path.join(allocator, &.{ input_dir, filename });
     defer allocator.free(input_path);
 
-    const output_path = try std.fs.path.join(allocator, &.{ output_dir, filename });
+    // Strip .gz extension from output filename (output is always plain CIF)
+    const out_name = if (std.mem.endsWith(u8, filename, ".gz"))
+        filename[0 .. filename.len - 3]
+    else
+        filename;
+    const output_path = try std.fs.path.join(allocator, &.{ output_dir, out_name });
     defer allocator.free(output_path);
 
     const proc_config = run_mod.ProcessConfig{
