@@ -10,7 +10,7 @@ pub const AtomFlags = packed struct {
     negative: bool = false,
     metallic: bool = false,
     hb_only_dummy: bool = false,
-    _padding: u1 = 0,
+    bonded_inter_residue: bool = false,
 };
 
 pub fn mergeFlags(a: AtomFlags, b: AtomFlags) AtomFlags {
@@ -222,4 +222,18 @@ test "mergeFlags combines flags via OR" {
     try std.testing.expect(merged.acceptor);
     try std.testing.expect(merged.negative);
     try std.testing.expect(!merged.aromatic);
+}
+
+test "bonded_inter_residue flag" {
+    var flags = AtomFlags{};
+    try std.testing.expect(!flags.bonded_inter_residue);
+    flags.bonded_inter_residue = true;
+    try std.testing.expect(flags.bonded_inter_residue);
+
+    // mergeFlags preserves bonded_inter_residue
+    const a = AtomFlags{ .donor = true };
+    const b = AtomFlags{ .bonded_inter_residue = true };
+    const merged = mergeFlags(a, b);
+    try std.testing.expect(merged.donor);
+    try std.testing.expect(merged.bonded_inter_residue);
 }

@@ -67,13 +67,29 @@ pub fn processFile(allocator: Allocator, config: ProcessConfig) !ProcessResult {
     var mdl = try zreduce.mmcif.parseModel(allocator, source);
     defer mdl.deinit();
 
+    // 3a. Parse inline component dictionary (takes priority over external CCD per component)
+    const block = &doc.blocks.items[0];
+    var inline_dict = try zreduce.mmcif.parseInlineComponents(allocator, block);
+    defer if (inline_dict) |*d| d.deinit();
+
     // 4. Apply chemistry annotations
     zreduce.place.applyChemistry(&mdl);
 
-    // 5. Place hydrogens
+    // Build atom lookup once for bond parsing
+    var atom_lookup = try zreduce.mmcif.buildAtomLookup(allocator, block);
+    defer atom_lookup.deinit();
+
+    // 4a. Parse inter-residue bonds AFTER applyChemistry (which replaces atom.flags)
+    try zreduce.mmcif.parseStructConn(&mdl, block, &atom_lookup);
+
+    // 4b. Parse branch links AFTER applyChemistry
+    try zreduce.mmcif.parseBranchLinks(allocator, &mdl, block, &atom_lookup);
+
+    // 5. Place hydrogens (per-component fallback: inline dict first, then external CCD)
     const place_result = try zreduce.place.addHydrogens(
         &mdl,
         config.dict,
+        if (inline_dict) |*d| d else null,
     );
 
     var result = ProcessResult{
@@ -91,11 +107,13 @@ pub fn processFile(allocator: Allocator, config: ProcessConfig) !ProcessResult {
     }
 
     if (!config.no_opt) {
+        // Movers use per-component fallback: inline_dict first, then external CCD dict.
         const gen_result = try zreduce.optimize.generateMovers(
             allocator,
             &mdl,
             config.no_flip,
             config.dict,
+            if (inline_dict) |*d| d else null,
         );
         movers = gen_result.movers;
         movers_owned = true;
