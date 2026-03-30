@@ -239,8 +239,9 @@ fn printBatchUsage() void {
 fn batchSubcommand(allocator: Allocator, args: []const []const u8) void {
     const config = parseBatchArgs(args) orelse return;
     zreduce.batch.run(allocator, config) catch |err| {
-        if (err != error.SomeFilesFailed) {
-            std.debug.print("Error: batch processing failed: {s}\n", .{@errorName(err)});
+        switch (err) {
+            error.SomeFilesFailed, error.NoFilesFound => {},
+            else => std.debug.print("Error: batch processing failed: {s}\n", .{@errorName(err)}),
         }
         std.process.exit(1);
     };

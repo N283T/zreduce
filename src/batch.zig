@@ -1,5 +1,5 @@
-//! Batch processing: scan a directory of mmCIF files, process in parallel,
-//! and produce an aggregated JSONL log.
+//! Batch processing: scan a directory of mmCIF files and process them
+//! (sequentially or in parallel). Optionally produces an aggregated JSONL log.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -15,7 +15,7 @@ pub const BatchConfig = struct {
     output_dir: ?[]const u8 = null, // default: <input_dir>_reduced/
     dict_path: ?[]const u8 = null,
     jsonl_path: ?[]const u8 = null,
-    n_threads: u32 = 0, // 0 = auto-detect (for Task 4 parallelism)
+    n_threads: u32 = 0, // 0 = auto-detect CPU count
     no_opt: bool = false,
     no_flip: bool = false,
     quiet: bool = false,
@@ -167,12 +167,13 @@ fn runBatchSequential(
     output_dir: []const u8,
     dict: ?*const zreduce.ccd.ComponentDict,
     config: *const BatchConfig,
+    jsonl_stream: ?*JsonlStreamWriter,
 ) !BatchResult {
     const results = try allocator.alloc(FileResult, files.len);
     var completed: usize = 0;
     errdefer {
         for (results[0..completed]) |r| {
-            allocator.free(r.filename);
+            if (r.filename.len > 0) allocator.free(r.filename);
             if (r.error_msg) |msg| allocator.free(msg);
         }
         allocator.free(results);
@@ -187,15 +188,26 @@ fn runBatchSequential(
             std.debug.print("\rProcessing: {d}/{d}", .{ i + 1, files.len });
         }
 
-        results[i] = try processFileInBatch(
+        // Catch per-file errors (OOM on path join, timer init) so that one
+        // failure does not abort the entire batch — consistent with parallel mode.
+        results[i] = processFileInBatch(
             allocator,
             filename,
             input_dir,
             output_dir,
             dict,
             config,
-        );
+        ) catch |err| blk: {
+            break :blk makeErrorResult(allocator, filename, @errorName(err), 0) catch {
+                break :blk FileResult{ .filename = &.{}, .status = .err };
+            };
+        };
         completed = i + 1;
+
+        // Stream JSONL line if enabled
+        if (jsonl_stream) |stream| {
+            stream.writeResult(allocator, results[i]);
+        }
 
         total_time_ns += results[i].time_ns;
         switch (results[i].status) {
@@ -222,21 +234,29 @@ fn runBatchSequential(
 // JSONL logging
 // ---------------------------------------------------------------------------
 
+/// Mutex-protected JSONL streaming writer. The file handle is borrowed
+/// from the caller and must outlive this writer.
 const JsonlStreamWriter = struct {
     mutex: std.Thread.Mutex = .{},
     file: std.fs.File,
+    write_errors: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
 
     fn writeResult(self: *JsonlStreamWriter, allocator: Allocator, file_result: FileResult) void {
         // Serialize to a buffer first (outside mutex)
         var line_buf = std.ArrayListUnmanaged(u8).empty;
         defer line_buf.deinit(allocator);
-        writeJsonlLine(line_buf.writer(allocator), file_result) catch return;
+        writeJsonlLine(line_buf.writer(allocator), file_result) catch {
+            _ = self.write_errors.fetchAdd(1, .monotonic);
+            return;
+        };
 
         // Write under mutex (unbuffered to avoid stale buffered-writer state)
         self.mutex.lock();
         defer self.mutex.unlock();
 
-        self.file.writeAll(line_buf.items) catch {};
+        self.file.writeAll(line_buf.items) catch {
+            _ = self.write_errors.fetchAdd(1, .monotonic);
+        };
     }
 };
 
@@ -279,7 +299,7 @@ fn parallelWorker(ctx: *ParallelContext) void {
             ctx.dict,
             ctx.config,
         ) catch |err| blk: {
-            // processFileInBatch can only fail on OOM (path join or dupe)
+            // Fallback for allocation failure or timer init in processFileInBatch
             break :blk FileResult{
                 .filename = filename, // will be duped below
                 .status = .err,
@@ -288,7 +308,7 @@ fn parallelWorker(ctx: *ParallelContext) void {
         };
 
         // Copy owned strings to result_allocator (thread-safe: disjoint index).
-        // Filename dupe must succeed for deinit safety; error_msg is optional.
+        // On filename dupe failure, record a minimal error entry (deinit skips empty filenames).
         const owned_filename = ctx.result_allocator.dupe(u8, result.filename) catch {
             // OOM on a tiny string — record minimal error and continue
             ctx.results[file_idx] = .{ .filename = &.{}, .status = .err };
@@ -334,7 +354,7 @@ fn runBatchParallel(
     // Fall back to sequential for 1 thread or 1 file
     if (files.len <= 1 or n_threads <= 1) {
         allocator.free(file_results);
-        return runBatchSequential(allocator, files, input_dir, output_dir, dict, config);
+        return runBatchSequential(allocator, files, input_dir, output_dir, dict, config, jsonl_stream);
     }
 
     var ctx = ParallelContext{
@@ -369,7 +389,7 @@ fn runBatchParallel(
     }
 
     // Spawn a progress reporter thread if not quiet.
-    // It polls processed_count and exits once all files are done.
+    // It polls processed_count periodically and exits when signaled via progress_done.
     var progress_done = std.atomic.Value(bool).init(false);
     const ProgressArgs = struct {
         ctx: *ParallelContext,
@@ -485,8 +505,8 @@ pub fn run(allocator: Allocator, config: BatchConfig) !void {
     }
 
     if (files.len == 0) {
-        std.debug.print("No .cif files found in '{s}'\n", .{config.input_dir});
-        return;
+        std.debug.print("Error: no .cif files found in '{s}'\n", .{config.input_dir});
+        return error.NoFilesFound;
     }
 
     std.debug.print("Found {d} .cif files in '{s}'\n", .{ files.len, config.input_dir });
@@ -536,7 +556,14 @@ pub fn run(allocator: Allocator, config: BatchConfig) !void {
     defer batch_result.deinit();
 
     if (config.jsonl_path) |jsonl_path| {
-        std.debug.print("JSONL log written to '{s}'\n", .{jsonl_path});
+        std.debug.print("JSONL log written to '{s}'", .{jsonl_path});
+        if (jsonl_stream_ptr) |stream| {
+            const errs = stream.write_errors.load(.acquire);
+            if (errs > 0) {
+                std.debug.print(" ({d} write error(s))", .{errs});
+            }
+        }
+        std.debug.print("\n", .{});
     }
 
     // 7. Print summary
@@ -604,4 +631,43 @@ test "scanDirectory finds cif files" {
     for (files) |f| {
         try std.testing.expect(endsWithCif(f));
     }
+}
+
+test "processFile round-trip with tiny.cif" {
+    const config = run_mod.ProcessConfig{
+        .input_path = "src/test_data/tiny.cif",
+        .output_path = "/dev/null",
+        .quiet = true,
+    };
+    const result = try run_mod.processFile(std.testing.allocator, config);
+    try std.testing.expect(result.n_placed > 0);
+    try std.testing.expect(result.n_residues > 0);
+}
+
+test "processFileInBatch error propagation for missing file" {
+    const config = BatchConfig{ .input_dir = "/nonexistent", .json_version = "" };
+    const result = processFileInBatch(
+        std.testing.allocator,
+        "missing.cif",
+        "/nonexistent",
+        "/tmp",
+        null,
+        &config,
+    ) catch {
+        // OOM on path join or timer init — processFileInBatch itself failed.
+        return;
+    };
+    // If we get here, processFile should have failed and returned an error result
+    try std.testing.expect(result.status == .err);
+    try std.testing.expect(result.error_msg != null);
+    std.testing.allocator.free(result.filename);
+    if (result.error_msg) |msg| std.testing.allocator.free(msg);
+}
+
+test "writeJsonString escapes special characters" {
+    var buf = std.ArrayListUnmanaged(u8).empty;
+    defer buf.deinit(std.testing.allocator);
+    try writeJsonString(buf.writer(std.testing.allocator), "a\"b\\c\nd");
+    const output = buf.items;
+    try std.testing.expectEqualStrings("\"a\\\"b\\\\c\\nd\"", output);
 }
