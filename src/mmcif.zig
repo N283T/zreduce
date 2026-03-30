@@ -93,6 +93,37 @@ fn detectChainBreaks(
     }
 }
 
+const EntityType = model_mod.residue.EntityType;
+
+fn entityTypeFromString(s: []const u8) EntityType {
+    if (std.ascii.eqlIgnoreCase(s, "polymer")) return .polymer;
+    if (std.ascii.eqlIgnoreCase(s, "non-polymer")) return .non_polymer;
+    if (std.ascii.eqlIgnoreCase(s, "branched")) return .branched;
+    if (std.ascii.eqlIgnoreCase(s, "water")) return .water;
+    return .unknown;
+}
+
+fn applyEntityTypes(mdl: *Model, block: *const cif.Block) void {
+    const ent = block.findLoop("_entity.id") orelse return;
+    const col_id = ent.findTag("_entity.id") orelse return;
+    const col_type = ent.findTag("_entity.type") orelse return;
+
+    for (mdl.residues.items) |*res| {
+        const chain = mdl.chains.items[res.chain_idx];
+        const entity_id = chain.entityIdSlice();
+        if (entity_id.len == 0) continue;
+
+        for (0..ent.length()) |row| {
+            const eid = cif.asString(ent.val(row, col_id) orelse continue);
+            if (std.mem.eql(u8, eid, entity_id)) {
+                const etype = cif.asString(ent.val(row, col_type) orelse continue);
+                res.entity_type = entityTypeFromString(etype);
+                break;
+            }
+        }
+    }
+}
+
 /// Parse an mmCIF source string and extract all _atom_site records into a Model.
 pub fn parseModel(allocator: Allocator, source: []const u8) MmcifError!Model {
     var doc = cif.readString(allocator, source) catch |err| switch (err) {
@@ -286,6 +317,9 @@ pub fn parseModel(allocator: Allocator, source: []const u8) MmcifError!Model {
     if (block.findLoop("_pdbx_unobs_or_zero_occ_atoms.label_atom_id")) |unobs| {
         mdl.n_unobs_atoms = @intCast(unobs.length());
     }
+
+    // Parse _entity loop for entity types (optional)
+    applyEntityTypes(&mdl, block);
 
     return mdl;
 }
@@ -1058,4 +1092,26 @@ test "parseModel stores auth_seq_id and falls back" {
     // Branched NAG residue 2: label_seq_id="." -> fallback to auth_seq_id=2
     try testing.expectEqual(@as(i32, 2), mdl.residues.items[4].seq_id);
     try testing.expectEqual(@as(i32, 2), mdl.residues.items[4].auth_seq_id);
+}
+
+test "parseModel sets entity_type from _entity loop" {
+    const source = @embedFile("test_data/entity_type.cif");
+    var mdl = try parseModel(testing.allocator, source);
+    defer mdl.deinit();
+
+    // 5 residues: ALA, EDO, HOH, NAG(1), NAG(2)
+    try testing.expectEqual(@as(usize, 5), mdl.residues.items.len);
+
+    // ALA (entity 1) -> polymer
+    try testing.expectEqual(EntityType.polymer, mdl.residues.items[0].entity_type);
+
+    // EDO (entity 2) -> non_polymer
+    try testing.expectEqual(EntityType.non_polymer, mdl.residues.items[1].entity_type);
+
+    // HOH (entity 3) -> water
+    try testing.expectEqual(EntityType.water, mdl.residues.items[2].entity_type);
+
+    // NAG (entity 4) -> branched
+    try testing.expectEqual(EntityType.branched, mdl.residues.items[3].entity_type);
+    try testing.expectEqual(EntityType.branched, mdl.residues.items[4].entity_type);
 }
