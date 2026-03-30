@@ -132,16 +132,24 @@ pub fn addHydrogens(
             else
                 altlocs.locs[0..altlocs.count];
 
-            const is_nterm_mod = (res_idx == chain.residue_start) or res.is_chain_break_before;
             for (targets) |alt| {
                 for (plans) |plan| {
-                    // Skip backbone H for non-N-terminal or PCA (no backbone H in plans)
-                    if (isBackboneH(&plan) and !is_nterm_mod) continue;
+                    // Skip backbone amide H on N-terminal residues (NH3+, not NH)
+                    if (is_nterm and isBackboneH(&plan)) continue;
+
                     if (try executePlan(mdl, res, @intCast(res_idx), &plan, null, alt)) {
                         result.n_placed += 1;
                     } else {
                         result.n_skipped += 1;
                     }
+                }
+
+                // N-terminal: place NH3+ instead of single backbone H.
+                // PCA is excluded — its N is in the pyrrolidone ring (no free amine).
+                if (is_nterm and !std.mem.eql(u8, comp_id, "PCA")) {
+                    const nterm = try placeNtermNH3(mdl, res, @intCast(res_idx), alt);
+                    result.n_placed += nterm.placed;
+                    result.n_skipped += nterm.skipped;
                 }
             }
 
