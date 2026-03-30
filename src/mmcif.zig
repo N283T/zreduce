@@ -788,6 +788,47 @@ pub fn parseInlineComponents(allocator: Allocator, block: *const cif.Block) !?cc
     return dict;
 }
 
+/// For residues containing inter-residue bonded atoms, flag CCD leaving atoms
+/// as bonded_inter_residue too. Leaving atoms (pdbx_leaving_atom_flag=Y) should
+/// not exist in a properly bonded structure, so H placement on them is incorrect.
+pub fn flagLeavingAtoms(
+    mdl: *Model,
+    inline_dict: ?*const ccd_mod.ComponentDict,
+    ccd_dict: ?*const ccd_mod.ComponentDict,
+) void {
+    for (mdl.residues.items) |res| {
+        const atoms = mdl.atoms.items[res.atom_start..res.atom_end];
+
+        // Check if this residue has any inter-residue bonded atoms
+        var has_bonded = false;
+        for (atoms) |atom| {
+            if (atom.flags.bonded_inter_residue) {
+                has_bonded = true;
+                break;
+            }
+        }
+        if (!has_bonded) continue;
+
+        // Look up CCD component (inline priority)
+        const comp_id = res.compIdSlice();
+        const component = if (inline_dict) |d| d.get(comp_id) else null;
+        const effective = component orelse if (ccd_dict) |d| d.get(comp_id) else null;
+        const comp = effective orelse continue;
+
+        // Flag leaving atoms in the model
+        for (comp.atoms) |comp_atom| {
+            if (!comp_atom.leaving) continue;
+            const leaving_name = comp_atom.nameSlice();
+            // Find this atom in the model residue and mutate via direct index
+            for (res.atom_start..res.atom_end) |i| {
+                if (std.mem.eql(u8, mdl.atoms.items[i].nameSlice(), leaving_name)) {
+                    mdl.atoms.items[i].flags.bonded_inter_residue = true;
+                }
+            }
+        }
+    }
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 const testing = std.testing;
@@ -1135,4 +1176,34 @@ test "entityTypeFromString maps correctly" {
     try testing.expectEqual(EntityType.water, entityTypeFromString("water"));
     try testing.expectEqual(EntityType.unknown, entityTypeFromString("macrolide"));
     try testing.expectEqual(EntityType.unknown, entityTypeFromString(""));
+}
+
+test "flagLeavingAtoms flags CCD leaving atoms on bonded residues" {
+    const source = @embedFile("test_data/leaving_atom.cif");
+    var doc = cif.readString(testing.allocator, source) catch unreachable;
+    defer doc.deinit();
+    const block = &doc.blocks.items[0];
+
+    var mdl = try parseModel(testing.allocator, source);
+    defer mdl.deinit();
+
+    // Parse inline components (has leaving atom info)
+    var inline_dict = try parseInlineComponents(testing.allocator, block);
+    defer if (inline_dict) |*d| d.deinit();
+
+    // Parse struct_conn — flags C(0) and N(2) as bonded
+    var lookup = try buildAtomLookup(testing.allocator, block);
+    defer lookup.deinit();
+    try parseStructConn(&mdl, block, &lookup);
+
+    // Verify: C(0) bonded, OXT(1) NOT bonded yet, N(2) bonded
+    try testing.expect(mdl.atoms.items[0].flags.bonded_inter_residue); // C
+    try testing.expect(!mdl.atoms.items[1].flags.bonded_inter_residue); // OXT - not yet
+    try testing.expect(mdl.atoms.items[2].flags.bonded_inter_residue); // N
+
+    // Flag leaving atoms
+    flagLeavingAtoms(&mdl, if (inline_dict) |*d| d else null, null);
+
+    // Now OXT should also be flagged (it's a CCD leaving atom in a bonded residue)
+    try testing.expect(mdl.atoms.items[1].flags.bonded_inter_residue); // OXT - now flagged
 }
