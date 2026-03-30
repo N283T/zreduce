@@ -1,0 +1,55 @@
+data_LEAVING
+#
+loop_
+_atom_site.group_PDB
+_atom_site.id
+_atom_site.type_symbol
+_atom_site.label_atom_id
+_atom_site.label_comp_id
+_atom_site.label_asym_id
+_atom_site.label_entity_id
+_atom_site.label_seq_id
+_atom_site.Cartn_x
+_atom_site.Cartn_y
+_atom_site.Cartn_z
+_atom_site.occupancy
+_atom_site.B_iso_or_equiv
+_atom_site.label_alt_id
+_atom_site.pdbx_PDB_ins_code
+ATOM 1 C C   TST A 1 1 1.0 0.0 0.0 1.0 0.0 . .
+ATOM 2 O OXT TST A 1 1 2.0 0.0 0.0 1.0 0.0 . .
+ATOM 3 N N   TST A 1 2 3.0 0.0 0.0 1.0 0.0 . .
+#
+loop_
+_chem_comp_atom.comp_id
+_chem_comp_atom.atom_id
+_chem_comp_atom.type_symbol
+_chem_comp_atom.charge
+_chem_comp_atom.pdbx_leaving_atom_flag
+TST C   C 0 N
+TST OXT O 0 Y
+TST N   N 0 N
+#
+loop_
+_chem_comp_bond.comp_id
+_chem_comp_bond.atom_id_1
+_chem_comp_bond.atom_id_2
+_chem_comp_bond.value_order
+TST C N SING
+#
+loop_
+_struct_conn.id
+_struct_conn.conn_type_id
+_struct_conn.ptnr1_label_asym_id
+_struct_conn.ptnr1_label_comp_id
+_struct_conn.ptnr1_label_seq_id
+_struct_conn.ptnr1_label_atom_id
+_struct_conn.ptnr1_symmetry
+_struct_conn.ptnr2_label_asym_id
+_struct_conn.ptnr2_label_comp_id
+_struct_conn.ptnr2_label_seq_id
+_struct_conn.ptnr2_label_atom_id
+_struct_conn.ptnr2_symmetry
+_struct_conn.pdbx_value_order
+covale1 covale A TST 1 C 1_555 A TST 2 N 1_555 SING
+#

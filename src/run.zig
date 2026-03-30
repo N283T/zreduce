@@ -85,6 +85,9 @@ pub fn processFile(allocator: Allocator, config: ProcessConfig) !ProcessResult {
     // 4b. Parse branch links AFTER applyChemistry
     try zreduce.mmcif.parseBranchLinks(allocator, &mdl, block, &atom_lookup);
 
+    // 4c. Flag CCD leaving atoms on bonded residues
+    zreduce.mmcif.flagLeavingAtoms(&mdl, if (inline_dict) |*d| d else null, config.dict);
+
     // 5. Place hydrogens (per-component fallback: inline dict first, then external CCD)
     const place_result = try zreduce.place.addHydrogens(
         &mdl,
