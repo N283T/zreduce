@@ -1,7 +1,7 @@
 //! Unified hydrogen placement entry point.
 //!
 //! Adds hydrogens to a Model using standard plans for known residues (20 AA)
-//! and CCD-derived plans for HET groups.
+//! and CCD-derived plans for non-standard residues.
 
 const std = @import("std");
 const model_mod = @import("../model.zig");
@@ -13,7 +13,7 @@ const ComponentDict = ccd_mod.ComponentDict;
 const standard = @import("standard.zig");
 const nucleotide = @import("nucleotide.zig");
 const modified = @import("modified.zig");
-const het = @import("het.zig");
+const ccd_derive = @import("ccd_derive.zig");
 const geometry = @import("geometry.zig");
 const math_mod = @import("../math.zig");
 const element = @import("../element.zig");
@@ -52,7 +52,7 @@ fn collectAltlocs(mdl: *const Model, res: Residue) AltlocSet {
 }
 
 /// Add hydrogens to the model.
-/// Uses standard plans for known residues (20 AA), CCD-derived plans for HET groups.
+/// Uses hardcoded plans (standard AA, nucleotides, modified), CCD-derived plans as fallback.
 /// New atoms are appended to the end of model.atoms. Each new atom carries its residue_idx.
 pub fn addHydrogens(
     mdl: *Model,
@@ -116,7 +116,7 @@ pub fn addHydrogens(
             if (dict.get(comp_id)) |component| {
                 const existing = try collectAtomNames(mdl.allocator, mdl, res);
                 defer mdl.allocator.free(existing);
-                const plans = try het.derivePlans(mdl.allocator, &component, existing);
+                const plans = try ccd_derive.derivePlans(mdl.allocator, &component, existing);
                 defer mdl.allocator.free(plans);
 
                 for (plans) |plan| {

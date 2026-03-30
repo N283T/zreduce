@@ -1,8 +1,9 @@
-//! CCD-derived hydrogen placement for HET groups.
+//! CCD-derived hydrogen placement plan generation.
 //!
 //! Derives PlacementPlan from CCD component topology. For each hydrogen atom
 //! in the component that is NOT already present in the model, determine the
 //! placement type from hybridization (inferred from bond orders).
+//! Used as fallback when no hardcoded plan exists (standard, nucleotide, modified).
 
 const std = @import("std");
 const ccd = @import("../ccd.zig");
@@ -32,7 +33,7 @@ const BondInfo = struct {
 // Public API
 // ---------------------------------------------------------------------------
 
-/// Derive placement plans for HET group hydrogens from CCD component definition.
+/// Derive placement plans for non-standard residue hydrogens from CCD component definition.
 /// Only generates plans for H atoms not already present in existing_atom_names.
 pub fn derivePlans(
     allocator: std.mem.Allocator,
