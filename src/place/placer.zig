@@ -184,6 +184,11 @@ pub fn applyChemistry(mdl: *Model) void {
 fn executePlan(mdl: *Model, res: Residue, res_idx: u32, plan: *const standard.PlacementPlan, bonds: ?[]const topology.BondEntry, target_altloc: u8) !bool {
     // Resolve parent heavy atom (connected[0]) for metadata and position
     const base_atom = findAtom(mdl, res, plan.connected[0], target_altloc) orelse return false;
+
+    // Skip H placement if parent atom is involved in an inter-residue bond
+    // (e.g. disulfide SG, glycosidic leaving O) — the bond already satisfies valence.
+    if (base_atom.flags.bonded_inter_residue) return false;
+
     var meta = ParentMeta.fromAtom(base_atom);
     // Override altloc when iterating conformers: if parent has blank altloc
     // (shared backbone) but we're targeting a specific conformer, the placed H
@@ -1223,4 +1228,30 @@ test "residue before chain break gets C-terminal charge" {
         }
     }
     try testing.expect(o_negative);
+}
+
+test "addHydrogens skips H on bonded_inter_residue atom" {
+    const mmcif_mod = @import("../mmcif.zig");
+    const source = @embedFile("../test_data/disulfide.cif");
+    var mdl = try mmcif_mod.parseModel(testing.allocator, source);
+    defer mdl.deinit();
+
+    // Apply chemistry first (it overwrites flags), then set bonded_inter_residue
+    applyChemistry(&mdl);
+
+    // Manually set bonded_inter_residue on SG atoms (index 5 and 11)
+    mdl.atoms.items[5].flags.bonded_inter_residue = true;
+    mdl.atoms.items[11].flags.bonded_inter_residue = true;
+
+    const result = try addHydrogens(&mdl, null);
+
+    // Verify no HG was placed on either CYS SG
+    for (mdl.atoms.items) |atom| {
+        if (atom.is_added) {
+            const name = atom.nameSlice();
+            // SG should not have HG placed
+            try std.testing.expect(!std.mem.eql(u8, name, "HG"));
+        }
+    }
+    _ = result;
 }
