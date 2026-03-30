@@ -11,6 +11,8 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/root.zig"),
         .target = target,
     });
+    mod.link_libc = true;
+    mod.linkSystemLibrary("z", .{});
 
     // CLI executable
     const options = b.addOptions();

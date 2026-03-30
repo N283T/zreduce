@@ -28,6 +28,9 @@ pub const ProcessResult = struct {
 };
 
 pub fn readFile(allocator: Allocator, path: []const u8) ![]const u8 {
+    if (std.mem.endsWith(u8, path, ".gz")) {
+        return zreduce.gzip.readGzip(allocator, path);
+    }
     const file = try std.fs.cwd().openFile(path, .{});
     defer file.close();
     return try file.readToEndAlloc(allocator, 1024 * 1024 * 1024);
