@@ -1,0 +1,11 @@
+[workspace]
+name = "reduce2-env"
+description = "cctbx reduce2 environment for hydrogen placement reference data"
+channels = ["conda-forge", "https://conda.anaconda.org/chem_data"]
+platforms = ["osx-arm64"]
+
+[dependencies]
+python = ">=3.12,<3.14"
+cctbx-base = ">=2026.1,<2026.2"
+rdkit = "*"
+chem_data = "*"

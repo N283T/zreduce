@@ -3,3 +3,7 @@ zig-out/
 zig-cache/
 *.o
 *.swp
+
+# pixi environments
+.pixi/
+pixi.lock
