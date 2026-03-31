@@ -157,16 +157,18 @@ pub fn createHisFlipper(
     const hd1_f_computed = computeRingNH(nd1_f, ce1_f, cd2_f);
     const he2_f_computed = computeRingNH(ne2_f, ce1_f, cd2_f);
 
-    // --- Build 6 orientations ---
-    // Penalty table: [0.00, 0.00, 0.05, 0.50, 0.50, 0.55]
-    // Orient 0: no flip, NE2-HE2 protonated (ND1 acceptor) -> HD1 absent, HE2 present
-    // Orient 1: no flip, ND1-HD1 protonated (NE2 acceptor) -> HD1 present, HE2 absent
-    // Orient 2: no flip, both protonated -> HD1 present, HE2 present
-    // Orient 3: flip, NE2-HE2 protonated -> HD1 absent, HE2 present (on flipped ring)
-    // Orient 4: flip, ND1-HD1 protonated -> HD1 present, HE2 absent (on flipped ring)
-    // Orient 5: flip, both protonated -> HD1 present, HE2 present (on flipped ring)
-
-    const penalties = [6]f32{ 0.00, 0.00, 0.05, 0.50, 0.50, 0.55 };
+    // --- Build 4 orientations ---
+    // At neutral pH, HIS is predominantly neutral (HID or HIE, pKa ~6.0).
+    // HIP (doubly protonated, +1 charge) is excluded: penalty-based approaches
+    // fail because the dot-sphere scoring rewards additional H-bond donors
+    // without accounting for desolvation/charge costs, causing nearly all HIS
+    // to be assigned HIP regardless of penalty magnitude.
+    //
+    // Orient 0: no flip, HIE (NE2-HE2 protonated, ND1 acceptor)
+    // Orient 1: no flip, HID (ND1-HD1 protonated, NE2 acceptor)
+    // Orient 2: flip, HIE
+    // Orient 3: flip, HID
+    const penalties = [4]f32{ 0.00, 0.00, 0.50, 0.50 };
 
     // For each orientation: positions = [ND1, CD2, CE1, NE2, HD1, HE2]
     const OrientSpec = struct {
@@ -182,19 +184,15 @@ pub fn createHisFlipper(
     const hd1_no_flip = if (hd1_idx != null) hd1_orig else hd1_computed;
     const he2_no_flip = if (he2_idx != null) he2_orig else he2_computed;
 
-    const specs = [6]OrientSpec{
-        // 0: no flip, HE2 only
+    const specs = [4]OrientSpec{
+        // 0: no flip, HIE (HE2 only)
         .{ .nd1_p = nd1, .cd2_p = cd2, .ce1_p = ce1, .ne2_p = ne2, .hd1_p = ABSENT_H_POS, .he2_p = he2_no_flip },
-        // 1: no flip, HD1 only
+        // 1: no flip, HID (HD1 only)
         .{ .nd1_p = nd1, .cd2_p = cd2, .ce1_p = ce1, .ne2_p = ne2, .hd1_p = hd1_no_flip, .he2_p = ABSENT_H_POS },
-        // 2: no flip, both
-        .{ .nd1_p = nd1, .cd2_p = cd2, .ce1_p = ce1, .ne2_p = ne2, .hd1_p = hd1_no_flip, .he2_p = he2_no_flip },
-        // 3: flip, HE2 only
+        // 2: flip, HIE
         .{ .nd1_p = nd1_f, .cd2_p = cd2_f, .ce1_p = ce1_f, .ne2_p = ne2_f, .hd1_p = ABSENT_H_POS, .he2_p = he2_f_computed },
-        // 4: flip, HD1 only
+        // 3: flip, HID
         .{ .nd1_p = nd1_f, .cd2_p = cd2_f, .ce1_p = ce1_f, .ne2_p = ne2_f, .hd1_p = hd1_f_computed, .he2_p = ABSENT_H_POS },
-        // 5: flip, both
-        .{ .nd1_p = nd1_f, .cd2_p = cd2_f, .ce1_p = ce1_f, .ne2_p = ne2_f, .hd1_p = hd1_f_computed, .he2_p = he2_f_computed },
     };
 
     // Flags per orientation: [ND1, CD2, CE1, NE2, HD1, HE2]
@@ -208,22 +206,18 @@ pub fn createHisFlipper(
     const h_absent = AtomFlags{}; // absent H (no flags)
 
     // [ND1, CD2, CE1, NE2, HD1, HE2]
-    const orient_flags = [6][6]AtomFlags{
-        // 0: HE2 only → ND1=acceptor, NE2=donor
+    const orient_flags = [4][6]AtomFlags{
+        // 0: HIE (HE2 only) → ND1=acceptor, NE2=donor
         .{ ar_acc_n, ar_acc, ar_acc, ar_don, h_absent, h_don },
-        // 1: HD1 only → ND1=donor, NE2=acceptor
+        // 1: HID (HD1 only) → ND1=donor, NE2=acceptor
         .{ ar_don, ar_acc, ar_acc, ar_acc_n, h_don, h_absent },
-        // 2: both → ND1=donor, NE2=donor
-        .{ ar_don, ar_acc, ar_acc, ar_don, h_don, h_don },
-        // 3: flip, HE2 only → ND1=acceptor, NE2=donor (flipped positions)
+        // 2: flip, HIE → ND1=acceptor, NE2=donor (flipped positions)
         .{ ar_acc_n, ar_acc, ar_acc, ar_don, h_absent, h_don },
-        // 4: flip, HD1 only → ND1=donor, NE2=acceptor
+        // 3: flip, HID → ND1=donor, NE2=acceptor
         .{ ar_don, ar_acc, ar_acc, ar_acc_n, h_don, h_absent },
-        // 5: flip, both → ND1=donor, NE2=donor
-        .{ ar_don, ar_acc, ar_acc, ar_don, h_don, h_don },
     };
 
-    const orientations = try allocator.alloc(Orientation, 6);
+    const orientations = try allocator.alloc(Orientation, 4);
     for (specs, 0..) |spec, i| {
         const positions = try allocator.alloc(Vec3(f32), 6);
         positions[0] = spec.nd1_p;
@@ -330,7 +324,7 @@ test "his flipper has 6 orientations" {
     var mover = try createHisFlipper(allocator, &atoms, 0, 1, 2, 3, 4, 5, 3);
     defer mover.deinit();
 
-    try testing.expectEqual(@as(usize, 6), mover.orientations.len);
+    try testing.expectEqual(@as(usize, 4), mover.orientations.len);
 }
 
 test "his flipper penalties match spec" {
@@ -348,7 +342,7 @@ test "his flipper penalties match spec" {
     var mover = try createHisFlipper(allocator, &atoms, 0, 1, 2, 3, 4, 5, 3);
     defer mover.deinit();
 
-    const expected_penalties = [6]f32{ 0.00, 0.00, 0.05, 0.50, 0.50, 0.55 };
+    const expected_penalties = [4]f32{ 0.00, 0.00, 0.50, 0.50 };
     for (mover.orientations, 0..) |o, i| {
         try testing.expectApproxEqAbs(expected_penalties[i], o.penalty, 1e-6);
     }
@@ -369,28 +363,31 @@ test "his flipper orientations have chemistry flags" {
     var mover = try createHisFlipper(allocator, &atoms, 0, 1, 2, 3, 4, 5, 3);
     defer mover.deinit();
 
-    // All 6 orientations should have flags
+    // All 4 orientations should have flags
     for (mover.orientations) |o| {
         try testing.expect(o.flags != null);
         try testing.expectEqual(@as(usize, 6), o.flags.?.len);
     }
 
-    // Orient 0: HE2 only → ND1=acceptor (not donor), NE2=donor
+    // Orient 0: HIE (HE2 only) → ND1=acceptor (not donor), NE2=donor
     const flags0 = mover.orientations[0].flags.?;
     try testing.expect(flags0[0].acceptor); // ND1 acceptor
     try testing.expect(!flags0[0].donor); // ND1 not donor
     try testing.expect(flags0[3].donor); // NE2 donor
     try testing.expect(!flags0[3].acceptor); // NE2 not acceptor
 
-    // Orient 1: HD1 only → ND1=donor, NE2=acceptor
+    // Orient 1: HID (HD1 only) → ND1=donor, NE2=acceptor
     const flags1 = mover.orientations[1].flags.?;
     try testing.expect(flags1[0].donor); // ND1 donor
     try testing.expect(!flags1[0].acceptor); // ND1 not acceptor
     try testing.expect(flags1[3].acceptor); // NE2 acceptor
     try testing.expect(!flags1[3].donor); // NE2 not donor
 
-    // Orient 2: both → ND1=donor, NE2=donor
-    const flags2 = mover.orientations[2].flags.?;
-    try testing.expect(flags2[0].donor);
-    try testing.expect(flags2[3].donor);
+    // No HIP orientations — all orientations have exactly one absent H
+    for (mover.orientations) |o| {
+        const hd1_absent = mover_mod.isAbsentH(.{ .pos = o.positions[4], .is_added = true });
+        const he2_absent = mover_mod.isAbsentH(.{ .pos = o.positions[5], .is_added = true });
+        // Exactly one H should be absent (HID xor HIE, never HIP)
+        try testing.expect(hd1_absent != he2_absent);
+    }
 }

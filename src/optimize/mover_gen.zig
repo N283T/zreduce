@@ -670,7 +670,7 @@ test "generateMovers creates His flipper" {
     for (movers) |m| {
         if (m.kind == .his_flip) {
             his_count += 1;
-            try testing.expectEqual(@as(usize, 6), m.orientations.len);
+            try testing.expectEqual(@as(usize, 4), m.orientations.len);
         }
     }
     try testing.expectEqual(@as(u32, 1), his_count);
