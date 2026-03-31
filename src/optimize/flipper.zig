@@ -18,8 +18,8 @@ const AtomFlags = element.AtomFlags;
 ///   o_pos: the oxygen bonded to C (for reference plane)
 /// Returns [2]Vec3(f32): the two H positions on the amide nitrogen.
 fn computeAmideNH2(n_pos: Vec3(f32), c_pos: Vec3(f32), o_pos: Vec3(f32)) [2]Vec3(f32) {
-    // N-H bond length ~1.01 Å, H-N-H angle ~120° (sp2 nitrogen)
-    const bond_len: f32 = 1.01;
+    // N-H bond length for sidechain amide NH2 (CCD mean: 1.000 Å)
+    const bond_len: f32 = 1.00;
     const half_angle_deg: f32 = 60.0; // half of 120°
 
     // Vector from C to N
@@ -104,7 +104,8 @@ const ABSENT_H_POS = Mover.ABSENT_H_POS;
 ///   n_pos: the nitrogen bearing the H
 ///   bonded1, bonded2: the two atoms bonded to N in the ring
 fn computeRingNH(n_pos: Vec3(f32), bonded1: Vec3(f32), bonded2: Vec3(f32)) Vec3(f32) {
-    const bond_len: f32 = 1.01;
+    // N-H bond length for HIS imidazole ring (CCD: 1.016 Å)
+    const bond_len: f32 = 1.02;
     // Place H in the plane opposite to the bisector of the two ring bonds
     const v1 = bonded1.sub(n_pos).normalize();
     const v2 = bonded2.sub(n_pos).normalize();
