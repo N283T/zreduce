@@ -204,6 +204,11 @@ fn analyzeBonds(component: *const ccd.Component, atom_idx: u16, extra_bonds: u8,
         info.total_bonds -|= missing_neighbors;
     }
 
+    // Note: total_valence is intentionally NOT adjusted for missing neighbors.
+    // It reflects the CCD template's full valence for hybridization determination,
+    // since the missing atom's bond (typically single) doesn't change the electronic
+    // hybridization of the center atom. The neighbor count adjustment above only
+    // affects which placement geometry is selected (hxr3 vs h2xr2 etc.).
     const total_valence = template_valence + extra_bonds;
     const max_val = maxValence(component.atoms[atom_idx].element_symbol);
 
@@ -302,7 +307,7 @@ fn deriveSinglePlan(
                 // H3XR: dihedral-controlled (e.g., methyl)
                 const refs = findHeavyNeighborNamesFiltered(component, heavy_idx, 1, existing_atom_names) orelse return null;
                 // Find a second reference for dihedral (neighbor of the heavy neighbor)
-                const second_ref = findSecondReference(component, heavy_idx, refs[0]) orelse return null;
+                const second_ref = findSecondReferenceFiltered(component, heavy_idx, refs[0], existing_atom_names) orelse return null;
                 const dihedral = estimateDihedralFromIdeal(component, h_atom, heavy_atom, refs[0]);
                 return PlacementPlan{
                     .h_name = h_atom.name,
@@ -333,7 +338,7 @@ fn deriveSinglePlan(
             } else if (bond_info.heavy_neighbor_count == 1) {
                 // Only one heavy neighbor on sp2 — use dihedral placement
                 const refs = findHeavyNeighborNamesFiltered(component, heavy_idx, 1, existing_atom_names) orelse return null;
-                const second_ref = findSecondReference(component, heavy_idx, refs[0]) orelse return null;
+                const second_ref = findSecondReferenceFiltered(component, heavy_idx, refs[0], existing_atom_names) orelse return null;
                 const dihedral = estimateDihedralFromIdeal(component, h_atom, heavy_atom, refs[0]);
                 return PlacementPlan{
                     .h_name = h_atom.name,
@@ -408,6 +413,12 @@ fn findHeavyNeighborNamesFiltered(component: *const ccd.Component, atom_idx: u16
 
 /// Find a reference atom bonded to the neighbor of the heavy atom (for dihedral reference).
 fn findSecondReference(component: *const ccd.Component, heavy_idx: u16, first_ref_name: [4]u8) ?[4]u8 {
+    return findSecondReferenceFiltered(component, heavy_idx, first_ref_name, null);
+}
+
+/// Find a dihedral reference atom (neighbor of first_ref that isn't the heavy atom).
+/// Optionally filters to atoms present in the model.
+fn findSecondReferenceFiltered(component: *const ccd.Component, heavy_idx: u16, first_ref_name: [4]u8, existing_atom_names: ?[]const [4]u8) ?[4]u8 {
     // Find index of first_ref
     var first_ref_idx: ?u16 = null;
     for (component.atoms, 0..) |a, i| {
@@ -429,6 +440,9 @@ fn findSecondReference(component: *const ccd.Component, heavy_idx: u16, first_re
 
         if (neighbor_idx) |ni| {
             if (ni != heavy_idx and component.atoms[ni].element_symbol[0] != 'H') {
+                if (existing_atom_names) |names| {
+                    if (!nameExists(component.atoms[ni].name, names)) continue;
+                }
                 return component.atoms[ni].name;
             }
         }
