@@ -8,6 +8,10 @@ const PlacementPlan = standard.PlacementPlan;
 const PlacementType = standard.PlacementType;
 const MoverHint = standard.MoverHint;
 
+// Bond lengths (CCD ideal values)
+const c_h_arom: f32 = 1.08; // C-H aromatic (CCD mean: 1.0793)
+const n_h_ring: f32 = 1.02; // N-H ring (CCD: 1.016)
+
 // Atom name helper (same as standard.zig)
 fn n(comptime s: []const u8) [4]u8 {
     var buf: [4]u8 = .{ ' ', ' ', ' ', ' ' };
@@ -73,25 +77,29 @@ fn oh_rotator(comptime h: []const u8, comptime o: []const u8, comptime c: []cons
 // ---------------------------------------------------------------------------
 
 /// Aromatic C-H on planar ring (e.g., H2 on C2, H8 on C8).
-fn aromatic_ch(comptime h: []const u8, comptime c: []const u8, comptime nb1: []const u8, comptime nb2: []const u8) PlacementPlan {
+/// nb1 and nb2 are the two ring neighbors of the carbon bearing H.
+/// H is placed opposite the bisector of nb1-center-nb2 (planar bisector).
+/// Uses same convention as standard.zig planarH: connected[0]=nb1, connected[1]=nb2.
+fn aromatic_ch(comptime h: []const u8, comptime nb1: []const u8, comptime nb2: []const u8) PlacementPlan {
     return .{
         .h_name = n(h),
         .placement_type = .hxr2_planar,
-        .connected = .{ n(c), n(nb1), n(nb2) },
+        .connected = .{ n(nb1), n(nb2), .{ ' ', ' ', ' ', ' ' } },
         .n_connected = 2,
-        .bond_len = 1.08,
+        .bond_len = c_h_arom,
         .atom_type = .Har,
     };
 }
 
 /// N-H on planar ring (e.g., H1 on N1 of guanine, H3 on N3 of uracil).
-fn ring_nh(comptime h: []const u8, comptime nn: []const u8, comptime nb1: []const u8, comptime nb2: []const u8) PlacementPlan {
+/// nb1 and nb2 are the two ring neighbors of the nitrogen bearing H.
+fn ring_nh(comptime h: []const u8, comptime nb1: []const u8, comptime nb2: []const u8) PlacementPlan {
     return .{
         .h_name = n(h),
         .placement_type = .hxr2_planar,
-        .connected = .{ n(nn), n(nb1), n(nb2) },
+        .connected = .{ n(nb1), n(nb2), .{ ' ', ' ', ' ', ' ' } },
         .n_connected = 2,
-        .bond_len = 1.02,
+        .bond_len = n_h_ring,
         .atom_type = .Hpol,
     };
 }
@@ -142,8 +150,8 @@ const da_plans = [_]PlacementPlan{
     sugar_h2xr2(" H5'", " C5'", " C4'", " O5'", -126.5),
     sugar_h2xr2("H5''", " C5'", " C4'", " O5'", 126.5),
     // Base (adenine)
-    aromatic_ch(" H2 ", " C2 ", " N1 ", " N3 "),
-    aromatic_ch(" H8 ", " C8 ", " N7 ", " N9 "),
+    aromatic_ch(" H2 ", " N1 ", " N3 "),
+    aromatic_ch(" H8 ", " N7 ", " N9 "),
     amino_h("H61 ", " N6 ", " C6 ", " C5 ", 180.0),
     amino_h("H62 ", " N6 ", " C6 ", " C5 ", 0.0),
 };
@@ -159,8 +167,8 @@ const dc_plans = [_]PlacementPlan{
     sugar_h2xr2(" H5'", " C5'", " C4'", " O5'", -126.5),
     sugar_h2xr2("H5''", " C5'", " C4'", " O5'", 126.5),
     // Base (cytosine)
-    aromatic_ch(" H5 ", " C5 ", " C4 ", " C6 "),
-    aromatic_ch(" H6 ", " C6 ", " C5 ", " N1 "),
+    aromatic_ch(" H5 ", " C4 ", " C6 "),
+    aromatic_ch(" H6 ", " C5 ", " N1 "),
     amino_h("H41 ", " N4 ", " C4 ", " N3 ", 180.0),
     amino_h("H42 ", " N4 ", " C4 ", " N3 ", 0.0),
 };
@@ -176,8 +184,8 @@ const dg_plans = [_]PlacementPlan{
     sugar_h2xr2(" H5'", " C5'", " C4'", " O5'", -126.5),
     sugar_h2xr2("H5''", " C5'", " C4'", " O5'", 126.5),
     // Base (guanine)
-    aromatic_ch(" H8 ", " C8 ", " N7 ", " N9 "),
-    ring_nh(" H1 ", " N1 ", " C6 ", " C2 "),
+    aromatic_ch(" H8 ", " N7 ", " N9 "),
+    ring_nh(" H1 ", " C6 ", " C2 "),
     amino_h(" H21", " N2 ", " C2 ", " N1 ", 180.0),
     amino_h(" H22", " N2 ", " C2 ", " N1 ", 0.0),
 };
@@ -193,8 +201,8 @@ const dt_plans = [_]PlacementPlan{
     sugar_h2xr2(" H5'", " C5'", " C4'", " O5'", -126.5),
     sugar_h2xr2("H5''", " C5'", " C4'", " O5'", 126.5),
     // Base (thymine)
-    aromatic_ch(" H6 ", " C6 ", " C5 ", " N1 "),
-    ring_nh(" H3 ", " N3 ", " C4 ", " C2 "),
+    aromatic_ch(" H6 ", " C5 ", " N1 "),
+    ring_nh(" H3 ", " C4 ", " C2 "),
     thymine_methyl("H71 ", 180.0),
     thymine_methyl("H72 ", -60.0),
     thymine_methyl("H73 ", 60.0),
@@ -215,8 +223,8 @@ const a_plans = [_]PlacementPlan{
     sugar_h2xr2(" H5'", " C5'", " C4'", " O5'", -126.5),
     sugar_h2xr2("H5''", " C5'", " C4'", " O5'", 126.5),
     // Base (adenine)
-    aromatic_ch(" H2 ", " C2 ", " N1 ", " N3 "),
-    aromatic_ch(" H8 ", " C8 ", " N7 ", " N9 "),
+    aromatic_ch(" H2 ", " N1 ", " N3 "),
+    aromatic_ch(" H8 ", " N7 ", " N9 "),
     amino_h("H61 ", " N6 ", " C6 ", " C5 ", 180.0),
     amino_h("H62 ", " N6 ", " C6 ", " C5 ", 0.0),
 };
@@ -231,8 +239,8 @@ const c_plans = [_]PlacementPlan{
     sugar_h2xr2(" H5'", " C5'", " C4'", " O5'", -126.5),
     sugar_h2xr2("H5''", " C5'", " C4'", " O5'", 126.5),
     // Base (cytosine)
-    aromatic_ch(" H5 ", " C5 ", " C4 ", " C6 "),
-    aromatic_ch(" H6 ", " C6 ", " C5 ", " N1 "),
+    aromatic_ch(" H5 ", " C4 ", " C6 "),
+    aromatic_ch(" H6 ", " C5 ", " N1 "),
     amino_h("H41 ", " N4 ", " C4 ", " N3 ", 180.0),
     amino_h("H42 ", " N4 ", " C4 ", " N3 ", 0.0),
 };
@@ -247,8 +255,8 @@ const g_plans = [_]PlacementPlan{
     sugar_h2xr2(" H5'", " C5'", " C4'", " O5'", -126.5),
     sugar_h2xr2("H5''", " C5'", " C4'", " O5'", 126.5),
     // Base (guanine)
-    aromatic_ch(" H8 ", " C8 ", " N7 ", " N9 "),
-    ring_nh(" H1 ", " N1 ", " C6 ", " C2 "),
+    aromatic_ch(" H8 ", " N7 ", " N9 "),
+    ring_nh(" H1 ", " C6 ", " C2 "),
     amino_h(" H21", " N2 ", " C2 ", " N1 ", 180.0),
     amino_h(" H22", " N2 ", " C2 ", " N1 ", 0.0),
 };
@@ -263,9 +271,9 @@ const u_plans = [_]PlacementPlan{
     sugar_h2xr2(" H5'", " C5'", " C4'", " O5'", -126.5),
     sugar_h2xr2("H5''", " C5'", " C4'", " O5'", 126.5),
     // Base (uracil)
-    aromatic_ch(" H5 ", " C5 ", " C4 ", " C6 "),
-    aromatic_ch(" H6 ", " C6 ", " C5 ", " N1 "),
-    ring_nh(" H3 ", " N3 ", " C4 ", " C2 "),
+    aromatic_ch(" H5 ", " C4 ", " C6 "),
+    aromatic_ch(" H6 ", " C5 ", " N1 "),
+    ring_nh(" H3 ", " C4 ", " C2 "),
 };
 
 // ===========================================================================
