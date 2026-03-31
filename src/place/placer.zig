@@ -255,6 +255,24 @@ fn executePlan(mdl: *Model, res: Residue, res_idx: u32, plan: *const standard.Pl
             // connected[0]=a1 (center), connected[1]=a2, connected[2]=a3
             const a1_pos = base_atom.pos;
             const a2_pos = findAtomPos(mdl, res, plan.connected[1], target_altloc) orelse return false;
+
+            // Backbone NH: place in peptide plane using C(i-1) from previous residue.
+            // H bisects the C(i-1)-N-CA exterior angle, lying in the peptide plane.
+            if (isBackboneH(plan)) {
+                if (findPrevResAtomPos(mdl, res_idx, .{ ' ', 'C', ' ', ' ' }, target_altloc)) |prev_c_pos| {
+                    const h_pos = geometry.placeHXR2Planar(
+                        a1_pos.cast(f64),
+                        prev_c_pos.cast(f64),
+                        a2_pos.cast(f64),
+                        plan.bond_len,
+                        0.0,
+                    );
+                    try appendHydrogen(mdl, h_pos.cast(f32), plan, res_idx, meta);
+                    return true;
+                }
+                // No previous C (first residue / chain break): fall through to dihedral placement
+            }
+
             const a3_pos = if (!isBlank(plan.connected[2]))
                 findAtomPos(mdl, res, plan.connected[2], target_altloc) orelse return false
             else if (bonds) |b|
@@ -354,6 +372,17 @@ fn isBlank(name: [4]u8) bool {
 // ---------------------------------------------------------------------------
 // Atom lookup helpers
 // ---------------------------------------------------------------------------
+
+/// Find an atom by name in the previous residue within the same chain.
+/// Returns null if there is no previous residue (first in chain or chain break).
+fn findPrevResAtomPos(mdl: *const Model, res_idx: u32, name: [4]u8, target_altloc: u8) ?Vec3f32 {
+    if (res_idx == 0) return null;
+    const cur_res = mdl.residues.items[res_idx];
+    if (cur_res.is_chain_break_before) return null;
+    const prev_res = mdl.residues.items[res_idx - 1];
+    if (prev_res.chain_idx != cur_res.chain_idx) return null;
+    return findAtomPos(mdl, prev_res, name, target_altloc);
+}
 
 /// Find an atom by 4-char PDB name within a residue. Returns its position.
 /// When target_altloc is specified, prefers an atom with matching altloc,
