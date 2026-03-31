@@ -32,6 +32,9 @@ const PipelineResult = struct {
     }
 };
 
+/// Run the full pipeline without an external CCD dictionary.
+/// Structures that need CCD-derived placement (non-standard ligands)
+/// will have those residues skipped, which is acceptable for these tests.
 fn runPipeline(allocator: std.mem.Allocator, path: []const u8) !PipelineResult {
     // 1. Read and decompress
     const source = try zreduce.run.readFile(allocator, path);
@@ -138,6 +141,8 @@ fn verifyBondLengths(mdl: *const zreduce.model.Model) !void {
     for (mdl.atoms.items) |atom| {
         if (!atom.is_added or !atom.is_hydrogen) continue;
 
+        // Find nearest heavy atom in same residue as proxy for bond length.
+        // Not exact (nearest != bonded parent) but sufficient for smoke testing.
         var min_dist: f32 = std.math.inf(f32);
         for (mdl.atoms.items) |other| {
             if (other.is_hydrogen) continue;
@@ -174,7 +179,9 @@ test "real-file: 1rqf — chain gaps, 4-chain CK2 beta" {
 
     // 1rqf: ~1418 residues, ~10467 H placed (measured)
     try testing.expect(result.n_placed > 5000);
+    try testing.expect(result.n_placed < 20000);
     try testing.expect(result.n_residues > 500);
+    try testing.expect(result.n_movers > 0);
 
     // Mid-chain gaps in B/C
     const n_breaks = countChainBreaks(&result.model);
@@ -182,6 +189,7 @@ test "real-file: 1rqf — chain gaps, 4-chain CK2 beta" {
 
     const final_h = countFinalH(&result.model);
     try testing.expect(final_h > 5000);
+    try testing.expect(final_h < 20000);
 
     try verifyBondLengths(&result.model);
     try verifyOutputRoundTrip(testing.allocator, &result.model);
@@ -193,13 +201,16 @@ test "real-file: 3rk2 — chain gaps, SNARE complex" {
 
     // 3rk2: ~505 residues, ~3734 H placed (measured)
     try testing.expect(result.n_placed > 1500);
+    try testing.expect(result.n_placed < 8000);
     try testing.expect(result.n_residues > 200);
+    try testing.expect(result.n_movers > 0);
 
     const n_breaks = countChainBreaks(&result.model);
     try testing.expect(n_breaks > 0);
 
     const final_h = countFinalH(&result.model);
     try testing.expect(final_h > 1500);
+    try testing.expect(final_h < 8000);
 
     try verifyBondLengths(&result.model);
     try verifyOutputRoundTrip(testing.allocator, &result.model);
@@ -215,10 +226,13 @@ test "real-file: 6fys — insertion codes, nanobody" {
 
     // 6fys: ~1218 residues (with HOH), ~7320 H placed (measured)
     try testing.expect(result.n_placed > 3000);
+    try testing.expect(result.n_placed < 15000);
     try testing.expect(result.n_residues > 100);
+    try testing.expect(result.n_movers > 0);
 
     const final_h = countFinalH(&result.model);
     try testing.expect(final_h > 3000);
+    try testing.expect(final_h < 15000);
 
     try verifyBondLengths(&result.model);
     try verifyOutputRoundTrip(testing.allocator, &result.model);
@@ -230,6 +244,7 @@ test "real-file: 2cf8 — insertion codes, thrombin 3-chain" {
 
     // 2cf8: ~684 residues, ~151 H placed (many HOH skipped without CCD)
     try testing.expect(result.n_placed > 50);
+    try testing.expect(result.n_placed < 1000);
     try testing.expect(result.n_residues > 100);
 
     // Multi-chain: should have at least 3 chains
@@ -237,6 +252,7 @@ test "real-file: 2cf8 — insertion codes, thrombin 3-chain" {
 
     const final_h = countFinalH(&result.model);
     try testing.expect(final_h > 50);
+    try testing.expect(final_h < 1000);
 
     try verifyBondLengths(&result.model);
     try verifyOutputRoundTrip(testing.allocator, &result.model);
@@ -252,7 +268,9 @@ test "real-file: 2hnt — gaps + insertion codes, gamma-thrombin" {
 
     // 2hnt: ~448 residues, ~2100 H placed (measured)
     try testing.expect(result.n_placed > 1000);
+    try testing.expect(result.n_placed < 5000);
     try testing.expect(result.n_residues > 200);
+    try testing.expect(result.n_movers > 0);
 
     // Should have chain breaks
     const n_breaks = countChainBreaks(&result.model);
@@ -263,6 +281,7 @@ test "real-file: 2hnt — gaps + insertion codes, gamma-thrombin" {
 
     const final_h = countFinalH(&result.model);
     try testing.expect(final_h > 1000);
+    try testing.expect(final_h < 5000);
 
     try verifyBondLengths(&result.model);
     try verifyOutputRoundTrip(testing.allocator, &result.model);
