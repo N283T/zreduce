@@ -91,9 +91,11 @@ pub fn addHydrogens(
         const res = mdl.residues.items[res_idx];
         const comp_id = res.compIdSlice();
 
-        // Detect N-terminal residue (first residue in its chain)
+        // Detect terminal residues (first/last in chain, or adjacent to chain break)
         const chain = mdl.chains.items[res.chain_idx];
         const is_nterm = (res_idx == chain.residue_start) or res.is_chain_break_before;
+        const is_cterm = (res_idx == chain.residue_end - 1) or
+            (res_idx + 1 < n_residues and mdl.residues.items[res_idx + 1].is_chain_break_before);
 
         if (standard.getPlans(comp_id) orelse
             nucleotide.getPlans(comp_id) orelse
@@ -131,6 +133,13 @@ pub fn addHydrogens(
                     result.n_placed += nterm.placed;
                     result.n_skipped_existing += nterm.skipped;
                 }
+
+                // 3' terminal nucleotide: place HO3' (leaving atom, absent mid-chain).
+                if (is_cterm and nucleotide.getPlans(comp_id) != null) {
+                    const oh = try place3primeOH(mdl, res, @intCast(res_idx), alt);
+                    result.n_placed += oh.placed;
+                    result.n_skipped_existing += oh.skipped;
+                }
             }
 
             result.n_residues += 1;
@@ -146,9 +155,26 @@ pub fn addHydrogens(
                 const plans = try ccd_derive.derivePlans(mdl.allocator, &comp, existing, ir_atoms);
                 defer mdl.allocator.free(plans);
 
+                // For non-5'-terminal nucleotides, skip H on phosphate O (HOP2/HOP3).
+                // Phosphodiester bonds are implicit polymer bonds (not in struct_conn),
+                // so phosphate H should only be placed at the 5' terminus.
+                const skip_phosphate_h = !is_nterm and hasPhosphorusAtom(mdl, res);
+
                 for (plans) |plan| {
+                    if (skip_phosphate_h and isPhosphateH(plan.h_name)) {
+                        result.n_skipped_inter_residue += 1;
+                        continue;
+                    }
                     result.tally(try executePlan(mdl, res, @intCast(res_idx), &plan, null, ' '));
                 }
+
+                // 3' terminal nucleotide (CCD path): place HO3'.
+                if (is_cterm and isNucleotideResidue(mdl, res)) {
+                    const oh = try place3primeOH(mdl, res, @intCast(res_idx), ' ');
+                    result.n_placed += oh.placed;
+                    result.n_skipped_existing += oh.skipped;
+                }
+
                 result.n_residues += 1;
             }
         }
@@ -726,6 +752,74 @@ fn placeNtermNH2Pro(mdl: *Model, res: Residue, res_idx: u32, target_altloc: u8) 
         placed += 1;
     }
     return .{ .placed = placed, .skipped = skipped };
+}
+
+/// Place HO3' on 3' terminal nucleotide residues.
+/// O3' is sp3 with 2 heavy-atom neighbors (C3', and normally the next P — absent at 3' terminus).
+/// Uses h3xr geometry: O3' center, C3' and C4' as references, tetrahedral angle.
+fn place3primeOH(mdl: *Model, res: Residue, res_idx: u32, target_altloc: u8) !NtermResult {
+    const o3_atom = findAtom(mdl, res, .{ ' ', 'O', '3', '\'' }, target_altloc) orelse return .{ .placed = 0, .skipped = 0 };
+    const c3_pos = findAtomPos(mdl, res, .{ ' ', 'C', '3', '\'' }, target_altloc) orelse return .{ .placed = 0, .skipped = 0 };
+    const c4_pos = findAtomPos(mdl, res, .{ ' ', 'C', '4', '\'' }, target_altloc) orelse return .{ .placed = 0, .skipped = 0 };
+
+    var meta = ParentMeta.fromAtom(o3_atom);
+    if (target_altloc != ' ') meta.altloc = target_altloc;
+
+    const ho3_name = padName("HO3'");
+    if (existsInResidue(mdl, res, ho3_name, meta.altloc)) {
+        return .{ .placed = 0, .skipped = 1 };
+    }
+
+    const o3_64 = o3_atom.pos.cast(f64);
+    const c3_64 = math_mod.Vec3(f64){ .x = c3_pos.x, .y = c3_pos.y, .z = c3_pos.z };
+    const c4_64 = math_mod.Vec3(f64){ .x = c4_pos.x, .y = c4_pos.y, .z = c4_pos.z };
+
+    const bond_len: f64 = 0.97; // O-H (CCD mean: 0.968)
+    const h64 = geometry.placeH3XR(o3_64, c3_64, c4_64, bond_len, 109.5, 180.0);
+    const h_pos = Vec3f32{ .x = @floatCast(h64.x), .y = @floatCast(h64.y), .z = @floatCast(h64.z) };
+
+    const hpol_info = element.AtomType.Hpol.info();
+    var atom = Atom{
+        .pos = h_pos,
+        .element_type = .Hpol,
+        .residue_idx = res_idx,
+        .is_hydrogen = true,
+        .is_added = true,
+        .vdw_radius = hpol_info.explicit_radius,
+        .altloc = meta.altloc,
+        .occupancy = meta.occupancy,
+        .b_factor = meta.b_factor,
+        .flags = .{ .donor = true },
+        .mover_hint = .rotate,
+    };
+    atom.setName("HO3'");
+    try mdl.atoms.append(mdl.allocator, atom);
+    return .{ .placed = 1, .skipped = 0 };
+}
+
+/// Check if a residue has a nucleotide sugar-phosphate backbone (has O3' atom).
+fn isNucleotideResidue(mdl: *const Model, res: Residue) bool {
+    const atoms = mdl.atoms.items[res.atom_start..res.atom_end];
+    for (atoms) |a| {
+        if (nameMatch(.{ ' ', 'O', '3', '\'' }, a.nameSlice())) return true;
+    }
+    return false;
+}
+
+/// Check if a hydrogen name is a phosphate H (HOP2, HOP3).
+/// In CCD, these are H atoms on phosphate oxygens OP2/OP3.
+fn isPhosphateH(h_name: [4]u8) bool {
+    return (h_name[0] == 'H' and h_name[1] == 'O' and h_name[2] == 'P');
+}
+
+/// Check if a residue has atom named "P" (phosphorus — nucleotide backbone).
+/// Matches both setName("P") format {'P',' ',' ',' '} and PDB-padded {' ','P',' ',' '}.
+fn hasPhosphorusAtom(mdl: *const Model, res: Residue) bool {
+    const atoms = mdl.atoms.items[res.atom_start..res.atom_end];
+    for (atoms) |a| {
+        if (nameMatch(.{ ' ', 'P', ' ', ' ' }, a.nameSlice())) return true;
+    }
+    return false;
 }
 
 /// Collect existing atom names in a residue as [4]u8 arrays.
