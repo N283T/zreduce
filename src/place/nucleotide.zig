@@ -64,7 +64,7 @@ fn oh_rotator(comptime h: []const u8, comptime o: []const u8, comptime c: []cons
         .placement_type = .h3xr,
         .connected = .{ n(o), n(c), n(c2) },
         .n_connected = 2,
-        .bond_len = 0.98,
+        .bond_len = 0.97, // O-H (CCD ideal mean: 0.967)
         .angle = 109.5,
         .dihedral = 180.0,
         .atom_type = .Hpol,
@@ -431,7 +431,7 @@ test "bond lengths and atom types are correct" {
     for (a) |p| {
         const h = std.mem.trim(u8, &p.h_name, " ");
         if (std.mem.eql(u8, h, "HO2'")) {
-            try std.testing.expectEqual(@as(f32, 0.98), p.bond_len);
+            try std.testing.expectEqual(@as(f32, 0.97), p.bond_len);
             try std.testing.expectEqual(element.AtomType.Hpol, p.atom_type);
         }
     }
