@@ -16,13 +16,11 @@ pub fn placeHXR3(center: Vec3(f64), n1: Vec3(f64), n2: Vec3(f64), n3: Vec3(f64),
     return center.add(dir);
 }
 
-/// Type 2 (H2XR2): Two H on sp2 atom. Computes one H position;
-/// call with different dihedral for the second H.
+/// Type 2 (H2XR2): Two H on sp3 center with 2 known neighbors.
+/// Places one H; call with different dihedral for the second H.
+/// angle_deg = n1-center-H bond angle, dihedral_deg = n2-n1-center-H dihedral.
 pub fn placeH2XR2(center: Vec3(f64), n1: Vec3(f64), n2: Vec3(f64), bond_len: f64, angle_deg: f64, dihedral_deg: f64) Vec3(f64) {
-    const v1 = n1.sub(center).normalize();
-    const v2 = n2.sub(center).normalize();
-    const between = center.add(v1.add(v2).scale(0.5));
-    return placeH3XR(center, between, n1, bond_len, angle_deg, dihedral_deg);
+    return placeH3XR(center, n1, n2, bond_len, angle_deg, dihedral_deg);
 }
 
 /// Type 3 (H3XR): Dihedral-controlled placement.
