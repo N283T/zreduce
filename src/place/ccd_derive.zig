@@ -60,11 +60,15 @@ pub fn derivePlans(
         for (inter_residue_atoms) |bonded_name| {
             if (std.mem.eql(u8, &heavy_atom.name, &bonded_name)) extra += 1;
         }
-        // Count bonds on heavy atom and determine hybridization
-        const bond_info = analyzeBonds(component, @intCast(heavy_idx), extra);
+        // Count bonds on heavy atom and determine hybridization.
+        // Use model-aware neighbor count: CCD neighbors that don't exist in the model
+        // (e.g. leaving atoms like O1 in glycosidic bonds) are excluded so that the
+        // placement type matches the actual number of available reference atoms.
+        const missing_neighbors = countMissingNeighbors(component, @intCast(heavy_idx), existing_atom_names);
+        const bond_info = analyzeBonds(component, @intCast(heavy_idx), extra, missing_neighbors);
 
         // Determine placement type from hybridization
-        const plan = deriveSinglePlan(component, atom, @intCast(heavy_idx), heavy_atom, bond_info) orelse continue;
+        const plan = deriveSinglePlan(component, atom, @intCast(heavy_idx), heavy_atom, bond_info, existing_atom_names) orelse continue;
         try plans.append(allocator, plan);
     }
 
@@ -128,9 +132,32 @@ fn bondValence(order: ccd.BondOrder) u8 {
     };
 }
 
+/// Count heavy neighbors in CCD that are NOT present in the model atom list.
+/// Used to adjust placement type when leaving atoms (e.g. O1 in glycans) are absent.
+fn countMissingNeighbors(component: *const ccd.Component, atom_idx: u16, existing_atom_names: []const [4]u8) u8 {
+    var missing: u8 = 0;
+    for (component.bonds) |bond| {
+        const neighbor_idx: ?u16 = if (bond.atom_idx_1 == atom_idx)
+            bond.atom_idx_2
+        else if (bond.atom_idx_2 == atom_idx)
+            bond.atom_idx_1
+        else
+            null;
+
+        if (neighbor_idx) |ni| {
+            const neighbor = component.atoms[ni];
+            if (neighbor.element_symbol[0] != 'H' and !nameExists(neighbor.name, existing_atom_names)) {
+                missing += 1;
+            }
+        }
+    }
+    return missing;
+}
+
 /// Analyze bonds on the given atom index.
 /// extra_bonds: number of inter-residue single bonds not present in the CCD template.
-fn analyzeBonds(component: *const ccd.Component, atom_idx: u16, extra_bonds: u8) BondInfo {
+/// missing_neighbors: number of CCD heavy neighbors not present in the model.
+fn analyzeBonds(component: *const ccd.Component, atom_idx: u16, extra_bonds: u8, missing_neighbors: u8) BondInfo {
     var info = BondInfo{
         .total_bonds = 0,
         .heavy_neighbor_count = 0,
@@ -170,6 +197,12 @@ fn analyzeBonds(component: *const ccd.Component, atom_idx: u16, extra_bonds: u8)
     // Account for inter-residue bonds not in the CCD template
     info.total_bonds += extra_bonds;
     info.heavy_neighbor_count += extra_bonds;
+
+    // Subtract CCD neighbors absent from the model (e.g. leaving atoms)
+    if (missing_neighbors > 0) {
+        info.heavy_neighbor_count -|= missing_neighbors;
+        info.total_bonds -|= missing_neighbors;
+    }
 
     const total_valence = template_valence + extra_bonds;
     const max_val = maxValence(component.atoms[atom_idx].element_symbol);
@@ -215,6 +248,7 @@ fn deriveSinglePlan(
     heavy_idx: u16,
     heavy_atom: ccd.CompAtom,
     bond_info: BondInfo,
+    existing_atom_names: []const [4]u8,
 ) ?PlacementPlan {
     // Determine bond length from element type
     const bond_len: f32 = switch (heavy_atom.element_symbol[0]) {
@@ -241,7 +275,7 @@ fn deriveSinglePlan(
         .sp3 => {
             if (bond_info.heavy_neighbor_count >= 3) {
                 // HXR3: tetrahedral with 3 heavy neighbors
-                const refs = findHeavyNeighborNames(component, heavy_idx, 3) orelse return null;
+                const refs = findHeavyNeighborNamesFiltered(component, heavy_idx, 3, existing_atom_names) orelse return null;
                 return PlacementPlan{
                     .h_name = h_atom.name,
                     .placement_type = .hxr3,
@@ -252,7 +286,7 @@ fn deriveSinglePlan(
                 };
             } else if (bond_info.heavy_neighbor_count == 2) {
                 // H2XR2: 2 heavy neighbors, dihedral-controlled
-                const refs = findHeavyNeighborNames(component, heavy_idx, 2) orelse return null;
+                const refs = findHeavyNeighborNamesFiltered(component, heavy_idx, 2, existing_atom_names) orelse return null;
                 const dihedral = estimateDihedral(component, h_atom, heavy_idx, refs[0]);
                 return PlacementPlan{
                     .h_name = h_atom.name,
@@ -266,7 +300,7 @@ fn deriveSinglePlan(
                 };
             } else if (bond_info.heavy_neighbor_count == 1) {
                 // H3XR: dihedral-controlled (e.g., methyl)
-                const refs = findHeavyNeighborNames(component, heavy_idx, 1) orelse return null;
+                const refs = findHeavyNeighborNamesFiltered(component, heavy_idx, 1, existing_atom_names) orelse return null;
                 // Find a second reference for dihedral (neighbor of the heavy neighbor)
                 const second_ref = findSecondReference(component, heavy_idx, refs[0]) orelse return null;
                 const dihedral = estimateDihedralFromIdeal(component, h_atom, heavy_atom, refs[0]);
@@ -287,7 +321,7 @@ fn deriveSinglePlan(
         .sp2 => {
             // Planar placement
             if (bond_info.heavy_neighbor_count >= 2) {
-                const refs = findHeavyNeighborNames(component, heavy_idx, 2) orelse return null;
+                const refs = findHeavyNeighborNamesFiltered(component, heavy_idx, 2, existing_atom_names) orelse return null;
                 return PlacementPlan{
                     .h_name = h_atom.name,
                     .placement_type = .hxr2_planar,
@@ -298,7 +332,7 @@ fn deriveSinglePlan(
                 };
             } else if (bond_info.heavy_neighbor_count == 1) {
                 // Only one heavy neighbor on sp2 — use dihedral placement
-                const refs = findHeavyNeighborNames(component, heavy_idx, 1) orelse return null;
+                const refs = findHeavyNeighborNamesFiltered(component, heavy_idx, 1, existing_atom_names) orelse return null;
                 const second_ref = findSecondReference(component, heavy_idx, refs[0]) orelse return null;
                 const dihedral = estimateDihedralFromIdeal(component, h_atom, heavy_atom, refs[0]);
                 return PlacementPlan{
@@ -317,7 +351,7 @@ fn deriveSinglePlan(
         .sp => {
             // Linear placement (HXY)
             if (bond_info.heavy_neighbor_count >= 1) {
-                const refs = findHeavyNeighborNames(component, heavy_idx, 1) orelse return null;
+                const refs = findHeavyNeighborNamesFiltered(component, heavy_idx, 1, existing_atom_names) orelse return null;
                 return PlacementPlan{
                     .h_name = h_atom.name,
                     .placement_type = .hxy,
@@ -337,6 +371,11 @@ const blank: [4]u8 = .{ ' ', ' ', ' ', ' ' };
 
 /// Find up to N heavy-atom neighbor names for the given atom.
 fn findHeavyNeighborNames(component: *const ccd.Component, atom_idx: u16, comptime max: u8) ?[max][4]u8 {
+    return findHeavyNeighborNamesFiltered(component, atom_idx, max, null);
+}
+
+/// Find heavy neighbor names, optionally filtering to only atoms present in model.
+fn findHeavyNeighborNamesFiltered(component: *const ccd.Component, atom_idx: u16, comptime max: u8, existing_atom_names: ?[]const [4]u8) ?[max][4]u8 {
     var result: [max][4]u8 = undefined;
     var count: u8 = 0;
 
@@ -350,6 +389,10 @@ fn findHeavyNeighborNames(component: *const ccd.Component, atom_idx: u16, compti
 
         if (neighbor_idx) |ni| {
             if (component.atoms[ni].element_symbol[0] != 'H') {
+                // Skip atoms not present in model (e.g. leaving atoms)
+                if (existing_atom_names) |names| {
+                    if (!nameExists(component.atoms[ni].name, names)) continue;
+                }
                 if (count < max) {
                     result[count] = component.atoms[ni].name;
                     count += 1;
@@ -484,7 +527,7 @@ test "analyzeBonds detects sp2" {
         .atoms = &atoms,
         .bonds = &bonds,
     };
-    const info = analyzeBonds(&comp, 0, 0);
+    const info = analyzeBonds(&comp, 0, 0, 0);
     try testing.expectEqual(Hybridization.sp2, info.hybridization);
     try testing.expectEqual(@as(u8, 2), info.heavy_neighbor_count);
     try testing.expectEqual(@as(u8, 1), info.h_neighbor_count);
@@ -510,7 +553,7 @@ test "analyzeBonds detects sp3" {
         .atoms = &atoms,
         .bonds = &bonds,
     };
-    const info = analyzeBonds(&comp, 0, 0);
+    const info = analyzeBonds(&comp, 0, 0, 0);
     try testing.expectEqual(Hybridization.sp3, info.hybridization);
     try testing.expectEqual(@as(u8, 1), info.heavy_neighbor_count);
     try testing.expectEqual(@as(u8, 3), info.h_neighbor_count);
@@ -551,10 +594,10 @@ test "analyzeBonds demotes sp to sp2 on valence overflow" {
         .bonds = &bonds,
     };
 
-    const info_normal = analyzeBonds(&comp, 0, 0);
+    const info_normal = analyzeBonds(&comp, 0, 0, 0);
     try testing.expectEqual(Hybridization.sp, info_normal.hybridization);
 
-    const info_overflow = analyzeBonds(&comp, 0, 2);
+    const info_overflow = analyzeBonds(&comp, 0, 2, 0);
     try testing.expectEqual(Hybridization.sp2, info_overflow.hybridization);
 }
 
@@ -577,10 +620,10 @@ test "analyzeBonds demotes N sp2 to sp3 on valence overflow" {
         .bonds = &bonds,
     };
 
-    const info_normal = analyzeBonds(&comp, 0, 0);
+    const info_normal = analyzeBonds(&comp, 0, 0, 0);
     try testing.expectEqual(Hybridization.sp2, info_normal.hybridization);
 
-    const info_overflow = analyzeBonds(&comp, 0, 1);
+    const info_overflow = analyzeBonds(&comp, 0, 1, 0);
     try testing.expectEqual(Hybridization.sp3, info_overflow.hybridization);
 }
 
@@ -606,11 +649,11 @@ test "analyzeBonds demotes sp2 to sp3 on valence overflow" {
     };
 
     // Without extra bonds: sp2 (has double bond, valence = 4 which equals max for C)
-    const info_normal = analyzeBonds(&comp, 0, 0);
+    const info_normal = analyzeBonds(&comp, 0, 0, 0);
     try testing.expectEqual(Hybridization.sp2, info_normal.hybridization);
 
     // With 1 extra inter-residue bond: valence = 5 > 4 → demote to sp3
-    const info_overflow = analyzeBonds(&comp, 0, 1);
+    const info_overflow = analyzeBonds(&comp, 0, 1, 0);
     try testing.expectEqual(Hybridization.sp3, info_overflow.hybridization);
     try testing.expectEqual(@as(u8, 3), info_overflow.heavy_neighbor_count); // 2 template + 1 extra
 }
