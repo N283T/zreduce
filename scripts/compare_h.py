@@ -97,7 +97,13 @@ class AtomPos:
 
 
 def extract_h(path: str) -> dict[tuple, list[AtomPos]]:
-    """Return {(chain, seq_id, comp_id, ins): [AtomPos, ...]}"""
+    """Return {(auth_chain, auth_seq, comp_id, ins): [AtomPos, ...]}
+
+    Uses auth_asym_id + auth_seq_id as the residue key for cross-tool
+    compatibility: label_seq_id for non-polymer residues varies between
+    tools (e.g. zreduce="1" vs ChimeraX="."), and label_asym_id may
+    differ for glycan chains.
+    """
     doc = gemmi.cif.read(path)
     block = doc[0]
     table = block.find(
@@ -106,8 +112,8 @@ def extract_h(path: str) -> dict[tuple, list[AtomPos]]:
             "type_symbol",
             "label_atom_id",
             "label_comp_id",
-            "label_asym_id",
-            "label_seq_id",
+            "auth_asym_id",
+            "auth_seq_id",
             "Cartn_x",
             "Cartn_y",
             "Cartn_z",
