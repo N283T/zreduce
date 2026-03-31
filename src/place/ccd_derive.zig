@@ -287,12 +287,14 @@ fn deriveSinglePlan(
     switch (bond_info.hybridization) {
         .sp3 => {
             if (bond_info.heavy_neighbor_count >= 3) {
-                // HXR3: tetrahedral with 3 heavy neighbors
-                const refs = findHeavyNeighborNamesFiltered(component, heavy_idx, 3, existing_atom_names) orelse return null;
+                // HXR3: tetrahedral with 3 heavy neighbors.
+                // executePlan expects connected = {center, n1, n2} where center is
+                // the parent heavy atom. The 3rd neighbor is found geometrically.
+                const refs = findHeavyNeighborNamesFiltered(component, heavy_idx, 2, existing_atom_names) orelse return null;
                 return PlacementPlan{
                     .h_name = h_atom.name,
                     .placement_type = .hxr3,
-                    .connected = .{ refs[0], refs[1], refs[2] },
+                    .connected = .{ heavy_atom.name, refs[0], refs[1] },
                     .n_connected = 3,
                     .bond_len = bond_len,
                     .atom_type = atom_type,
