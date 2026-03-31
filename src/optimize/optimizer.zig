@@ -82,7 +82,7 @@ pub fn optimize(
     else
         @intCast(@min(std.Thread.getCpuCount() catch 1, 8));
 
-    var score_ctx = try buildScoreContext(allocator, movers, model.atoms.items);
+    var score_ctx = try buildScoreContext(allocator, movers, model.atoms.items, config.scoring_params.dot_density);
     defer score_ctx.deinit(allocator);
 
     var scratch = std.ArrayListUnmanaged(u32).empty;
@@ -247,18 +247,46 @@ fn optimizeSingleton(
     allocator: Allocator,
     scratch: *std.ArrayListUnmanaged(u32),
 ) void {
+    optimizeSingletonImpl(movers, mover_idx, model, config, score_ctx, allocator, scratch, true);
+}
+
+/// Pair-scoring variant for greedy clique optimization (same cost level as brute-force).
+fn optimizeSingletonPair(
+    movers: []Mover,
+    mover_idx: u32,
+    model: *Model,
+    config: OptConfig,
+    score_ctx: *const ScoreContext,
+    allocator: Allocator,
+    scratch: *std.ArrayListUnmanaged(u32),
+) void {
+    optimizeSingletonImpl(movers, mover_idx, model, config, score_ctx, allocator, scratch, false);
+}
+
+fn optimizeSingletonImpl(
+    movers: []Mover,
+    mover_idx: u32,
+    model: *Model,
+    config: OptConfig,
+    score_ctx: *const ScoreContext,
+    allocator: Allocator,
+    scratch: *std.ArrayListUnmanaged(u32),
+    use_dot_sphere: bool,
+) void {
     const m = &movers[mover_idx];
     var best_score: f32 = -std.math.inf(f32);
     var best_idx: u16 = 0;
 
     for (0..m.nOrientations()) |oi| {
         const idx: u16 = @intCast(oi);
-        // Score using the orientation's positions directly — do NOT call applyOrientation,
-        // which would write to model.atoms and race with concurrent threads reading it.
-        const orient_positions = m.orientations[idx].positions;
-        const score = scoreMoverWithPositions(m, mover_idx, orient_positions, movers, model, config.scoring_params, config.scoring_params.gap_scale, score_ctx, allocator, scratch) - m.orientationPenalty(idx);
-        if (score > best_score) {
-            best_score = score;
+        const orient = m.orientations[idx];
+        const score = if (use_dot_sphere)
+            scoring_mod.scoreMoverDotSphere(m, mover_idx, orient.positions, orient.flags, movers, model, config.scoring_params, score_ctx, allocator, scratch)
+        else
+            scoreMoverWithPositions(m, mover_idx, orient.positions, movers, model, config.scoring_params, config.scoring_params.gap_scale, score_ctx, allocator, scratch);
+        const adjusted = score - m.orientationPenalty(idx);
+        if (adjusted > best_score) {
+            best_score = adjusted;
             best_idx = idx;
         }
     }
@@ -297,15 +325,14 @@ fn fineSearchMover(
 
     if (fine.len == 0) return;
 
-    // Score current coarse best using the orientation's stored positions — do NOT read
-    // atoms[ai].pos because another thread may be writing it concurrently during fine search.
-    const coarse_positions = m.orientations[m.best_orientation].positions;
-    var best_score = scoreMoverWithPositions(m, mover_idx, coarse_positions, movers, model, config.scoring_params, config.scoring_params.gap_scale, score_ctx, allocator, scratch) - m.orientationPenalty(m.best_orientation);
+    // Score current coarse best using dot-sphere scoring.
+    const coarse_orient = m.orientations[m.best_orientation];
+    var best_score = scoring_mod.scoreMoverDotSphere(m, mover_idx, coarse_orient.positions, coarse_orient.flags, movers, model, config.scoring_params, score_ctx, allocator, scratch) - m.orientationPenalty(m.best_orientation);
 
-    // Score fine orientations using their positions directly (no writes to model.atoms).
+    // Score fine orientations (rotators only — no flags override needed).
     var best_fine: ?usize = null;
     for (fine, 0..) |orient, fi| {
-        const score = scoreMoverWithPositions(m, mover_idx, orient.positions, movers, model, config.scoring_params, config.scoring_params.gap_scale, score_ctx, allocator, scratch) - orient.penalty;
+        const score = scoring_mod.scoreMoverDotSphere(m, mover_idx, orient.positions, null, movers, model, config.scoring_params, score_ctx, allocator, scratch) - orient.penalty;
         if (score > best_score) {
             best_score = score;
             best_fine = fi;
@@ -413,7 +440,7 @@ fn optimizeIterativeGreedy(
         var changed = false;
         for (clq) |mi| {
             const old_best = movers[mi].best_orientation;
-            optimizeSingleton(movers, mi, model, config, score_ctx, allocator, scratch);
+            optimizeSingletonPair(movers, mi, model, config, score_ctx, allocator, scratch);
             movers[mi].applyOrientation(model.atoms.items, movers[mi].best_orientation);
             if (movers[mi].best_orientation != old_best) changed = true;
         }
@@ -508,7 +535,7 @@ test "optimize singleton picks best orientation" {
 
     var movers = [_]Mover{mover};
 
-    var score_ctx = try buildScoreContext(allocator, &movers, model.atoms.items);
+    var score_ctx = try buildScoreContext(allocator, &movers, model.atoms.items, 16.0);
     defer score_ctx.deinit(allocator);
 
     var scratch = std.ArrayListUnmanaged(u32).empty;
@@ -561,7 +588,7 @@ test "optimize brute force finds optimal combination" {
     var movers = [_]Mover{ m0, m1 };
     const clq = [_]u32{ 0, 1 };
 
-    var score_ctx = try buildScoreContext(allocator, &movers, model.atoms.items);
+    var score_ctx = try buildScoreContext(allocator, &movers, model.atoms.items, 16.0);
     defer score_ctx.deinit(allocator);
 
     var scratch = std.ArrayListUnmanaged(u32).empty;
@@ -641,7 +668,7 @@ test "iterative greedy finds optimal for coupled movers" {
     var movers = [_]Mover{ m0, m1 };
     const clq = [_]u32{ 0, 1 };
 
-    var score_ctx = try buildScoreContext(allocator, &movers, model.atoms.items);
+    var score_ctx = try buildScoreContext(allocator, &movers, model.atoms.items, 16.0);
     defer score_ctx.deinit(allocator);
 
     var scratch = std.ArrayListUnmanaged(u32).empty;
@@ -684,7 +711,7 @@ test "optimize brute force sees clashes introduced by moved coordinates" {
     var movers = [_]Mover{ m0, m1 };
     const clq = [_]u32{ 0, 1 };
 
-    var score_ctx = try buildScoreContext(allocator, &movers, model.atoms.items);
+    var score_ctx = try buildScoreContext(allocator, &movers, model.atoms.items, 16.0);
     defer score_ctx.deinit(allocator);
 
     var scratch = std.ArrayListUnmanaged(u32).empty;
@@ -717,7 +744,7 @@ test "buildScoreContext excludes mover-controlled atoms from static index" {
     defer mover.deinit();
 
     const movers = [_]Mover{mover};
-    var score_ctx = try buildScoreContext(allocator, &movers, model.atoms.items);
+    var score_ctx = try buildScoreContext(allocator, &movers, model.atoms.items, 16.0);
     defer score_ctx.deinit(allocator);
 
     try testing.expectEqual(@as(usize, 2), score_ctx.static_positions.len);
@@ -748,7 +775,7 @@ test "buildScoreContext with multiple movers excludes all mover atoms" {
     defer m1.deinit();
 
     const movers = [_]Mover{ m0, m1 };
-    var score_ctx = try buildScoreContext(allocator, &movers, model.atoms.items);
+    var score_ctx = try buildScoreContext(allocator, &movers, model.atoms.items, 16.0);
     defer score_ctx.deinit(allocator);
 
     // Static atoms: 0, 2, 4
@@ -782,7 +809,7 @@ test "buildScoreContext partial allocation failure frees correctly" {
     // (fail_index=5 in this test), so we stop before that index.
     for (0..5) |fail_idx| {
         var failing = std.testing.FailingAllocator.init(allocator, .{ .fail_index = fail_idx });
-        const result = buildScoreContext(failing.allocator(), &movers, model.atoms.items);
+        const result = buildScoreContext(failing.allocator(), &movers, model.atoms.items, 16.0);
         if (result) |*ctx| {
             var ctx_mut = ctx.*;
             ctx_mut.deinit(failing.allocator());
@@ -831,7 +858,7 @@ test "buildScoreContext computes correct centroids and bounding radii" {
     defer m1.deinit();
 
     const movers = [_]Mover{ m0, m1 };
-    var score_ctx = try buildScoreContext(allocator, &movers, model.atoms.items);
+    var score_ctx = try buildScoreContext(allocator, &movers, model.atoms.items, 16.0);
     defer score_ctx.deinit(allocator);
 
     try testing.expectEqual(@as(usize, 2), score_ctx.mover_centroids.len);
@@ -890,7 +917,7 @@ test "centroid early-exit does not change optimization result" {
 
     var movers = [_]Mover{ m0, m1 };
 
-    var score_ctx = try buildScoreContext(allocator, &movers, model.atoms.items);
+    var score_ctx = try buildScoreContext(allocator, &movers, model.atoms.items, 16.0);
     defer score_ctx.deinit(allocator);
 
     // Verify early-exit fires: centroid distance > search_radius + r0 + r1
@@ -952,7 +979,7 @@ test "mover-vs-mover clash scoring picks correct orientations" {
     var movers = [_]Mover{ m0, m1 };
     const clq = [_]u32{ 0, 1 };
 
-    var score_ctx = try buildScoreContext(allocator, &movers, model.atoms.items);
+    var score_ctx = try buildScoreContext(allocator, &movers, model.atoms.items, 16.0);
     defer score_ctx.deinit(allocator);
 
     var scratch = std.ArrayListUnmanaged(u32).empty;

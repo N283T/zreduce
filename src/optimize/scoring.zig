@@ -14,6 +14,65 @@ const mover_mod = @import("mover.zig");
 const Mover = mover_mod.Mover;
 const scorer_mod = @import("scorer.zig");
 const element = @import("../element.zig");
+const dot_sphere_mod = @import("dot_sphere.zig");
+const DotSphere = dot_sphere_mod.DotSphere;
+
+/// Maximum VDW radius across all atom types (derived at comptime from element table).
+/// Used for conservative neighbor search radius calculations in dot-sphere scoring.
+const max_vdw_radius: f32 = blk: {
+    var max: f32 = 0;
+    const fields = @typeInfo(element.AtomType).@"enum".fields;
+    for (fields) |f| {
+        const at: element.AtomType = @enumFromInt(f.value);
+        const r = at.info().explicit_radius;
+        if (r > max) max = r;
+    }
+    break :blk max;
+};
+
+/// Cache of pre-generated DotSphere instances keyed by quantized VDW radius.
+/// Pre-populated before parallel dispatch so all access during scoring is read-only.
+pub const DotSphereCache = struct {
+    map: std.AutoHashMapUnmanaged(u16, DotSphere),
+    density: f32,
+    allocator: Allocator,
+
+    pub fn init(allocator: Allocator, density: f32) DotSphereCache {
+        return .{
+            .map = .{},
+            .density = density,
+            .allocator = allocator,
+        };
+    }
+
+    /// Get or create a DotSphere for the given VDW radius.
+    /// Must be called before parallel dispatch (not thread-safe for inserts).
+    pub fn getOrCreate(self: *DotSphereCache, radius: f32) !*const DotSphere {
+        const key = radiusKey(radius);
+        const gop = try self.map.getOrPut(self.allocator, key);
+        if (!gop.found_existing) {
+            gop.value_ptr.* = try DotSphere.generate(self.allocator, radius, self.density);
+        }
+        return gop.value_ptr;
+    }
+
+    /// Look up a pre-populated DotSphere (thread-safe read-only access).
+    pub fn get(self: *const DotSphereCache, radius: f32) ?*const DotSphere {
+        return self.map.getPtr(radiusKey(radius));
+    }
+
+    fn radiusKey(radius: f32) u16 {
+        return @intFromFloat(@round(radius * 100.0));
+    }
+
+    pub fn deinit(self: *DotSphereCache) void {
+        var it = self.map.valueIterator();
+        while (it.next()) |sphere| {
+            sphere.deinit();
+        }
+        self.map.deinit(self.allocator);
+    }
+};
 
 pub const ScoreContext = struct {
     cell_list: ?CellList,
@@ -27,6 +86,8 @@ pub const ScoreContext = struct {
     mover_centroids: []math_mod.Vec3(f32),
     /// Bounding radius of each mover: max distance from centroid to any orientation position.
     mover_radii: []f32,
+    /// Pre-generated DotSphere instances for dot-sphere scoring.
+    dot_sphere_cache: DotSphereCache,
 
     pub fn deinit(self: *ScoreContext, allocator: Allocator) void {
         if (self.cell_list) |*cl| cl.deinit();
@@ -36,6 +97,7 @@ pub const ScoreContext = struct {
         allocator.free(self.static_flags);
         allocator.free(self.mover_centroids);
         allocator.free(self.mover_radii);
+        self.dot_sphere_cache.deinit();
     }
 };
 
@@ -47,6 +109,7 @@ pub fn buildScoreContext(
     allocator: Allocator,
     movers: []const Mover,
     atoms: []const Atom,
+    dot_density: f32,
 ) !ScoreContext {
     // Mark mover-controlled atoms (temporary, freed before return).
     const moved_atoms = try allocator.alloc(bool, atoms.len);
@@ -143,6 +206,16 @@ pub fn buildScoreContext(
         mover_radii[mi] = @sqrt(max_r2);
     }
 
+    // Pre-populate DotSphere cache with all distinct mover atom radii.
+    // This ensures thread-safe read-only access during parallel scoring.
+    var dot_sphere_cache = DotSphereCache.init(allocator, dot_density);
+    errdefer dot_sphere_cache.deinit();
+    for (movers) |m| {
+        for (m.atom_indices) |ai| {
+            _ = try dot_sphere_cache.getOrCreate(atoms[ai].vdw_radius);
+        }
+    }
+
     return .{
         .cell_list = cell_list,
         .static_positions = static_positions,
@@ -151,6 +224,7 @@ pub fn buildScoreContext(
         .static_flags = static_flags,
         .mover_centroids = mover_centroids,
         .mover_radii = mover_radii,
+        .dot_sphere_cache = dot_sphere_cache,
     };
 }
 
@@ -367,6 +441,160 @@ pub fn scoreMover(
     );
 }
 
+/// Score a mover using dot-sphere probe scoring (matches original reduce algorithm).
+///
+/// Thread-safe: reads model.atoms for other movers' current positions but does NOT
+/// write to model.atoms. Mover atom positions come from `positions_override`.
+///
+/// Optimization: collects neighbors once per mover (not per atom or orientation),
+/// then filters per-atom with a distance check before calling scoreAtom.
+pub fn scoreMoverDotSphere(
+    m: *const Mover,
+    mover_idx: u32,
+    positions_override: []const math_mod.Vec3(f32),
+    flags_override: ?[]const element.AtomFlags,
+    movers: []const Mover,
+    model: *const Model,
+    scoring_params: scorer_mod.ScoringParams,
+    score_ctx: *const ScoreContext,
+    allocator: Allocator,
+    scratch: *std.ArrayListUnmanaged(u32),
+) f32 {
+    const atoms = model.atoms.items;
+
+    // Compute bounding center and radius from override positions.
+    var bounding_center = math_mod.Vec3(f32).zero;
+    for (positions_override) |pos| {
+        bounding_center = bounding_center.add(pos);
+    }
+    bounding_center = bounding_center.scale(1.0 / @as(f32, @floatFromInt(positions_override.len)));
+
+    var bounding_radius: f32 = 0.0;
+    for (positions_override) |pos| {
+        const d = pos.sub(bounding_center);
+        const r2 = d.dot(d);
+        if (r2 > bounding_radius) bounding_radius = r2;
+    }
+    bounding_radius = @sqrt(bounding_radius);
+
+    // Mover-wide neighbor collection: query CellList once with expanded radius.
+    // search_radius = bounding_radius + max_atom_vdw + probe_radius + max_neighbor_vdw + probe_radius + gap_cutoff
+    const search_radius = bounding_radius + max_vdw_radius + max_vdw_radius + 2.0 * scoring_params.probe_radius + 0.5;
+
+    // Collect static neighbors into stack buffers.
+    var nbr_pos_buf: [512]math_mod.Vec3(f32) = undefined;
+    var nbr_rad_buf: [512]f32 = undefined;
+    var nbr_flg_buf: [512]element.AtomFlags = undefined;
+    var nbr_count: usize = 0;
+
+    if (score_ctx.cell_list) |cl| {
+        scratch.clearRetainingCapacity();
+        cl.neighborsInRadius(bounding_center, search_radius, scratch, allocator, score_ctx.static_positions) catch |err| {
+            std.log.warn("dot-sphere neighbor query failed: {s}; returning -inf", .{@errorName(err)});
+            return -std.math.inf(f32);
+        };
+        for (scratch.items) |static_idx| {
+            if (nbr_count >= nbr_pos_buf.len) {
+                std.log.warn("dot-sphere neighbor buffer full ({d}) for mover {d}; some neighbors skipped", .{ nbr_pos_buf.len, mover_idx });
+                break;
+            }
+            nbr_pos_buf[nbr_count] = score_ctx.static_positions[static_idx];
+            nbr_rad_buf[nbr_count] = score_ctx.static_radii[static_idx];
+            nbr_flg_buf[nbr_count] = score_ctx.static_flags[static_idx];
+            nbr_count += 1;
+        }
+    } else {
+        // Fallback: brute-force scan of all static atoms within range.
+        for (0..score_ctx.static_positions.len) |si| {
+            const d = score_ctx.static_positions[si].sub(bounding_center);
+            if (d.dot(d) > search_radius * search_radius) continue;
+            if (nbr_count >= nbr_pos_buf.len) {
+                std.log.warn("dot-sphere neighbor buffer full ({d}) for mover {d}; some neighbors skipped", .{ nbr_pos_buf.len, mover_idx });
+                break;
+            }
+            nbr_pos_buf[nbr_count] = score_ctx.static_positions[si];
+            nbr_rad_buf[nbr_count] = score_ctx.static_radii[si];
+            nbr_flg_buf[nbr_count] = score_ctx.static_flags[si];
+            nbr_count += 1;
+        }
+    }
+
+    // Collect other-mover atoms using centroid early-exit.
+    const my_centroid = score_ctx.mover_centroids[mover_idx];
+    const my_mover_radius = score_ctx.mover_radii[mover_idx];
+
+    for (movers, 0..) |other_m, other_idx| {
+        if (other_idx == mover_idx) continue;
+        const other_mover_radius = score_ctx.mover_radii[other_idx];
+        const pair_cutoff = search_radius + my_mover_radius + other_mover_radius;
+        const cdiff = my_centroid.sub(score_ctx.mover_centroids[other_idx]);
+        if (cdiff.dot(cdiff) > pair_cutoff * pair_cutoff) continue;
+        for (other_m.atom_indices) |oi| {
+            if (isMoverAtom(m, oi)) continue;
+            if (nbr_count >= nbr_pos_buf.len) {
+                std.log.warn("dot-sphere neighbor buffer full ({d}) for mover {d}; some mover neighbors skipped", .{ nbr_pos_buf.len, mover_idx });
+                break;
+            }
+            nbr_pos_buf[nbr_count] = atoms[oi].pos;
+            nbr_rad_buf[nbr_count] = atoms[oi].vdw_radius;
+            nbr_flg_buf[nbr_count] = atoms[oi].flags;
+            nbr_count += 1;
+        }
+    }
+
+    const all_nbr_pos = nbr_pos_buf[0..nbr_count];
+    const all_nbr_rad = nbr_rad_buf[0..nbr_count];
+    const all_nbr_flg = nbr_flg_buf[0..nbr_count];
+
+    // Per-atom dot-sphere scoring with per-atom neighbor filtering.
+    var total: f32 = 0;
+    // Per-atom filtered neighbor buffers (subset of mover-wide neighbors).
+    var filt_pos_buf: [512]math_mod.Vec3(f32) = undefined;
+    var filt_rad_buf: [512]f32 = undefined;
+    var filt_flg_buf: [512]element.AtomFlags = undefined;
+
+    for (m.atom_indices, 0..) |ai, j| {
+        const a_pos = positions_override[j];
+        const a_radius = atoms[ai].vdw_radius;
+        const a_flags = if (flags_override) |fo| fo[j] else atoms[ai].flags;
+
+        // Look up pre-generated DotSphere for this atom's radius.
+        const sphere = score_ctx.dot_sphere_cache.get(a_radius) orelse continue;
+
+        // Filter neighbors: keep those within scoring range of this atom.
+        // Max interaction distance: atom_radius + probe_radius + neighbor_radius + probe_radius + gap_cutoff.
+        const filter_cutoff = a_radius + max_vdw_radius + 2.0 * scoring_params.probe_radius + 0.5;
+        const filter_cutoff2 = filter_cutoff * filter_cutoff;
+
+        var filt_count: usize = 0;
+        for (0..nbr_count) |ni| {
+            const d = a_pos.sub(all_nbr_pos[ni]);
+            if (d.dot(d) <= filter_cutoff2) {
+                filt_pos_buf[filt_count] = all_nbr_pos[ni];
+                filt_rad_buf[filt_count] = all_nbr_rad[ni];
+                filt_flg_buf[filt_count] = all_nbr_flg[ni];
+                filt_count += 1;
+            }
+        }
+
+        if (filt_count == 0) continue;
+
+        const result = scorer_mod.scoreAtom(
+            a_pos,
+            a_radius,
+            a_flags,
+            filt_pos_buf[0..filt_count],
+            filt_rad_buf[0..filt_count],
+            filt_flg_buf[0..filt_count],
+            sphere,
+            scoring_params,
+        );
+        total += result.total;
+    }
+
+    return total;
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 const testing = std.testing;
@@ -456,4 +684,164 @@ test "scorePairSoA produces identical results to scorePair" {
         const score_soa = scorePairSoA(tc.pos_a, tc.r_a, tc.flags_a, tc.pos_b, tc.r_b, tc.flags_b, params, gap_scale);
         try testing.expectEqual(score_pair_result, score_soa);
     }
+}
+
+test "DotSphereCache returns same sphere for same radius" {
+    var cache = DotSphereCache.init(testing.allocator, 16.0);
+    defer cache.deinit();
+
+    const s1 = try cache.getOrCreate(1.70);
+    const s2 = try cache.getOrCreate(1.70);
+    try testing.expectEqual(s1, s2);
+
+    // Different radius gives different sphere
+    const s3 = try cache.getOrCreate(1.05);
+    try testing.expect(s1 != s3);
+
+    // Read-only get works after population
+    const s4 = cache.get(1.70);
+    try testing.expect(s4 != null);
+    try testing.expectEqual(s1, s4.?);
+
+    // Missing radius returns null
+    try testing.expectEqual(cache.get(9.99), null);
+}
+
+test "scoreMoverDotSphere basic contact" {
+    const allocator = testing.allocator;
+
+    // Setup: single-atom mover (H at origin, r=1.05) near a static atom (C at x=3.0, r=1.70)
+    // Surface gap ~ 3.0 - 1.05 - 1.70 = 0.25 → positive contact score
+    var model = Model.init(allocator);
+    defer model.deinit();
+
+    // atom 0: H (mover-controlled)
+    try model.atoms.append(allocator, .{ .pos = .{ .x = 0, .y = 0, .z = 0 }, .vdw_radius = 1.05, .flags = .{} });
+    // atom 1: C (static)
+    try model.atoms.append(allocator, .{ .pos = .{ .x = 3.0, .y = 0, .z = 0 }, .vdw_radius = 1.70, .flags = .{} });
+
+    // Mover with 1 atom, 1 orientation
+    const positions = try allocator.alloc(math_mod.Vec3(f32), 1);
+    defer allocator.free(positions);
+    positions[0] = .{ .x = 0, .y = 0, .z = 0 };
+
+    var orientations = try allocator.alloc(mover_mod.Orientation, 1);
+    defer allocator.free(orientations);
+    orientations[0] = .{ .positions = positions };
+
+    const atom_indices = try allocator.alloc(u32, 1);
+    defer allocator.free(atom_indices);
+    atom_indices[0] = 0;
+
+    var movers = [_]Mover{.{
+        .kind = .single_h_rotator,
+        .residue_idx = 0,
+        .atom_indices = atom_indices,
+        .orientations = orientations,
+        .allocator = allocator,
+    }};
+
+    var score_ctx = try buildScoreContext(allocator, &movers, model.atoms.items, 16.0);
+    defer score_ctx.deinit(allocator);
+
+    var scratch = std.ArrayListUnmanaged(u32).empty;
+    defer scratch.deinit(allocator);
+
+    const score = scoreMoverDotSphere(
+        &movers[0], 0, positions, null, &movers, &model,
+        scorer_mod.ScoringParams{}, &score_ctx, allocator, &scratch,
+    );
+
+    // Contact score should be positive (not a clash at distance 3.0 with sum_r=2.75)
+    try testing.expect(score > 0.0);
+}
+
+test "scoreMoverDotSphere basic bump" {
+    const allocator = testing.allocator;
+
+    // H at origin (r=1.05) overlapping with C at x=2.0 (r=1.70)
+    // sum_r = 2.75, distance = 2.0, gap = -0.75 → heavy clash
+    var model = Model.init(allocator);
+    defer model.deinit();
+    try model.atoms.append(allocator, .{ .pos = .{ .x = 0, .y = 0, .z = 0 }, .vdw_radius = 1.05, .flags = .{} });
+    try model.atoms.append(allocator, .{ .pos = .{ .x = 2.0, .y = 0, .z = 0 }, .vdw_radius = 1.70, .flags = .{} });
+
+    const positions = try allocator.alloc(math_mod.Vec3(f32), 1);
+    defer allocator.free(positions);
+    positions[0] = .{ .x = 0, .y = 0, .z = 0 };
+
+    var orientations = try allocator.alloc(mover_mod.Orientation, 1);
+    defer allocator.free(orientations);
+    orientations[0] = .{ .positions = positions };
+
+    const atom_indices = try allocator.alloc(u32, 1);
+    defer allocator.free(atom_indices);
+    atom_indices[0] = 0;
+
+    var movers = [_]Mover{.{
+        .kind = .single_h_rotator,
+        .residue_idx = 0,
+        .atom_indices = atom_indices,
+        .orientations = orientations,
+        .allocator = allocator,
+    }};
+
+    var score_ctx = try buildScoreContext(allocator, &movers, model.atoms.items, 16.0);
+    defer score_ctx.deinit(allocator);
+
+    var scratch = std.ArrayListUnmanaged(u32).empty;
+    defer scratch.deinit(allocator);
+
+    const score = scoreMoverDotSphere(
+        &movers[0], 0, positions, null, &movers, &model,
+        scorer_mod.ScoringParams{}, &score_ctx, allocator, &scratch,
+    );
+
+    // Bump score should be negative
+    try testing.expect(score < 0.0);
+}
+
+test "scoreMoverDotSphere H-bond" {
+    const allocator = testing.allocator;
+
+    // H donor at origin (r=1.05) near O acceptor at x=2.40 (r=1.40)
+    // sum_r = 2.45, distance = 2.40, gap = -0.05 → slight overlap, H-bond range
+    var model = Model.init(allocator);
+    defer model.deinit();
+    try model.atoms.append(allocator, .{ .pos = .{ .x = 0, .y = 0, .z = 0 }, .vdw_radius = 1.05, .flags = .{ .donor = true } });
+    try model.atoms.append(allocator, .{ .pos = .{ .x = 2.40, .y = 0, .z = 0 }, .vdw_radius = 1.40, .flags = .{ .acceptor = true } });
+
+    const positions = try allocator.alloc(math_mod.Vec3(f32), 1);
+    defer allocator.free(positions);
+    positions[0] = .{ .x = 0, .y = 0, .z = 0 };
+
+    var orientations = try allocator.alloc(mover_mod.Orientation, 1);
+    defer allocator.free(orientations);
+    orientations[0] = .{ .positions = positions };
+
+    const atom_indices = try allocator.alloc(u32, 1);
+    defer allocator.free(atom_indices);
+    atom_indices[0] = 0;
+
+    var movers = [_]Mover{.{
+        .kind = .single_h_rotator,
+        .residue_idx = 0,
+        .atom_indices = atom_indices,
+        .orientations = orientations,
+        .allocator = allocator,
+    }};
+
+    var score_ctx = try buildScoreContext(allocator, &movers, model.atoms.items, 16.0);
+    defer score_ctx.deinit(allocator);
+
+    var scratch = std.ArrayListUnmanaged(u32).empty;
+    defer scratch.deinit(allocator);
+
+    const score = scoreMoverDotSphere(
+        &movers[0], 0, positions, null, &movers, &model,
+        scorer_mod.ScoringParams{}, &score_ctx, allocator, &scratch,
+    );
+
+    // H-bond score should be positive
+    try testing.expect(score > 0.0);
 }
