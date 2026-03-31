@@ -643,9 +643,13 @@ fn padName(name: []const u8) [4]u8 {
     return padded;
 }
 
-/// Check if a placement plan is for a backbone H (amide or N-terminal).
-/// Used by N-terminal skip logic (line 95) — matches " H  ", " H1 ", " H2 ", " H3 ".
+/// Check if a placement plan is for a backbone amide H (single NH or N-terminal H1/H2/H3).
+/// Used by N-terminal skip logic — matches " H  ", " H1 ", " H2 ", " H3 " but only
+/// when the parent atom (connected[0]) is backbone nitrogen " N  ".
+/// This prevents false matches on nucleotide ring H (e.g. guanine H1 on N1 via C6).
 fn isBackboneH(plan: *const standard.PlacementPlan) bool {
+    const parent = plan.connected[0];
+    if (!(parent[0] == ' ' and parent[1] == 'N' and parent[2] == ' ' and parent[3] == ' ')) return false;
     const h = plan.h_name;
     if (h[0] == ' ' and h[1] == 'H' and h[2] == ' ' and h[3] == ' ') return true;
     if (h[0] == ' ' and h[1] == 'H' and h[2] == '1' and h[3] == ' ') return true;
