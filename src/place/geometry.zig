@@ -164,6 +164,11 @@ test "type2 H2XR2 bond length and distinct positions" {
     try testing.expectApproxEqAbs(h2.distance(center), 1.10, 0.05);
     // Different dihedrals should produce distinct positions
     try testing.expect(h1.distance(h2) > 0.1);
+    // n1-center-H bond angles should be ~109.5° (the whole point of the fix)
+    const angle1 = math_mod.angle(f64, n1, center, h1);
+    const angle2 = math_mod.angle(f64, n1, center, h2);
+    try testing.expectApproxEqAbs(angle1, 109.5, 1.5);
+    try testing.expectApproxEqAbs(angle2, 109.5, 1.5);
 }
 
 test "type5 HXR2Frac bond length" {
