@@ -150,7 +150,21 @@ pub fn addHydrogens(
             if (effective_component) |comp| {
                 const existing = try collectAtomNames(mdl.allocator, mdl, res);
                 defer mdl.allocator.free(existing);
-                const ir_atoms = try collectInterResidueAtomNames(mdl.allocator, mdl, res);
+                const explicit_ir = try collectInterResidueAtomNames(mdl.allocator, mdl, res);
+                defer mdl.allocator.free(explicit_ir);
+
+                // For amino-acid-like residues (have N, CA, C), add implicit peptide
+                // bond atoms to inter-residue list. Peptide bonds are not in struct_conn
+                // but backbone N (non-N-term) and C (non-C-term) participate in them.
+                // This ensures leaving H on backbone N (e.g. H2 on 2MR) are skipped.
+                const ir_atoms = try addImplicitPeptideBondAtoms(
+                    mdl.allocator,
+                    mdl,
+                    res,
+                    explicit_ir,
+                    is_nterm,
+                    is_cterm,
+                );
                 defer mdl.allocator.free(ir_atoms);
                 const plans = try ccd_derive.derivePlans(mdl.allocator, &comp, existing, ir_atoms);
                 defer mdl.allocator.free(plans);
@@ -827,6 +841,46 @@ fn hasPhosphorusAtom(mdl: *const Model, res: Residue) bool {
         if (nameMatch(.{ ' ', 'P', ' ', ' ' }, a.nameSlice())) return true;
     }
     return false;
+}
+
+/// Find the raw [4]u8 name of an atom in the model (using nameMatch for lookup).
+/// Returns the actual stored name bytes, which may differ from PDB-padded format.
+fn findAtomName(mdl: *const Model, res: Residue, name: [4]u8, target_altloc: u8) ?[4]u8 {
+    const a = findAtom(mdl, res, name, target_altloc) orelse return null;
+    return a.name;
+}
+
+/// Extend inter-residue atom names with implicit peptide bond atoms.
+/// For amino-acid-like residues (having N, CA, C), backbone N participates in
+/// a peptide bond to the previous residue (unless N-terminal), and backbone C
+/// participates in a peptide bond to the next residue (unless C-terminal).
+/// These implicit bonds are not recorded in struct_conn but affect leaving atom logic.
+fn addImplicitPeptideBondAtoms(
+    allocator: std.mem.Allocator,
+    mdl: *const Model,
+    res: Residue,
+    explicit_ir: []const [4]u8,
+    is_nterm: bool,
+    is_cterm: bool,
+) ![]const [4]u8 {
+    // Check if residue has backbone atoms (amino-acid-like)
+    const has_n = findAtomPos(mdl, res, .{ ' ', 'N', ' ', ' ' }, ' ') != null;
+    const has_ca = findAtomPos(mdl, res, .{ ' ', 'C', 'A', ' ' }, ' ') != null;
+    const has_c = findAtomPos(mdl, res, .{ ' ', 'C', ' ', ' ' }, ' ') != null;
+
+    if (!(has_n and has_ca and has_c)) return try allocator.dupe([4]u8, explicit_ir);
+
+    var list = std.ArrayListUnmanaged([4]u8){};
+    defer list.deinit(allocator);
+    try list.appendSlice(allocator, explicit_ir);
+
+    // Non-N-terminal: backbone N has implicit peptide bond to previous C.
+    // Use model atom name format (setName style, not PDB-padded).
+    if (!is_nterm) try list.append(allocator, findAtomName(mdl, res, .{ ' ', 'N', ' ', ' ' }, ' ') orelse .{ 'N', ' ', ' ', ' ' });
+    // Non-C-terminal: backbone C has implicit peptide bond to next N
+    if (!is_cterm) try list.append(allocator, findAtomName(mdl, res, .{ ' ', 'C', ' ', ' ' }, ' ') orelse .{ 'C', ' ', ' ', ' ' });
+
+    return try allocator.dupe([4]u8, list.items);
 }
 
 /// Collect existing atom names in a residue as [4]u8 arrays.
