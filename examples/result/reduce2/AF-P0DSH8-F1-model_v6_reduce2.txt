@@ -1,0 +1,96 @@
+reduce2 v.2.14.0, run 2026-03-31 22:13:55
+ /Users/nagaet/zreduce/scripts/reduce2/run_reduce2.py /Users/nagaet/zreduce/scripts/reduce2/../../examples/data/AF-P0DSH8-F1-model_v6.cif /Users/nagaet/zreduce/scripts/reduce2/../../examples/result/reduce2/AF-P0DSH8-F1-model_v6_reduce2.cif
+  Time to get coordinates: 0.000
+  Time to compute bond proxies: 0.000
+  Time to compute bonded neighbor lists: 0.001
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for CD: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for CD: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for CG: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+  Time to get extra atom info: 0.011
+  Time to select rotatable hydrogens: 0.000
+  Time to compute alternates: 0.000
+ Running Reduce optimization on model index -1, alternate ''
+   bondedNeighborDepth = 4
+   probeRadius = 0.25
+   useNeutronDistances = False
+   probeDensity = 16.0
+   minOccupancy = 0.02
+   preferenceMagnitude = 1.0
+  Time to construct spatial query: 0.000
+  Time to place water phantom Hydrogens: 0.000
+  Time to fixup explicit doners: 0.000
+ Added MoverNH3Rotator 1 to chain A MET 1
+ Used MoverTetrahedralMethylRotator to stagger chain A MET 1 CE
+ Used MoverTetrahedralMethylRotator to stagger chain A ILE 3 CG2
+ Used MoverTetrahedralMethylRotator to stagger chain A ILE 3 CD1
+ Used MoverTetrahedralMethylRotator to stagger chain A ILE 4 CG2
+ Used MoverTetrahedralMethylRotator to stagger chain A ILE 4 CD1
+ Used MoverTetrahedralMethylRotator to stagger chain A ILE 5 CG2
+ Used MoverTetrahedralMethylRotator to stagger chain A ILE 5 CD1
+ Used MoverTetrahedralMethylRotator to stagger chain A LEU 6 CD1
+ Used MoverTetrahedralMethylRotator to stagger chain A LEU 6 CD2
+ Used MoverTetrahedralMethylRotator to stagger chain A ALA 7 CB
+ Used MoverTetrahedralMethylRotator to stagger chain A THR 8 CG2
+ Used MoverTetrahedralMethylRotator to stagger chain A ILE 9 CG2
+ Used MoverTetrahedralMethylRotator to stagger chain A ILE 9 CD1
+ Used MoverTetrahedralMethylRotator to stagger chain A THR 11 CG2
+ Used MoverTetrahedralMethylRotator to stagger chain A THR 12 CG2
+ Added MoverNH3Rotator 2 to chain A LYS 16
+ Added MoverSingleHydrogenRotator 3 to chain A SER 2 HG with 1 potential nearby acceptors
+ Added MoverSingleHydrogenRotator 4 to chain A THR 8 HG1 with 1 potential nearby acceptors
+ Added MoverSingleHydrogenRotator 5 to chain A SER 10 HG with 1 potential nearby acceptors
+ Added MoverSingleHydrogenRotator 6 to chain A THR 11 HG1 with 2 potential nearby acceptors
+ Added MoverSingleHydrogenRotator 7 to chain A THR 12 HG1 with 1 potential nearby acceptors
+ Inserted 7 Movers
+ Marked 0 atoms for deletion
+  Time to place movers: 0.014
+  Time to initialize Movers: 0.000
+ Found 7 Cliques (7 are singletons); largest Clique size = 1
+  Time to compute interaction graph: 0.001
+  Time to determine excluded atoms: 0.002
+  Time to construct dot scorer: 0.000
+  Time to construct OptimizerC: 0.000
+ Singleton optimized with score 0.23
+ Singleton optimized with score 0.20
+ Singleton optimized with score 2.36
+ Singleton optimized with score 2.88
+ Singleton optimized with score 0.95
+ Singleton optimized with score 5.17
+ Singleton optimized with score 11.94
+  Time to optimize singletons (coarse): 0.002
+  Time to optimize cliques (coarse): 0.000
+ Fine optimization on all Movers
+  Time to optimize all Movers (fine): 0.002
+ BEGIN REPORT: Model -1 Alt '':
+  Singleton Movers:
+   NH3Rotator at chain A MET 1 N Initial score: 0.23 final score: 0.24 pose Angle 175.0 deg . .
+   NH3Rotator at chain A LYS 16 NZ Initial score: 0.20 final score: 0.20 pose Angle 180.0 deg . .
+   SingleHydrogenRotator at chain A SER 2 HG Initial score: 2.36 final score: 2.39 pose Angle -5.0 deg . .
+   SingleHydrogenRotator at chain A THR 8 HG1 Initial score: 0.83 final score: 2.93 pose Angle 74.3 deg . .
+   SingleHydrogenRotator at chain A SER 10 HG Initial score: 0.93 final score: 1.00 pose Angle 74.0 deg . .
+   SingleHydrogenRotator at chain A THR 11 HG1 Initial score: 1.49 final score: 5.24 pose Angle 0.7 deg . .
+   SingleHydrogenRotator at chain A THR 12 HG1 Initial score: 0.12 final score: 11.95 pose Angle 76.3 deg . .
+ END REPORT
+ FixUp on all Movers
+  Time to fix up Movers: 0.000
+ Deleting Hydrogens tagged by Histidine Movers
+  Time to delete Hydrogens: 0.000
+ Calculated : cached atom scores: 376 : 0; fraction calculated 1.00
+Time to Add Hydrogen = 0.557 sec
+Time to Optimize = 0.036 sec

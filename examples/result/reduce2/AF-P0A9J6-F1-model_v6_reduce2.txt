@@ -1,0 +1,847 @@
+reduce2 v.2.14.0, run 2026-03-31 22:13:50
+ /Users/nagaet/zreduce/scripts/reduce2/run_reduce2.py /Users/nagaet/zreduce/scripts/reduce2/../../examples/data/AF-P0A9J6-F1-model_v6.cif /Users/nagaet/zreduce/scripts/reduce2/../../examples/result/reduce2/AF-P0A9J6-F1-model_v6_reduce2.cif
+  Time to get coordinates: 0.003
+  Time to compute bond proxies: 0.000
+  Time to compute bonded neighbor lists: 0.012
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for CD: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for CG: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for CG: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for CG: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Marking ND1 as an aromatic-ring acceptor
+Marking NE2 as an aromatic-ring acceptor
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for CG: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for CD: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Marking CG as an aromatic-ring acceptor
+Marking CD1 as an aromatic-ring acceptor
+Marking CD2 as an aromatic-ring acceptor
+Marking CE1 as an aromatic-ring acceptor
+Marking CE2 as an aromatic-ring acceptor
+Marking CZ as an aromatic-ring acceptor
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for CD: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for CG: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Marking ND1 as an aromatic-ring acceptor
+Marking NE2 as an aromatic-ring acceptor
+Overriding radius for C: 1.65 (was 1.7)
+Marking CG as an aromatic-ring acceptor
+Marking CD1 as an aromatic-ring acceptor
+Marking CD2 as an aromatic-ring acceptor
+Marking CE1 as an aromatic-ring acceptor
+Marking CE2 as an aromatic-ring acceptor
+Marking CZ as an aromatic-ring acceptor
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for CD: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Marking CG as an aromatic-ring acceptor
+Marking CD1 as an aromatic-ring acceptor
+Marking CD2 as an aromatic-ring acceptor
+Marking CE1 as an aromatic-ring acceptor
+Marking CE2 as an aromatic-ring acceptor
+Marking CZ as an aromatic-ring acceptor
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for CG: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for CD: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for CG: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Marking CG as an aromatic-ring acceptor
+Marking CD1 as an aromatic-ring acceptor
+Marking CD2 as an aromatic-ring acceptor
+Marking CE1 as an aromatic-ring acceptor
+Marking CE2 as an aromatic-ring acceptor
+Marking CZ as an aromatic-ring acceptor
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for HG: 1.05 (was 1.22)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for CG: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for CG: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for CD: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for CD: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for CD: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for CG: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for CG: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for CG: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for CD: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Marking CG as an aromatic-ring acceptor
+Marking CD1 as an aromatic-ring acceptor
+Marking CD2 as an aromatic-ring acceptor
+Marking CE1 as an aromatic-ring acceptor
+Marking CE2 as an aromatic-ring acceptor
+Marking CZ as an aromatic-ring acceptor
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for CG: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for CD: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for CD: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for CG: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Marking ND1 as an aromatic-ring acceptor
+Marking NE2 as an aromatic-ring acceptor
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for CG: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for CD: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for CD: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for CD: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for CG: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for CD: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for CD: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for CD: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Marking ND1 as an aromatic-ring acceptor
+Marking NE2 as an aromatic-ring acceptor
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for CD: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for CG: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for CG: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for CD: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for CG: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for CD: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for CG: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for CG: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for CD: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for CD: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for CD: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for CD: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for CG: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for CG: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for CD: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for CG: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for CD: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Marking ND1 as an aromatic-ring acceptor
+Marking NE2 as an aromatic-ring acceptor
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for CD: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Marking CD2 as an aromatic-ring acceptor
+Marking CE2 as an aromatic-ring acceptor
+Marking CE3 as an aromatic-ring acceptor
+Marking CZ2 as an aromatic-ring acceptor
+Marking CZ3 as an aromatic-ring acceptor
+Marking CH2 as an aromatic-ring acceptor
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for CG: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for CD: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for CD: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Marking CG as an aromatic-ring acceptor
+Marking CD1 as an aromatic-ring acceptor
+Marking CD2 as an aromatic-ring acceptor
+Marking CE1 as an aromatic-ring acceptor
+Marking CE2 as an aromatic-ring acceptor
+Marking CZ as an aromatic-ring acceptor
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for CD: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for CG: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for CG: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Marking CG as an aromatic-ring acceptor
+Marking CD1 as an aromatic-ring acceptor
+Marking CD2 as an aromatic-ring acceptor
+Marking CE1 as an aromatic-ring acceptor
+Marking CE2 as an aromatic-ring acceptor
+Marking CZ as an aromatic-ring acceptor
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for CG: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for CD: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for CD: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for CD: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Marking CG as an aromatic-ring acceptor
+Marking CD1 as an aromatic-ring acceptor
+Marking CD2 as an aromatic-ring acceptor
+Marking CE1 as an aromatic-ring acceptor
+Marking CE2 as an aromatic-ring acceptor
+Marking CZ as an aromatic-ring acceptor
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Marking ND1 as an aromatic-ring acceptor
+Marking NE2 as an aromatic-ring acceptor
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for CD: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Marking CD2 as an aromatic-ring acceptor
+Marking CE2 as an aromatic-ring acceptor
+Marking CE3 as an aromatic-ring acceptor
+Marking CZ2 as an aromatic-ring acceptor
+Marking CZ3 as an aromatic-ring acceptor
+Marking CH2 as an aromatic-ring acceptor
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for CD: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for CD: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for CG: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Marking CG as an aromatic-ring acceptor
+Marking CD1 as an aromatic-ring acceptor
+Marking CD2 as an aromatic-ring acceptor
+Marking CE1 as an aromatic-ring acceptor
+Marking CE2 as an aromatic-ring acceptor
+Marking CZ as an aromatic-ring acceptor
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for CG: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+Overriding radius for CD: 1.65 (was 1.7)
+Overriding radius for C: 1.65 (was 1.7)
+  Time to get extra atom info: 0.069
+  Time to select rotatable hydrogens: 0.000
+  Time to compute alternates: 0.007
+ Running Reduce optimization on model index -1, alternate ''
+   bondedNeighborDepth = 4
+   probeRadius = 0.25
+   useNeutronDistances = False
+   probeDensity = 16.0
+   minOccupancy = 0.02
+   preferenceMagnitude = 1.0
+  Time to construct spatial query: 0.000
+  Time to place water phantom Hydrogens: 0.004
+  Time to fixup explicit doners: 0.004
+ Added MoverNH3Rotator 1 to chain A MET 1
+ Used MoverTetrahedralMethylRotator to stagger chain A MET 1 CE
+ Used MoverTetrahedralMethylRotator to stagger chain A ALA 4 CB
+ Used MoverTetrahedralMethylRotator to stagger chain A LEU 7 CD1
+ Used MoverTetrahedralMethylRotator to stagger chain A LEU 7 CD2
+ Used MoverTetrahedralMethylRotator to stagger chain A VAL 8 CG1
+ Used MoverTetrahedralMethylRotator to stagger chain A VAL 8 CG2
+ Used MoverTetrahedralMethylRotator to stagger chain A VAL 9 CG1
+ Used MoverTetrahedralMethylRotator to stagger chain A VAL 9 CG2
+ Used MoverTetrahedralMethylRotator to stagger chain A LEU 10 CD1
+ Used MoverTetrahedralMethylRotator to stagger chain A LEU 10 CD2
+ Used MoverTetrahedralMethylRotator to stagger chain A ILE 13 CG2
+ Used MoverTetrahedralMethylRotator to stagger chain A ILE 13 CD1
+ Used MoverTetrahedralMethylRotator to stagger chain A ALA 15 CB
+ Used MoverTetrahedralMethylRotator to stagger chain A ILE 18 CG2
+ Used MoverTetrahedralMethylRotator to stagger chain A ILE 18 CD1
+ Used MoverTetrahedralMethylRotator to stagger chain A LEU 19 CD1
+ Used MoverTetrahedralMethylRotator to stagger chain A LEU 19 CD2
+ Used MoverTetrahedralMethylRotator to stagger chain A LEU 21 CD1
+ Used MoverTetrahedralMethylRotator to stagger chain A LEU 21 CD2
+ Used MoverTetrahedralMethylRotator to stagger chain A THR 26 CG2
+ Used MoverTetrahedralMethylRotator to stagger chain A THR 30 CG2
+ Used MoverTetrahedralMethylRotator to stagger chain A VAL 31 CG1
+ Used MoverTetrahedralMethylRotator to stagger chain A VAL 31 CG2
+ Used MoverTetrahedralMethylRotator to stagger chain A THR 32 CG2
+ Used MoverTetrahedralMethylRotator to stagger chain A VAL 38 CG1
+ Used MoverTetrahedralMethylRotator to stagger chain A VAL 38 CG2
+ Used MoverTetrahedralMethylRotator to stagger chain A ALA 39 CB
+ Added MoverNH3Rotator 2 to chain A LYS 43
+ Used MoverTetrahedralMethylRotator to stagger chain A ALA 45 CB
+ Used MoverTetrahedralMethylRotator to stagger chain A ALA 48 CB
+ Used MoverTetrahedralMethylRotator to stagger chain A VAL 49 CG1
+ Used MoverTetrahedralMethylRotator to stagger chain A VAL 49 CG2
+ Used MoverTetrahedralMethylRotator to stagger chain A ALA 50 CB
+ Used MoverTetrahedralMethylRotator to stagger chain A ALA 51 CB
+ Used MoverTetrahedralMethylRotator to stagger chain A ALA 56 CB
+ Used MoverTetrahedralMethylRotator to stagger chain A ILE 58 CG2
+ Used MoverTetrahedralMethylRotator to stagger chain A ILE 58 CD1
+ Used MoverTetrahedralMethylRotator to stagger chain A ALA 59 CB
+ Used MoverTetrahedralMethylRotator to stagger chain A ILE 61 CG2
+ Used MoverTetrahedralMethylRotator to stagger chain A ILE 61 CD1
+ Used MoverTetrahedralMethylRotator to stagger chain A ALA 62 CB
+ Used MoverTetrahedralMethylRotator to stagger chain A THR 64 CG2
+ Used MoverTetrahedralMethylRotator to stagger chain A ILE 69 CG2
+ Used MoverTetrahedralMethylRotator to stagger chain A ILE 69 CD1
+ Used MoverTetrahedralMethylRotator to stagger chain A VAL 73 CG1
+ Used MoverTetrahedralMethylRotator to stagger chain A VAL 73 CG2
+ Used MoverTetrahedralMethylRotator to stagger chain A LEU 77 CD1
+ Used MoverTetrahedralMethylRotator to stagger chain A LEU 77 CD2
+ Used MoverTetrahedralMethylRotator to stagger chain A ALA 78 CB
+ Used MoverTetrahedralMethylRotator to stagger chain A THR 79 CG2
+ Used MoverTetrahedralMethylRotator to stagger chain A ILE 82 CG2
+ Used MoverTetrahedralMethylRotator to stagger chain A ILE 82 CD1
+ Used MoverTetrahedralMethylRotator to stagger chain A ILE 84 CG2
+ Used MoverTetrahedralMethylRotator to stagger chain A ILE 84 CD1
+ Used MoverTetrahedralMethylRotator to stagger chain A THR 85 CG2
+ Used MoverTetrahedralMethylRotator to stagger chain A VAL 87 CG1
+ Used MoverTetrahedralMethylRotator to stagger chain A VAL 87 CG2
+ Used MoverTetrahedralMethylRotator to stagger chain A VAL 89 CG1
+ Used MoverTetrahedralMethylRotator to stagger chain A VAL 89 CG2
+ Used MoverTetrahedralMethylRotator to stagger chain A ILE 90 CG2
+ Used MoverTetrahedralMethylRotator to stagger chain A ILE 90 CD1
+ Added MoverNH3Rotator 3 to chain A LYS 91
+ Used MoverTetrahedralMethylRotator to stagger chain A THR 95 CG2
+ Used MoverTetrahedralMethylRotator to stagger chain A VAL 97 CG1
+ Used MoverTetrahedralMethylRotator to stagger chain A VAL 97 CG2
+ Used MoverTetrahedralMethylRotator to stagger chain A ALA 98 CB
+ Used MoverTetrahedralMethylRotator to stagger chain A LEU 99 CD1
+ Used MoverTetrahedralMethylRotator to stagger chain A LEU 99 CD2
+ Used MoverTetrahedralMethylRotator to stagger chain A ILE 100 CG2
+ Used MoverTetrahedralMethylRotator to stagger chain A ILE 100 CD1
+ Used MoverTetrahedralMethylRotator to stagger chain A VAL 102 CG1
+ Used MoverTetrahedralMethylRotator to stagger chain A VAL 102 CG2
+ Used MoverTetrahedralMethylRotator to stagger chain A VAL 109 CG1
+ Used MoverTetrahedralMethylRotator to stagger chain A VAL 109 CG2
+ Used MoverTetrahedralMethylRotator to stagger chain A ILE 110 CG2
+ Used MoverTetrahedralMethylRotator to stagger chain A ILE 110 CD1
+ Used MoverTetrahedralMethylRotator to stagger chain A ILE 112 CG2
+ Used MoverTetrahedralMethylRotator to stagger chain A ILE 112 CD1
+ Used MoverTetrahedralMethylRotator to stagger chain A ALA 114 CB
+ Used MoverTetrahedralMethylRotator to stagger chain A ALA 116 CB
+ Used MoverTetrahedralMethylRotator to stagger chain A ALA 118 CB
+ Used MoverTetrahedralMethylRotator to stagger chain A ALA 119 CB
+ Used MoverTetrahedralMethylRotator to stagger chain A LEU 120 CD1
+ Used MoverTetrahedralMethylRotator to stagger chain A LEU 120 CD2
+ Used MoverTetrahedralMethylRotator to stagger chain A ALA 123 CB
+ Used MoverTetrahedralMethylRotator to stagger chain A LEU 124 CD1
+ Used MoverTetrahedralMethylRotator to stagger chain A LEU 124 CD2
+ Used MoverTetrahedralMethylRotator to stagger chain A VAL 125 CG1
+ Used MoverTetrahedralMethylRotator to stagger chain A VAL 125 CG2
+ Used MoverTetrahedralMethylRotator to stagger chain A ALA 127 CB
+ Used MoverTetrahedralMethylRotator to stagger chain A ILE 132 CG2
+ Used MoverTetrahedralMethylRotator to stagger chain A ILE 132 CD1
+ Used MoverTetrahedralMethylRotator to stagger chain A ALA 133 CB
+ Used MoverTetrahedralMethylRotator to stagger chain A ALA 135 CB
+ Used MoverTetrahedralMethylRotator to stagger chain A ALA 137 CB
+ Used MoverTetrahedralMethylRotator to stagger chain A LEU 138 CD1
+ Used MoverTetrahedralMethylRotator to stagger chain A LEU 138 CD2
+ Used MoverTetrahedralMethylRotator to stagger chain A LEU 139 CD1
+ Used MoverTetrahedralMethylRotator to stagger chain A LEU 139 CD2
+ Used MoverTetrahedralMethylRotator to stagger chain A MET 140 CE
+ Used MoverTetrahedralMethylRotator to stagger chain A LEU 142 CD1
+ Used MoverTetrahedralMethylRotator to stagger chain A LEU 142 CD2
+ Used MoverTetrahedralMethylRotator to stagger chain A LEU 146 CD1
+ Used MoverTetrahedralMethylRotator to stagger chain A LEU 146 CD2
+ Used MoverTetrahedralMethylRotator to stagger chain A VAL 149 CG1
+ Used MoverTetrahedralMethylRotator to stagger chain A VAL 149 CG2
+ Used MoverTetrahedralMethylRotator to stagger chain A MET 150 CE
+ Used MoverTetrahedralMethylRotator to stagger chain A ALA 151 CB
+ Used MoverTetrahedralMethylRotator to stagger chain A ALA 152 CB
+ Used MoverTetrahedralMethylRotator to stagger chain A ALA 153 CB
+ Added MoverNH3Rotator 4 to chain A LYS 154
+ Used MoverTetrahedralMethylRotator to stagger chain A ILE 155 CG2
+ Used MoverTetrahedralMethylRotator to stagger chain A ILE 155 CD1
+ Used MoverTetrahedralMethylRotator to stagger chain A ALA 156 CB
+ Added MoverNH3Rotator 5 to chain A LYS 160
+ Used MoverTetrahedralMethylRotator to stagger chain A THR 161 CG2
+ Used MoverTetrahedralMethylRotator to stagger chain A ILE 162 CG2
+ Used MoverTetrahedralMethylRotator to stagger chain A ILE 162 CD1
+ Used MoverTetrahedralMethylRotator to stagger chain A VAL 163 CG1
+ Used MoverTetrahedralMethylRotator to stagger chain A VAL 163 CG2
+ Used MoverTetrahedralMethylRotator to stagger chain A ALA 164 CB
+ Used MoverTetrahedralMethylRotator to stagger chain A LEU 165 CD1
+ Used MoverTetrahedralMethylRotator to stagger chain A LEU 165 CD2
+ Used MoverTetrahedralMethylRotator to stagger chain A ALA 168 CB
+ Used MoverTetrahedralMethylRotator to stagger chain A ALA 170 CB
+ Used MoverTetrahedralMethylRotator to stagger chain A LEU 173 CD1
+ Used MoverTetrahedralMethylRotator to stagger chain A LEU 173 CD2
+ Used MoverTetrahedralMethylRotator to stagger chain A LEU 177 CD1
+ Used MoverTetrahedralMethylRotator to stagger chain A LEU 177 CD2
+ Used MoverTetrahedralMethylRotator to stagger chain A LEU 178 CD1
+ Used MoverTetrahedralMethylRotator to stagger chain A LEU 178 CD2
+ Used MoverTetrahedralMethylRotator to stagger chain A ALA 179 CB
+ Used MoverTetrahedralMethylRotator to stagger chain A LEU 180 CD1
+ Used MoverTetrahedralMethylRotator to stagger chain A LEU 180 CD2
+ Used MoverTetrahedralMethylRotator to stagger chain A VAL 181 CG1
+ Used MoverTetrahedralMethylRotator to stagger chain A VAL 181 CG2
+ Used MoverTetrahedralMethylRotator to stagger chain A ILE 183 CG2
+ Used MoverTetrahedralMethylRotator to stagger chain A ILE 183 CD1
+ Used MoverTetrahedralMethylRotator to stagger chain A ILE 184 CG2
+ Used MoverTetrahedralMethylRotator to stagger chain A ILE 184 CD1
+ Used MoverTetrahedralMethylRotator to stagger chain A THR 185 CG2
+ Used MoverTetrahedralMethylRotator to stagger chain A THR 189 CG2
+ Used MoverTetrahedralMethylRotator to stagger chain A ALA 191 CB
+ Added MoverNH3Rotator 6 to chain A LYS 193
+ Used MoverTetrahedralMethylRotator to stagger chain A LEU 194 CD1
+ Used MoverTetrahedralMethylRotator to stagger chain A LEU 194 CD2
+ Used MoverTetrahedralMethylRotator to stagger chain A THR 195 CG2
+ Used MoverTetrahedralMethylRotator to stagger chain A ILE 197 CG2
+ Used MoverTetrahedralMethylRotator to stagger chain A ILE 197 CD1
+ Used MoverTetrahedralMethylRotator to stagger chain A VAL 199 CG1
+ Used MoverTetrahedralMethylRotator to stagger chain A VAL 199 CG2
+ Used MoverTetrahedralMethylRotator to stagger chain A ALA 205 CB
+ Used MoverTetrahedralMethylRotator to stagger chain A ALA 206 CB
+ Added MoverNH3Rotator 7 to chain A LYS 207
+ Used MoverTetrahedralMethylRotator to stagger chain A ALA 208 CB
+ Used MoverTetrahedralMethylRotator to stagger chain A ALA 209 CB
+ Used MoverTetrahedralMethylRotator to stagger chain A VAL 211 CG1
+ Used MoverTetrahedralMethylRotator to stagger chain A VAL 211 CG2
+ Used MoverTetrahedralMethylRotator to stagger chain A LEU 212 CD1
+ Used MoverTetrahedralMethylRotator to stagger chain A LEU 212 CD2
+ Added MoverNH3Rotator 8 to chain A LYS 215
+ Used MoverTetrahedralMethylRotator to stagger chain A ILE 217 CG2
+ Used MoverTetrahedralMethylRotator to stagger chain A ILE 217 CD1
+ Used MoverTetrahedralMethylRotator to stagger chain A THR 219 CG2
+ Used MoverTetrahedralMethylRotator to stagger chain A VAL 220 CG1
+ Used MoverTetrahedralMethylRotator to stagger chain A VAL 220 CG2
+ Used MoverTetrahedralMethylRotator to stagger chain A LEU 221 CD1
+ Used MoverTetrahedralMethylRotator to stagger chain A LEU 221 CD2
+ Used MoverTetrahedralMethylRotator to stagger chain A ILE 222 CG2
+ Used MoverTetrahedralMethylRotator to stagger chain A ILE 222 CD1
+ Used MoverTetrahedralMethylRotator to stagger chain A THR 223 CG2
+ Used MoverTetrahedralMethylRotator to stagger chain A LEU 224 CD1
+ Used MoverTetrahedralMethylRotator to stagger chain A LEU 224 CD2
+ Used MoverTetrahedralMethylRotator to stagger chain A VAL 229 CG1
+ Used MoverTetrahedralMethylRotator to stagger chain A VAL 229 CG2
+ Used MoverTetrahedralMethylRotator to stagger chain A ALA 231 CB
+ Used MoverTetrahedralMethylRotator to stagger chain A VAL 233 CG1
+ Used MoverTetrahedralMethylRotator to stagger chain A VAL 233 CG2
+ Used MoverTetrahedralMethylRotator to stagger chain A VAL 240 CG1
+ Used MoverTetrahedralMethylRotator to stagger chain A VAL 240 CG2
+ Used MoverTetrahedralMethylRotator to stagger chain A VAL 245 CG1
+ Used MoverTetrahedralMethylRotator to stagger chain A VAL 245 CG2
+ Used MoverTetrahedralMethylRotator to stagger chain A ALA 247 CB
+ Used MoverTetrahedralMethylRotator to stagger chain A VAL 248 CG1
+ Used MoverTetrahedralMethylRotator to stagger chain A VAL 248 CG2
+ Used MoverTetrahedralMethylRotator to stagger chain A THR 250 CG2
+ Used MoverTetrahedralMethylRotator to stagger chain A ILE 251 CG2
+ Used MoverTetrahedralMethylRotator to stagger chain A ILE 251 CD1
+ Used MoverTetrahedralMethylRotator to stagger chain A ALA 252 CB
+ Used MoverTetrahedralMethylRotator to stagger chain A ALA 253 CB
+ Used MoverTetrahedralMethylRotator to stagger chain A THR 256 CG2
+ Used MoverTetrahedralMethylRotator to stagger chain A ALA 260 CB
+ Used MoverTetrahedralMethylRotator to stagger chain A LEU 261 CD1
+ Used MoverTetrahedralMethylRotator to stagger chain A LEU 261 CD2
+ Used MoverTetrahedralMethylRotator to stagger chain A ILE 262 CG2
+ Used MoverTetrahedralMethylRotator to stagger chain A ILE 262 CD1
+ Used MoverTetrahedralMethylRotator to stagger chain A THR 263 CG2
+ Used MoverTetrahedralMethylRotator to stagger chain A ALA 264 CB
+ Used MoverTetrahedralMethylRotator to stagger chain A LEU 265 CD1
+ Used MoverTetrahedralMethylRotator to stagger chain A LEU 265 CD2
+ Used MoverTetrahedralMethylRotator to stagger chain A LEU 266 CD1
+ Used MoverTetrahedralMethylRotator to stagger chain A LEU 266 CD2
+ Added MoverNH3Rotator 9 to chain A LYS 269
+ Used MoverTetrahedralMethylRotator to stagger chain A LEU 271 CD1
+ Used MoverTetrahedralMethylRotator to stagger chain A LEU 271 CD2
+ Used MoverTetrahedralMethylRotator to stagger chain A ALA 274 CB
+ Used MoverTetrahedralMethylRotator to stagger chain A ILE 275 CG2
+ Used MoverTetrahedralMethylRotator to stagger chain A ILE 275 CD1
+ Used MoverTetrahedralMethylRotator to stagger chain A ALA 278 CB
+ Used MoverTetrahedralMethylRotator to stagger chain A ALA 280 CB
+ Used MoverTetrahedralMethylRotator to stagger chain A ALA 281 CB
+ Used MoverTetrahedralMethylRotator to stagger chain A ALA 282 CB
+ Used MoverTetrahedralMethylRotator to stagger chain A ALA 283 CB
+ Used MoverTetrahedralMethylRotator to stagger chain A ILE 284 CG2
+ Used MoverTetrahedralMethylRotator to stagger chain A ILE 284 CD1
+ Used MoverTetrahedralMethylRotator to stagger chain A ALA 285 CB
+ Used MoverTetrahedralMethylRotator to stagger chain A VAL 286 CG1
+ Used MoverTetrahedralMethylRotator to stagger chain A VAL 286 CG2
+ Used MoverTetrahedralMethylRotator to stagger chain A THR 287 CG2
+ Added MoverNH3Rotator 10 to chain A LYS 289
+ Used MoverTetrahedralMethylRotator to stagger chain A ALA 291 CB
+ Used MoverTetrahedralMethylRotator to stagger chain A VAL 295 CG1
+ Used MoverTetrahedralMethylRotator to stagger chain A VAL 295 CG2
+ Used MoverTetrahedralMethylRotator to stagger chain A ILE 301 CG2
+ Used MoverTetrahedralMethylRotator to stagger chain A ILE 301 CD1
+ Used MoverTetrahedralMethylRotator to stagger chain A ALA 303 CB
+ Used MoverTetrahedralMethylRotator to stagger chain A LEU 305 CD1
+ Used MoverTetrahedralMethylRotator to stagger chain A LEU 305 CD2
+ Added MoverSingleHydrogenRotator 11 to chain A SER 6 HG with 1 potential nearby acceptors
+ Added MoverSingleHydrogenRotator 12 to chain A SER 12 HG with 2 potential nearby acceptors
+ Added MoverSingleHydrogenRotator 13 to chain A SER 23 HG with 1 potential nearby acceptors
+ Added MoverSingleHydrogenRotator 14 to chain A THR 26 HG1 with 2 potential nearby acceptors
+ Added MoverSingleHydrogenRotator 15 to chain A THR 30 HG1 with 0 potential nearby acceptors
+ Added MoverSingleHydrogenRotator 16 to chain A THR 32 HG1 with 0 potential nearby acceptors
+ Added MoverSingleHydrogenRotator 17 to chain A TYR 36 HH with 4 potential nearby acceptors
+ Added MoverSingleHydrogenRotator 18 to chain A SER 54 HG with 1 potential nearby acceptors
+ Added MoverSingleHydrogenRotator 19 to chain A CYS 63 HG with 1 potential nearby acceptors
+ Added MoverSingleHydrogenRotator 20 to chain A THR 64 HG1 with 2 potential nearby acceptors
+ Added MoverSingleHydrogenRotator 21 to chain A SER 68 HG with 0 potential nearby acceptors
+ Added MoverSingleHydrogenRotator 22 to chain A SER 72 HG with 1 potential nearby acceptors
+ Added MoverSingleHydrogenRotator 23 to chain A THR 79 HG1 with 2 potential nearby acceptors
+ Added MoverSingleHydrogenRotator 24 to chain A THR 85 HG1 with 1 potential nearby acceptors
+ Added MoverSingleHydrogenRotator 25 to chain A SER 88 HG with 0 potential nearby acceptors
+ Added MoverSingleHydrogenRotator 26 to chain A SER 94 HG with 2 potential nearby acceptors
+ Added MoverSingleHydrogenRotator 27 to chain A THR 95 HG1 with 1 potential nearby acceptors
+ Added MoverSingleHydrogenRotator 28 to chain A SER 121 HG with 1 potential nearby acceptors
+ Added MoverSingleHydrogenRotator 29 to chain A SER 136 HG with 0 potential nearby acceptors
+ Added MoverSingleHydrogenRotator 30 to chain A SER 144 HG with 1 potential nearby acceptors
+ Added MoverSingleHydrogenRotator 31 to chain A SER 148 HG with 1 potential nearby acceptors
+ Added MoverSingleHydrogenRotator 32 to chain A THR 161 HG1 with 3 potential nearby acceptors
+ Added MoverSingleHydrogenRotator 33 to chain A THR 185 HG1 with 4 potential nearby acceptors
+ Added MoverSingleHydrogenRotator 34 to chain A THR 189 HG1 with 0 potential nearby acceptors
+ Added MoverSingleHydrogenRotator 35 to chain A THR 195 HG1 with 1 potential nearby acceptors
+ Added MoverSingleHydrogenRotator 36 to chain A THR 219 HG1 with 0 potential nearby acceptors
+ Added MoverSingleHydrogenRotator 37 to chain A THR 223 HG1 with 2 potential nearby acceptors
+ Added MoverSingleHydrogenRotator 38 to chain A SER 226 HG with 0 potential nearby acceptors
+ Added MoverSingleHydrogenRotator 39 to chain A SER 232 HG with 2 potential nearby acceptors
+ Added MoverSingleHydrogenRotator 40 to chain A THR 250 HG1 with 0 potential nearby acceptors
+ Added MoverSingleHydrogenRotator 41 to chain A THR 256 HG1 with 1 potential nearby acceptors
+ Added MoverSingleHydrogenRotator 42 to chain A THR 263 HG1 with 1 potential nearby acceptors
+ Added MoverSingleHydrogenRotator 43 to chain A THR 287 HG1 with 2 potential nearby acceptors
+ Added MoverSingleHydrogenRotator 44 to chain A SER 294 HG with 2 potential nearby acceptors
+ Inserted 44 Movers
+ Marked 0 atoms for deletion
+  Time to place movers: 0.160
+  Time to initialize Movers: 0.002
+ Found 43 Cliques (42 are singletons); largest Clique size = 2
+  Time to compute interaction graph: 0.006
+  Time to determine excluded atoms: 0.015
+  Time to construct dot scorer: 0.000
+  Time to construct OptimizerC: 0.001
+ Singleton optimized with score 0.68
+ Singleton optimized with score 0.93
+ Singleton optimized with score 0.20
+ Singleton optimized with score 12.27
+ Singleton optimized with score 0.20
+ Singleton optimized with score 9.97
+ Singleton optimized with score 12.54
+ Singleton optimized with score 9.66
+ Singleton optimized with score 0.51
+ Singleton optimized with score 0.20
+ Singleton optimized with score 14.02
+ Singleton optimized with score 0.32
+ Singleton optimized with score 4.60
+ Singleton optimized with score 0.23
+ Singleton optimized with score 0.24
+ Singleton optimized with score 6.12
+ Singleton optimized with score 12.42
+ Singleton optimized with score 5.72
+ Singleton optimized with score 8.43
+ Singleton optimized with score 0.62
+ Singleton optimized with score 9.56
+ Singleton optimized with score 14.11
+ Singleton optimized with score 12.38
+ Singleton optimized with score 0.79
+ Singleton optimized with score 0.62
+ Singleton optimized with score 16.90
+ Singleton optimized with score 2.47
+ Singleton optimized with score 1.60
+ Singleton optimized with score 12.38
+ Singleton optimized with score 3.91
+ Singleton optimized with score 13.17
+ Singleton optimized with score 0.41
+ Singleton optimized with score 14.50
+ Singleton optimized with score 0.72
+ Singleton optimized with score 1.99
+ Singleton optimized with score 0.45
+ Singleton optimized with score 9.39
+ Singleton optimized with score 0.55
+ Singleton optimized with score 9.72
+ Singleton optimized with score 5.98
+ Singleton optimized with score 13.31
+ Singleton optimized with score 11.47
+  Time to optimize singletons (coarse): 0.012
+ Clique optimized with score 0.44
+  Time to optimize cliques (coarse): 0.002
+ Fine optimization on all Movers
+  Time to optimize all Movers (fine): 0.016
+ BEGIN REPORT: Model -1 Alt '':
+  Set of 2 Movers:  Totals: initial score 0.24, final score 0.58
+   SingleHydrogenRotator at chain A SER 6 HG Initial score: -1.02 final score: -0.77 pose Angle -87.0 deg . .
+   SingleHydrogenRotator at chain A SER 136 HG Initial score: 1.26 final score: 1.35 pose Angle 51.0 deg . .
+  Singleton Movers:
+   NH3Rotator at chain A MET 1 N Initial score: -0.92 final score: 0.68 pose Angle -165.0 deg . .
+   NH3Rotator at chain A LYS 43 NZ Initial score: -0.37 final score: 1.00 pose Angle -164.0 deg . .
+   NH3Rotator at chain A LYS 91 NZ Initial score: 0.20 final score: 0.20 pose Angle 180.0 deg . .
+   NH3Rotator at chain A LYS 154 NZ Initial score: 11.03 final score: 12.47 pose Angle 170.0 deg . .
+   NH3Rotator at chain A LYS 160 NZ Initial score: 0.20 final score: 0.20 pose Angle 180.0 deg . .
+   NH3Rotator at chain A LYS 193 NZ Initial score: 1.17 final score: 9.99 pose Angle 137.0 deg . .
+   NH3Rotator at chain A LYS 207 NZ Initial score: 3.82 final score: 12.59 pose Angle -147.0 deg . .
+   NH3Rotator at chain A LYS 215 NZ Initial score: 5.08 final score: 9.66 pose Angle 165.0 deg . .
+   NH3Rotator at chain A LYS 269 NZ Initial score: 0.01 final score: 0.65 pose Angle -170.0 deg . .
+   NH3Rotator at chain A LYS 289 NZ Initial score: 0.20 final score: 0.20 pose Angle 180.0 deg . .
+   SingleHydrogenRotator at chain A SER 12 HG Initial score: -3.06 final score: 14.88 pose Angle 174.4 deg . .
+   SingleHydrogenRotator at chain A SER 23 HG Initial score: 0.32 final score: 0.35 pose Angle -35.0 deg . .
+   SingleHydrogenRotator at chain A THR 26 HG1 Initial score: 0.75 final score: 4.93 pose Angle -59.4 deg . .
+   SingleHydrogenRotator at chain A THR 30 HG1 Initial score: 0.00 final score: 0.23 pose Angle -29.0 deg . .
+   SingleHydrogenRotator at chain A THR 32 HG1 Initial score: 0.01 final score: 0.24 pose Angle -29.0 deg . .
+   SingleHydrogenRotator at chain A TYR 36 HH Initial score: 6.12 final score: 6.16 pose Angle -148.0 deg . .
+   SingleHydrogenRotator at chain A SER 54 HG Initial score: -0.20 final score: 12.43 pose Angle 83.7 deg . .
+   SingleHydrogenRotator at chain A CYS 63 HG Initial score: 5.56 final score: 6.03 pose Angle 175.0 deg . .
+   SingleHydrogenRotator at chain A THR 64 HG1 Initial score: 8.43 final score: 8.53 pose Angle 23.9 deg . .
+   SingleHydrogenRotator at chain A SER 68 HG Initial score: 0.62 final score: 0.71 pose Angle -77.0 deg . .
+   SingleHydrogenRotator at chain A SER 72 HG Initial score: 1.32 final score: 9.59 pose Angle 73.2 deg . .
+   SingleHydrogenRotator at chain A THR 79 HG1 Initial score: 0.13 final score: 14.11 pose Angle -42.2 deg . .
+   SingleHydrogenRotator at chain A THR 85 HG1 Initial score: -2.71 final score: 13.07 pose Angle 77.2 deg . .
+   SingleHydrogenRotator at chain A SER 88 HG Initial score: 0.79 final score: 0.87 pose Angle 173.0 deg . .
+   SingleHydrogenRotator at chain A SER 94 HG Initial score: 0.34 final score: 0.65 pose Angle 25.5 deg . .
+   SingleHydrogenRotator at chain A THR 95 HG1 Initial score: 4.15 final score: 16.90 pose Angle 94.6 deg . .
+   SingleHydrogenRotator at chain A SER 121 HG Initial score: 1.70 final score: 2.56 pose Angle 77.0 deg . .
+   SingleHydrogenRotator at chain A SER 144 HG Initial score: 0.81 final score: 1.60 pose Angle -145.3 deg . .
+   SingleHydrogenRotator at chain A SER 148 HG Initial score: -5.24 final score: 12.38 pose Angle 176.5 deg . .
+   SingleHydrogenRotator at chain A THR 161 HG1 Initial score: 0.72 final score: 3.91 pose Angle -166.5 deg . .
+   SingleHydrogenRotator at chain A THR 185 HG1 Initial score: -1.42 final score: 13.88 pose Angle 173.9 deg . .
+   SingleHydrogenRotator at chain A THR 189 HG1 Initial score: 0.00 final score: 0.56 pose Angle 75.0 deg . .
+   SingleHydrogenRotator at chain A THR 195 HG1 Initial score: 1.32 final score: 14.52 pose Angle -68.8 deg . .
+   SingleHydrogenRotator at chain A THR 219 HG1 Initial score: 0.06 final score: 1.05 pose Angle -13.0 deg . .
+   SingleHydrogenRotator at chain A THR 223 HG1 Initial score: 1.99 final score: 1.99 pose Angle -68.0 deg . .
+   SingleHydrogenRotator at chain A SER 226 HG Initial score: 0.34 final score: 0.52 pose Angle -76.0 deg . .
+   SingleHydrogenRotator at chain A SER 232 HG Initial score: 8.96 final score: 9.46 pose Angle 5.0 deg . .
+   SingleHydrogenRotator at chain A THR 250 HG1 Initial score: 0.00 final score: 0.58 pose Angle -71.0 deg . .
+   SingleHydrogenRotator at chain A THR 256 HG1 Initial score: 1.56 final score: 9.74 pose Angle 72.6 deg . .
+   SingleHydrogenRotator at chain A THR 263 HG1 Initial score: 1.80 final score: 6.18 pose Angle 73.8 deg . .
+   SingleHydrogenRotator at chain A THR 287 HG1 Initial score: -0.80 final score: 13.31 pose Angle -41.5 deg . .
+   SingleHydrogenRotator at chain A SER 294 HG Initial score: 1.82 final score: 11.52 pose Angle -54.6 deg . .
+ END REPORT
+ FixUp on all Movers
+  Time to fix up Movers: 0.000
+ Deleting Hydrogens tagged by Histidine Movers
+  Time to delete Hydrogens: 0.000
+ Calculated : cached atom scores: 2245 : 75; fraction calculated 0.97
+Time to Add Hydrogen = 1.894 sec
+Time to Optimize = 0.316 sec
