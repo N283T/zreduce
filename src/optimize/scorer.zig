@@ -16,7 +16,7 @@ pub const ScoringParams = struct {
     min_charged_hb_gap: f32 = 0.8, // Charged H-bond gap threshold (Å)
     bad_bump_gap_cut: f32 = 0.4, // Bad bump classification threshold (Å)
     dot_density: f32 = 16.0, // Dots per Å²
-    probe_radius: f32 = 0.0, // Probe sphere radius
+    probe_radius: f32 = 0.25, // Probe sphere radius (reduce default)
 };
 
 pub const ScoreResult = struct {
@@ -131,7 +131,7 @@ test "score no overlap gives positive contact" {
     defer sphere.deinit();
 
     const atom_pos = Vec3(f32){ .x = 0.0, .y = 0.0, .z = 0.0 };
-    const neighbor_pos = [_]Vec3(f32){.{ .x = 3.20, .y = 0.0, .z = 0.0 }}; // slight contact (gap ~0.1Å)
+    const neighbor_pos = [_]Vec3(f32){.{ .x = 3.50, .y = 0.0, .z = 0.0 }}; // slight contact
     const neighbor_radii = [_]f32{1.40};
     const neighbor_flags = [_]element.AtomFlags{.{}};
 
