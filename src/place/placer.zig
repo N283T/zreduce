@@ -255,6 +255,26 @@ fn executePlan(mdl: *Model, res: Residue, res_idx: u32, plan: *const standard.Pl
             // connected[0]=a1 (center), connected[1]=a2, connected[2]=a3
             const a1_pos = base_atom.pos;
             const a2_pos = findAtomPos(mdl, res, plan.connected[1], target_altloc) orelse return false;
+
+            // Backbone amide NH: place in peptide plane using C(i-1) from previous residue.
+            // H bisects the C(i-1)-N-CA exterior angle, lying in the peptide plane.
+            // Only matches " H  " (single amide H), not " H1 "/" H2 "/" H3 " (N-terminal NH3+).
+            if (isBackboneAmideH(plan)) {
+                if (findPrevResAtomPos(mdl, res_idx, .{ ' ', 'C', ' ', ' ' }, target_altloc)) |prev_c_pos| {
+                    const h_pos = geometry.placeHXR2Planar(
+                        a1_pos.cast(f64),
+                        prev_c_pos.cast(f64),
+                        a2_pos.cast(f64),
+                        plan.bond_len,
+                        0.0,
+                    );
+                    try appendHydrogen(mdl, h_pos.cast(f32), plan, res_idx, meta);
+                    return true;
+                }
+                // No previous C available: first residue, chain break, or missing atom.
+                // Fall through to dihedral-based placement as degraded fallback.
+            }
+
             const a3_pos = if (!isBlank(plan.connected[2]))
                 findAtomPos(mdl, res, plan.connected[2], target_altloc) orelse return false
             else if (bonds) |b|
@@ -354,6 +374,17 @@ fn isBlank(name: [4]u8) bool {
 // ---------------------------------------------------------------------------
 // Atom lookup helpers
 // ---------------------------------------------------------------------------
+
+/// Find an atom by name in the previous residue within the same chain.
+/// Returns null if there is no previous residue (first in chain or chain break).
+fn findPrevResAtomPos(mdl: *const Model, res_idx: u32, name: [4]u8, target_altloc: u8) ?Vec3f32 {
+    if (res_idx == 0) return null;
+    const cur_res = mdl.residues.items[res_idx];
+    if (cur_res.is_chain_break_before) return null;
+    const prev_res = mdl.residues.items[res_idx - 1];
+    if (prev_res.chain_idx != cur_res.chain_idx) return null;
+    return findAtomPos(mdl, prev_res, name, target_altloc);
+}
 
 /// Find an atom by 4-char PDB name within a residue. Returns its position.
 /// When target_altloc is specified, prefers an atom with matching altloc,
@@ -570,17 +601,22 @@ fn padName(name: []const u8) [4]u8 {
     return padded;
 }
 
-/// Check if a placement plan is for the backbone amide H.
-/// The backbone H has name " H  " and is bonded to N with dihedral ref to CA/C.
+/// Check if a placement plan is for a backbone H (amide or N-terminal).
+/// Used by N-terminal skip logic (line 95) — matches " H  ", " H1 ", " H2 ", " H3 ".
 fn isBackboneH(plan: *const standard.PlacementPlan) bool {
-    // Backbone amide H: name is "H" (padded), bonded to N
     const h = plan.h_name;
     if (h[0] == ' ' and h[1] == 'H' and h[2] == ' ' and h[3] == ' ') return true;
-    // Also check for "H1", "H2", "H3" style (some naming conventions)
     if (h[0] == ' ' and h[1] == 'H' and h[2] == '1' and h[3] == ' ') return true;
     if (h[0] == ' ' and h[1] == 'H' and h[2] == '2' and h[3] == ' ') return true;
     if (h[0] == ' ' and h[1] == 'H' and h[2] == '3' and h[3] == ' ') return true;
     return false;
+}
+
+/// Check if a plan is specifically the single backbone amide H (" H  ").
+/// Used by peptide-plane placement — must NOT match N-terminal H1/H2/H3.
+fn isBackboneAmideH(plan: *const standard.PlacementPlan) bool {
+    const h = plan.h_name;
+    return h[0] == ' ' and h[1] == 'H' and h[2] == ' ' and h[3] == ' ';
 }
 
 /// Append an N-terminal H atom to the model.
@@ -1285,4 +1321,77 @@ test "addHydrogens skips H on bonded_inter_residue atom" {
         }
     }
     _ = result;
+}
+
+test "backbone NH placed in peptide plane using C(i-1)" {
+    // Two-residue ALA-ALA with realistic geometry.
+    // ALA 1: N-term (gets NH3+, no backbone H)
+    // ALA 2: should get backbone H in the C(1)-N(2)-CA(2) peptide plane.
+    const two_ala_cif =
+        \\data_TWO_ALA
+        \\#
+        \\loop_
+        \\_atom_site.group_PDB
+        \\_atom_site.id
+        \\_atom_site.type_symbol
+        \\_atom_site.label_atom_id
+        \\_atom_site.label_comp_id
+        \\_atom_site.label_asym_id
+        \\_atom_site.label_seq_id
+        \\_atom_site.Cartn_x
+        \\_atom_site.Cartn_y
+        \\_atom_site.Cartn_z
+        \\_atom_site.occupancy
+        \\_atom_site.B_iso_or_equiv
+        \\_atom_site.label_alt_id
+        \\ATOM 1  N  N   ALA A 1  -1.200  0.000  0.000 1.00 10.0 .
+        \\ATOM 2  C  CA  ALA A 1   0.000  0.000  0.000 1.00 10.0 .
+        \\ATOM 3  C  C   ALA A 1   0.550  1.420  0.000 1.00 10.0 .
+        \\ATOM 4  O  O   ALA A 1   1.720  1.600  0.000 1.00 10.0 .
+        \\ATOM 5  C  CB  ALA A 1   0.550 -0.760  1.200 1.00 10.0 .
+        \\ATOM 6  N  N   ALA A 2   -0.100  2.500  0.000 1.00 10.0 .
+        \\ATOM 7  C  CA  ALA A 2   0.400  3.870  0.000 1.00 10.0 .
+        \\ATOM 8  C  C   ALA A 2   1.920  3.900  0.000 1.00 10.0 .
+        \\ATOM 9  O  O   ALA A 2   2.500  4.980  0.000 1.00 10.0 .
+        \\ATOM 10 C  CB  ALA A 2  -0.100  4.600  1.200 1.00 10.0 .
+        \\#
+    ;
+
+    const mmcif_mod = @import("../mmcif.zig");
+    var mdl = try mmcif_mod.parseModel(testing.allocator, two_ala_cif);
+    defer mdl.deinit();
+
+    applyChemistry(&mdl);
+    _ = try addHydrogens(&mdl, null, null);
+
+    // Find the backbone H on residue 2 (ALA 2)
+    var backbone_h_pos: ?Vec3f32 = null;
+    for (mdl.atoms.items) |atom| {
+        if (atom.is_added and atom.residue_idx == 1 and
+            std.mem.eql(u8, atom.nameSlice(), "H"))
+        {
+            backbone_h_pos = atom.pos;
+        }
+    }
+    // Backbone H must exist on residue 2
+    const h_pos = backbone_h_pos orelse return error.TestUnexpectedResult;
+
+    // Get reference atoms
+    const n2 = findAtomPos(&mdl, mdl.residues.items[1], .{ ' ', 'N', ' ', ' ' }, ' ') orelse unreachable;
+    const ca2 = findAtomPos(&mdl, mdl.residues.items[1], .{ ' ', 'C', 'A', ' ' }, ' ') orelse unreachable;
+    const c1 = findAtomPos(&mdl, mdl.residues.items[0], .{ ' ', 'C', ' ', ' ' }, ' ') orelse unreachable;
+
+    // Check H-N bond length (~1.02 A)
+    try testing.expectApproxEqAbs(h_pos.distance(n2), 1.02, 0.05);
+
+    // Check C(i-1)-N-H and CA-N-H angles are approximately equal (bisector)
+    const cn_h = math_mod.angle(f32, c1, n2, h_pos);
+    const ca_n_h = math_mod.angle(f32, ca2, n2, h_pos);
+    try testing.expectApproxEqAbs(cn_h, ca_n_h, 5.0);
+
+    // Both angles should be roughly 119° (peptide plane bisector)
+    try testing.expect(cn_h > 110.0 and cn_h < 130.0);
+
+    // H should lie approximately in the C(i-1)-N-CA plane (z ≈ 0 for this fixture)
+    try testing.expectApproxEqAbs(h_pos.z, 0.0, 0.1);
 }
