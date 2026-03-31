@@ -18,7 +18,6 @@ Usage:
 """
 
 import argparse
-import sys
 from dataclasses import dataclass, field
 from math import sqrt
 
@@ -68,6 +67,31 @@ EQUIV_PAIRS: list[tuple[str, str]] = [
     ("HE2", "HE3"),
     ("HE1", "HE3"),
 ]
+
+
+def _normalize_h_name(name: str) -> str:
+    """Normalize H atom name to mmCIF convention.
+
+    PDB legacy uses * for prime (e.g. H1*, H2*1), mmCIF uses ' (e.g. H1', H2'1).
+    reduce2 (cctbx) outputs * style; zreduce/ChimeraX output ' style.
+    Also handles the digit-after-star pattern: H2*1 -> H2', H2*2 -> H2''.
+    """
+    if "*" not in name:
+        return name
+    # H5*1 -> H5', H5*2 -> H5''
+    # H1* -> H1'
+    if name.endswith("*"):
+        return name[:-1] + "'"
+    # Pattern like H2*1, H2*2: * followed by digit
+    idx = name.index("*")
+    suffix_digit = name[idx + 1 :]
+    if suffix_digit == "1":
+        return name[:idx] + "'"
+    elif suffix_digit == "2":
+        return name[:idx] + "''"
+    else:
+        # Fallback: just replace * with '
+        return name.replace("*", "'")
 
 
 def _build_equiv_map() -> dict[str, set[str]]:
@@ -136,7 +160,7 @@ def extract_h(path: str) -> dict[tuple, list[AtomPos]]:
     for row in table:
         if row[0].strip() != "H":
             continue
-        name = row[1].strip()
+        name = _normalize_h_name(row[1].strip())
         comp = row[2].strip()
         chain = row[3].strip()
         seq = row[4].strip()
