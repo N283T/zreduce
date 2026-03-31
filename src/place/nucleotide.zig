@@ -169,8 +169,8 @@ const dc_plans = [_]PlacementPlan{
     // Base (cytosine)
     aromatic_ch(" H5 ", " C4 ", " C6 "),
     aromatic_ch(" H6 ", " C5 ", " N1 "),
-    amino_h("H41 ", " N4 ", " C4 ", " N3 ", 180.0),
-    amino_h("H42 ", " N4 ", " C4 ", " N3 ", 0.0),
+    amino_h("H41 ", " N4 ", " C4 ", " N3 ", 0.0),
+    amino_h("H42 ", " N4 ", " C4 ", " N3 ", 180.0),
 };
 
 // DG: 2'-deoxyguanosine (purine, glycosidic bond at N9)
@@ -241,8 +241,8 @@ const c_plans = [_]PlacementPlan{
     // Base (cytosine)
     aromatic_ch(" H5 ", " C4 ", " C6 "),
     aromatic_ch(" H6 ", " C5 ", " N1 "),
-    amino_h("H41 ", " N4 ", " C4 ", " N3 ", 180.0),
-    amino_h("H42 ", " N4 ", " C4 ", " N3 ", 0.0),
+    amino_h("H41 ", " N4 ", " C4 ", " N3 ", 0.0),
+    amino_h("H42 ", " N4 ", " C4 ", " N3 ", 180.0),
 };
 
 // G: guanosine (purine, glycosidic bond at N9, ribose with 2'-OH)
