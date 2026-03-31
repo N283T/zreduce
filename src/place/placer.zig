@@ -238,7 +238,10 @@ fn executePlan(mdl: *Model, res: Residue, res_idx: u32, plan: *const standard.Pl
 
     // Skip H placement if parent atom is involved in an inter-residue bond
     // (e.g. disulfide SG, glycosidic leaving O) — the bond already satisfies valence.
-    if (base_atom.flags.bonded_inter_residue) return .inter_residue;
+    // Only applies to standard/hardcoded plans (bonds != null). CCD-derived plans
+    // already account for inter-residue bonds via analyzeBonds extra_bonds, and
+    // atoms like glycan C1 may still have free valence for H despite the flag.
+    if (bonds != null and base_atom.flags.bonded_inter_residue) return .inter_residue;
 
     var meta = ParentMeta.fromAtom(base_atom);
     // Override altloc when iterating conformers: if parent has blank altloc
