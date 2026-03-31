@@ -293,6 +293,9 @@ fn runSubcommand(allocator: Allocator, args: []const []const u8) void {
     std.debug.print("zreduce: placed {d} H atoms on {d} residues ({d} skipped)\n", .{
         result.n_placed,
         result.n_residues,
-        result.n_skipped,
+        result.totalSkipped(),
     });
+    if (result.n_skipped_missing_ref > 0) {
+        std.debug.print("  warning: {d} H skipped due to missing reference atoms (potential plan bug)\n", .{result.n_skipped_missing_ref});
+    }
 }

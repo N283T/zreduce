@@ -22,10 +22,34 @@ const Vec3f32 = math_mod.Vec3(f32);
 const topology = @import("topology.zig");
 const chemistry = @import("chemistry.zig");
 
+/// Result of a single executePlan call — why a hydrogen was or wasn't placed.
+pub const PlaceResult = enum {
+    placed,
+    existing_h, // hydrogen already present in residue
+    inter_residue, // parent atom bonded_inter_residue (disulfide, glycosidic)
+    missing_parent, // parent heavy atom (connected[0]) not found
+    missing_ref, // reference neighbor or geometric lookup failed
+};
+
 pub const PlacementResult = struct {
     n_placed: u32 = 0,
-    n_skipped: u32 = 0,
+    n_skipped_existing: u32 = 0,
+    n_skipped_inter_residue: u32 = 0,
+    n_skipped_missing_ref: u32 = 0,
     n_residues: u32 = 0,
+
+    pub fn totalSkipped(self: PlacementResult) u32 {
+        return self.n_skipped_existing + self.n_skipped_inter_residue + self.n_skipped_missing_ref;
+    }
+
+    fn tally(self: *PlacementResult, r: PlaceResult) void {
+        switch (r) {
+            .placed => self.n_placed += 1,
+            .existing_h => self.n_skipped_existing += 1,
+            .inter_residue => self.n_skipped_inter_residue += 1,
+            .missing_parent, .missing_ref => self.n_skipped_missing_ref += 1,
+        }
+    }
 };
 
 const AltlocSet = struct { locs: [10]u8, count: usize };
@@ -94,11 +118,7 @@ pub fn addHydrogens(
                     // Skip backbone amide H on N-terminal residues (NH3+, not NH)
                     if (is_nterm and isBackboneH(&plan)) continue;
 
-                    if (try executePlan(mdl, res, @intCast(res_idx), &plan, bonds, alt)) {
-                        result.n_placed += 1;
-                    } else {
-                        result.n_skipped += 1;
-                    }
+                    result.tally(try executePlan(mdl, res, @intCast(res_idx), &plan, bonds, alt));
                 }
 
                 // N-terminal peptide residues: place NH3+/NH2+ instead of single backbone H.
@@ -109,7 +129,7 @@ pub fn addHydrogens(
                     else
                         try placeNtermNH3(mdl, res, @intCast(res_idx), alt);
                     result.n_placed += nterm.placed;
-                    result.n_skipped += nterm.skipped;
+                    result.n_skipped_existing += nterm.skipped;
                 }
             }
 
@@ -127,11 +147,7 @@ pub fn addHydrogens(
                 defer mdl.allocator.free(plans);
 
                 for (plans) |plan| {
-                    if (try executePlan(mdl, res, @intCast(res_idx), &plan, null, ' ')) {
-                        result.n_placed += 1;
-                    } else {
-                        result.n_skipped += 1;
-                    }
+                    result.tally(try executePlan(mdl, res, @intCast(res_idx), &plan, null, ' '));
                 }
                 result.n_residues += 1;
             }
@@ -190,13 +206,13 @@ pub fn applyChemistry(mdl: *Model) void {
 
 /// Execute a single placement plan: find reference atoms, compute H position, add to model.
 /// Returns true if placed, false if skipped (duplicate H or missing reference atoms).
-fn executePlan(mdl: *Model, res: Residue, res_idx: u32, plan: *const standard.PlacementPlan, bonds: ?[]const topology.BondEntry, target_altloc: u8) !bool {
+fn executePlan(mdl: *Model, res: Residue, res_idx: u32, plan: *const standard.PlacementPlan, bonds: ?[]const topology.BondEntry, target_altloc: u8) !PlaceResult {
     // Resolve parent heavy atom (connected[0]) for metadata and position
-    const base_atom = findAtom(mdl, res, plan.connected[0], target_altloc) orelse return false;
+    const base_atom = findAtom(mdl, res, plan.connected[0], target_altloc) orelse return .missing_parent;
 
     // Skip H placement if parent atom is involved in an inter-residue bond
     // (e.g. disulfide SG, glycosidic leaving O) — the bond already satisfies valence.
-    if (base_atom.flags.bonded_inter_residue) return false;
+    if (base_atom.flags.bonded_inter_residue) return .inter_residue;
 
     var meta = ParentMeta.fromAtom(base_atom);
     // Override altloc when iterating conformers: if parent has blank altloc
@@ -205,19 +221,19 @@ fn executePlan(mdl: *Model, res: Residue, res_idx: u32, plan: *const standard.Pl
     if (target_altloc != ' ') meta.altloc = target_altloc;
 
     // Skip if this hydrogen already exists in the residue
-    if (existsInResidue(mdl, res, plan.h_name, meta.altloc)) return false;
+    if (existsInResidue(mdl, res, plan.h_name, meta.altloc)) return .existing_h;
 
     switch (plan.placement_type) {
         .hxr3 => {
             // connected[0]=center, connected[1..2]=two known neighbors
             // Need to find 3rd heavy-atom neighbor of center
             const center_pos = base_atom.pos;
-            const n1_pos = findAtomPos(mdl, res, plan.connected[1], target_altloc) orelse return false;
-            const n2_pos = findAtomPos(mdl, res, plan.connected[2], target_altloc) orelse return false;
+            const n1_pos = findAtomPos(mdl, res, plan.connected[1], target_altloc) orelse return .missing_ref;
+            const n2_pos = findAtomPos(mdl, res, plan.connected[2], target_altloc) orelse return .missing_ref;
             const n3_pos = (if (bonds) |b|
                 findThirdBondedNeighbor(mdl, res, b, plan.connected[0], plan.connected[1], plan.connected[2], target_altloc)
             else
-                findThirdNeighbor(mdl, res, plan.connected[0], plan.connected[1], plan.connected[2], target_altloc)) orelse return false;
+                findThirdNeighbor(mdl, res, plan.connected[0], plan.connected[1], plan.connected[2], target_altloc)) orelse return .missing_ref;
 
             const h_pos = geometry.placeHXR3(
                 center_pos.cast(f64),
@@ -227,17 +243,17 @@ fn executePlan(mdl: *Model, res: Residue, res_idx: u32, plan: *const standard.Pl
                 plan.bond_len,
             );
             try appendHydrogen(mdl, h_pos.cast(f32), plan, res_idx, meta);
-            return true;
+            return .placed;
         },
 
         .h2xr2 => {
             // connected[0]=center, connected[1]=reference neighbor
             const center_pos = base_atom.pos;
-            const n1_pos = findAtomPos(mdl, res, plan.connected[1], target_altloc) orelse return false;
+            const n1_pos = findAtomPos(mdl, res, plan.connected[1], target_altloc) orelse return .missing_ref;
             const n2_pos = (if (bonds) |b|
                 findBondedNeighbor(mdl, res, b, plan.connected[0], plan.connected[1], target_altloc)
             else
-                findOtherNeighbor(mdl, res, plan.connected[0], plan.connected[1], target_altloc)) orelse return false;
+                findOtherNeighbor(mdl, res, plan.connected[0], plan.connected[1], target_altloc)) orelse return .missing_ref;
 
             const h_pos = geometry.placeH2XR2(
                 center_pos.cast(f64),
@@ -248,13 +264,13 @@ fn executePlan(mdl: *Model, res: Residue, res_idx: u32, plan: *const standard.Pl
                 plan.dihedral,
             );
             try appendHydrogen(mdl, h_pos.cast(f32), plan, res_idx, meta);
-            return true;
+            return .placed;
         },
 
         .h3xr => {
             // connected[0]=a1 (center), connected[1]=a2, connected[2]=a3
             const a1_pos = base_atom.pos;
-            const a2_pos = findAtomPos(mdl, res, plan.connected[1], target_altloc) orelse return false;
+            const a2_pos = findAtomPos(mdl, res, plan.connected[1], target_altloc) orelse return .missing_ref;
 
             // Backbone amide NH: place in peptide plane using C(i-1) from previous residue.
             // H bisects the C(i-1)-N-CA exterior angle, lying in the peptide plane.
@@ -269,18 +285,18 @@ fn executePlan(mdl: *Model, res: Residue, res_idx: u32, plan: *const standard.Pl
                         0.0,
                     );
                     try appendHydrogen(mdl, h_pos.cast(f32), plan, res_idx, meta);
-                    return true;
+                    return .placed;
                 }
                 // No previous C available: first residue, chain break, or missing atom.
                 // Fall through to dihedral-based placement as degraded fallback.
             }
 
             const a3_pos = if (!isBlank(plan.connected[2]))
-                findAtomPos(mdl, res, plan.connected[2], target_altloc) orelse return false
+                findAtomPos(mdl, res, plan.connected[2], target_altloc) orelse return .missing_ref
             else if (bonds) |b|
-                findBondedNeighbor(mdl, res, b, plan.connected[1], plan.connected[0], target_altloc) orelse return false
+                findBondedNeighbor(mdl, res, b, plan.connected[1], plan.connected[0], target_altloc) orelse return .missing_ref
             else
-                findOtherNeighbor(mdl, res, plan.connected[1], plan.connected[0], target_altloc) orelse return false;
+                findOtherNeighbor(mdl, res, plan.connected[1], plan.connected[0], target_altloc) orelse return .missing_ref;
 
             const h_pos = geometry.placeH3XR(
                 a1_pos.cast(f64),
@@ -291,17 +307,17 @@ fn executePlan(mdl: *Model, res: Residue, res_idx: u32, plan: *const standard.Pl
                 plan.dihedral,
             );
             try appendHydrogen(mdl, h_pos.cast(f32), plan, res_idx, meta);
-            return true;
+            return .placed;
         },
 
         .hxr2_planar => {
             // connected[0] and connected[1] are neighbors; center is the atom between them
             const n1_pos = base_atom.pos;
-            const n2_pos = findAtomPos(mdl, res, plan.connected[1], target_altloc) orelse return false;
+            const n2_pos = findAtomPos(mdl, res, plan.connected[1], target_altloc) orelse return .missing_ref;
             const center_pos = (if (bonds) |b|
                 findBondedAtomBetween(mdl, res, b, plan.connected[0], plan.connected[1], target_altloc)
             else
-                findAtomBetween(mdl, res, plan.connected[0], plan.connected[1], target_altloc)) orelse return false;
+                findAtomBetween(mdl, res, plan.connected[0], plan.connected[1], target_altloc)) orelse return .missing_ref;
 
             const h_pos = geometry.placeHXR2Planar(
                 center_pos.cast(f64),
@@ -311,13 +327,13 @@ fn executePlan(mdl: *Model, res: Residue, res_idx: u32, plan: *const standard.Pl
                 plan.fudge,
             );
             try appendHydrogen(mdl, h_pos.cast(f32), plan, res_idx, meta);
-            return true;
+            return .placed;
         },
 
         .hxr2_frac => {
             const a1_pos = base_atom.pos;
-            const a2_pos = findAtomPos(mdl, res, plan.connected[1], target_altloc) orelse return false;
-            const a3_pos = findAtomPos(mdl, res, plan.connected[2], target_altloc) orelse return false;
+            const a2_pos = findAtomPos(mdl, res, plan.connected[1], target_altloc) orelse return .missing_ref;
+            const a3_pos = findAtomPos(mdl, res, plan.connected[2], target_altloc) orelse return .missing_ref;
 
             const h_pos = geometry.placeHXR2Frac(
                 a1_pos.cast(f64),
@@ -327,12 +343,12 @@ fn executePlan(mdl: *Model, res: Residue, res_idx: u32, plan: *const standard.Pl
                 plan.fudge,
             );
             try appendHydrogen(mdl, h_pos.cast(f32), plan, res_idx, meta);
-            return true;
+            return .placed;
         },
 
         .hxy => {
             const center_pos = base_atom.pos;
-            const neighbor_pos = findAtomPos(mdl, res, plan.connected[1], target_altloc) orelse return false;
+            const neighbor_pos = findAtomPos(mdl, res, plan.connected[1], target_altloc) orelse return .missing_ref;
 
             const h_pos = geometry.placeHXY(
                 center_pos.cast(f64),
@@ -340,7 +356,7 @@ fn executePlan(mdl: *Model, res: Residue, res_idx: u32, plan: *const standard.Pl
                 plan.bond_len,
             );
             try appendHydrogen(mdl, h_pos.cast(f32), plan, res_idx, meta);
-            return true;
+            return .placed;
         },
     }
 }
@@ -841,7 +857,7 @@ test "PlacementResult tracks counts" {
     const result = try addHydrogens(&mdl, null, null);
 
     // ALA has 5 plans; backbone H skipped on N-term but NH3+ (H1,H2,H3) added = 4+3=7
-    try testing.expectEqual(@as(u32, 7), result.n_placed + result.n_skipped);
+    try testing.expectEqual(@as(u32, 7), result.n_placed + result.totalSkipped());
 }
 
 test "findAtom returns full atom with metadata" {
@@ -927,9 +943,9 @@ test "PlacementResult counts duplicates as skipped" {
 
     const result = try addHydrogens(&mdl, null, null);
 
-    // HA was pre-existing so should be counted as skipped
+    // HA was pre-existing so should be counted as skipped (existing_h)
     // Total plans attempted should still be the same as clean ALA
-    try testing.expect(result.n_skipped >= 1);
+    try testing.expect(result.n_skipped_existing >= 1);
     try testing.expectEqual(@as(u32, 1), result.n_residues);
 }
 

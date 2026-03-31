@@ -20,11 +20,17 @@ pub const ProcessConfig = struct {
 pub const ProcessResult = struct {
     n_placed: u32,
     n_residues: u32,
-    n_skipped: u32,
+    n_skipped_existing: u32,
+    n_skipped_inter_residue: u32,
+    n_skipped_missing_ref: u32,
     n_movers: u32 = 0,
     n_singletons: u32 = 0,
     n_brute_force: u32 = 0,
     n_vertex_cut: u32 = 0,
+
+    pub fn totalSkipped(self: ProcessResult) u32 {
+        return self.n_skipped_existing + self.n_skipped_inter_residue + self.n_skipped_missing_ref;
+    }
 };
 
 pub fn readFile(allocator: Allocator, path: []const u8) ![]const u8 {
@@ -98,7 +104,9 @@ pub fn processFile(allocator: Allocator, config: ProcessConfig) !ProcessResult {
     var result = ProcessResult{
         .n_placed = place_result.n_placed,
         .n_residues = place_result.n_residues,
-        .n_skipped = place_result.n_skipped,
+        .n_skipped_existing = place_result.n_skipped_existing,
+        .n_skipped_inter_residue = place_result.n_skipped_inter_residue,
+        .n_skipped_missing_ref = place_result.n_skipped_missing_ref,
     };
 
     // 6. Optimize (unless --no-opt)
