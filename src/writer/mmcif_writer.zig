@@ -188,13 +188,22 @@ fn writeAtomSitePreserving(writer: anytype, model: *const Model, orig_loop: *con
     for (model.residues.items, 0..) |res, res_idx| {
         const chain = model.chains.items[res.chain_idx];
 
-        // Original heavy atoms: write rows from original loop data
+        // Original heavy atoms: write rows from original loop data,
+        // but use model atom coordinates (which may have been updated by
+        // optimizers, e.g. amide flip swapping O/N positions).
         for (res.atom_start..res.atom_end) |orig_row_idx| {
             if (orig_row_idx < orig_loop.length()) {
+                const atom = model.atoms.items[orig_row_idx];
                 for (0..w) |col| {
                     if (col > 0) try writer.writeByte(' ');
                     if (cm.id != null and col == cm.id.?) {
                         try writer.print("{d}", .{serial});
+                    } else if (cm.cartn_x != null and col == cm.cartn_x.?) {
+                        try writer.print("{d:.3}", .{atom.pos.x});
+                    } else if (cm.cartn_y != null and col == cm.cartn_y.?) {
+                        try writer.print("{d:.3}", .{atom.pos.y});
+                    } else if (cm.cartn_z != null and col == cm.cartn_z.?) {
+                        try writer.print("{d:.3}", .{atom.pos.z});
                     } else {
                         const val = orig_loop.val(orig_row_idx, col) orelse ".";
                         try writeCifValue(writer, val);
