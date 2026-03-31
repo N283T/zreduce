@@ -654,7 +654,7 @@ fn placeNtermNH3(mdl: *Model, res: Residue, res_idx: u32, target_altloc: u8) !Nt
     const ca64 = math_mod.Vec3(f64){ .x = ca_pos.x, .y = ca_pos.y, .z = ca_pos.z };
     const c64 = math_mod.Vec3(f64){ .x = c_pos.x, .y = c_pos.y, .z = c_pos.z };
 
-    const bond_len: f64 = 1.02;
+    const bond_len: f64 = 1.00; // N-H sidechain/terminal (CCD mean: 1.000)
     const angle_deg: f64 = 109.5;
     const dihedrals = [3]f64{ 180.0, 60.0, -60.0 };
     const names = [3][]const u8{ "H1", "H2", "H3" };
@@ -691,7 +691,7 @@ fn placeNtermNH2Pro(mdl: *Model, res: Residue, res_idx: u32, target_altloc: u8) 
     const ca64 = math_mod.Vec3(f64){ .x = ca_pos.x, .y = ca_pos.y, .z = ca_pos.z };
     const cd64 = math_mod.Vec3(f64){ .x = cd_pos.x, .y = cd_pos.y, .z = cd_pos.z };
 
-    const bond_len: f64 = 1.02;
+    const bond_len: f64 = 1.00; // N-H sidechain/terminal (CCD mean: 1.000)
     const angle_deg: f64 = 109.5;
     const names = [2][]const u8{ "H2", "H3" };
     const dihedrals = [2]f64{ 120.0, -120.0 };
