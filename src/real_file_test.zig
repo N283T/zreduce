@@ -24,7 +24,9 @@ const PipelineResult = struct {
     model: zreduce.model.Model,
     n_placed: u32,
     n_residues: u32,
-    n_skipped: u32,
+    n_skipped_existing: u32,
+    n_skipped_inter_residue: u32,
+    n_skipped_missing_ref: u32,
     n_movers: usize,
 
     pub fn deinit(self: *PipelineResult) void {
@@ -95,7 +97,9 @@ fn runPipeline(allocator: std.mem.Allocator, path: []const u8) !PipelineResult {
         .model = mdl,
         .n_placed = place_result.n_placed,
         .n_residues = place_result.n_residues,
-        .n_skipped = place_result.n_skipped,
+        .n_skipped_existing = place_result.n_skipped_existing,
+        .n_skipped_inter_residue = place_result.n_skipped_inter_residue,
+        .n_skipped_missing_ref = place_result.n_skipped_missing_ref,
         .n_movers = movers.len,
     };
 }

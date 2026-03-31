@@ -601,7 +601,7 @@ test "writeJsonlLine ok result" {
     const r = FileResult{
         .filename = "test.cif",
         .status = .ok,
-        .result = .{ .n_placed = 100, .n_residues = 50, .n_skipped = 2, .n_movers = 30 },
+        .result = .{ .n_placed = 100, .n_residues = 50, .n_skipped_existing = 1, .n_skipped_inter_residue = 1, .n_skipped_missing_ref = 0, .n_movers = 30 },
         .time_ns = 1_500_000_000,
     };
     try writeJsonlLine(buf.writer(std.testing.allocator), r);
