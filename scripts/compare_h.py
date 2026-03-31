@@ -41,6 +41,17 @@ EQUIV_PAIRS: list[tuple[str, str]] = [
     ("HH21", "HH22"),
     ("HD21", "HD22"),
     ("HE21", "HE22"),
+    # Nucleotide base NH2 (symmetric amine)
+    ("H21", "H22"),  # guanine/DG NH2
+    ("H41", "H42"),  # cytosine/DC NH2
+    ("H61", "H62"),  # adenine/DA NH2
+    # Nucleotide methyl (thymine/DT)
+    ("H71", "H72"),
+    ("H72", "H73"),
+    ("H71", "H73"),
+    # Nucleotide sugar methylene (deoxyribose H2'/H2'', ribose H5'/H5'')
+    ("H2'", "H2''"),
+    ("H5'", "H5''"),
     # Methyl (any permutation)
     ("HG21", "HG22"),
     ("HG22", "HG23"),
