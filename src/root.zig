@@ -17,4 +17,5 @@ pub const batch = @import("batch.zig");
 test {
     @import("std").testing.refAllDecls(@This());
     _ = @import("integration_test.zig");
+    _ = @import("real_file_test.zig");
 }
