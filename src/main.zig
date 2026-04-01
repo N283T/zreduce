@@ -12,6 +12,10 @@ const RunConfig = struct {
     no_opt: bool = false,
     no_flip: bool = false,
     validate: bool = false,
+    water: bool = false,
+    water_phantom: bool = false,
+    water_occ_cutoff: f32 = 0.66,
+    water_b_cutoff: f32 = 40.0,
 };
 
 fn parseRunArgs(args: []const []const u8) ?RunConfig {
@@ -52,6 +56,33 @@ fn parseRunArgs(args: []const []const u8) ?RunConfig {
             config.no_flip = true;
         } else if (std.mem.eql(u8, arg, "--validate")) {
             config.validate = true;
+        } else if (std.mem.eql(u8, arg, "--water")) {
+            config.water = true;
+        } else if (std.mem.eql(u8, arg, "--no-water")) {
+            config.water = false;
+        } else if (std.mem.eql(u8, arg, "--water-phantom")) {
+            config.water = true;
+            config.water_phantom = true;
+        } else if (std.mem.eql(u8, arg, "--water-occ-cutoff")) {
+            i += 1;
+            if (i >= args.len) {
+                std.debug.print("Error: --water-occ-cutoff requires a numeric argument\n", .{});
+                std.process.exit(1);
+            }
+            config.water_occ_cutoff = std.fmt.parseFloat(f32, args[i]) catch {
+                std.debug.print("Error: invalid water occupancy cutoff '{s}'\n", .{args[i]});
+                std.process.exit(1);
+            };
+        } else if (std.mem.eql(u8, arg, "--water-b-cutoff")) {
+            i += 1;
+            if (i >= args.len) {
+                std.debug.print("Error: --water-b-cutoff requires a numeric argument\n", .{});
+                std.process.exit(1);
+            }
+            config.water_b_cutoff = std.fmt.parseFloat(f32, args[i]) catch {
+                std.debug.print("Error: invalid water B-factor cutoff '{s}'\n", .{args[i]});
+                std.process.exit(1);
+            };
         } else if (arg.len > 0 and arg[0] == '-') {
             std.debug.print("Error: unknown option '{s}'\n", .{arg});
             std.process.exit(1);
@@ -107,6 +138,10 @@ fn printRunUsage() void {
         \\    --no-opt           Skip optimization
         \\    --no-flip          Disable Asn/Gln/His flips
         \\    --validate         Print validation diagnostics
+        \\    --water            Add water hydrogens (default: off)
+        \\    --water-phantom    Allow zero-occupancy phantom water H when orientation is underdetermined
+        \\    --water-occ-cutoff N  Skip waters with occupancy below N (default: 0.66)
+        \\    --water-b-cutoff N    Skip waters with B-factor above N (default: 40.0)
         \\
     , .{});
 }
@@ -195,6 +230,33 @@ fn parseBatchArgs(args: []const []const u8) ?zreduce.batch.BatchConfig {
             config.no_flip = true;
         } else if (std.mem.eql(u8, arg, "--quiet")) {
             config.quiet = true;
+        } else if (std.mem.eql(u8, arg, "--water")) {
+            config.water_enabled = true;
+        } else if (std.mem.eql(u8, arg, "--no-water")) {
+            config.water_enabled = false;
+        } else if (std.mem.eql(u8, arg, "--water-phantom")) {
+            config.water_enabled = true;
+            config.water_phantom = true;
+        } else if (std.mem.eql(u8, arg, "--water-occ-cutoff")) {
+            i += 1;
+            if (i >= args.len) {
+                std.debug.print("Error: --water-occ-cutoff requires a number\n", .{});
+                std.process.exit(1);
+            }
+            config.water_occupancy_cutoff = std.fmt.parseFloat(f32, args[i]) catch {
+                std.debug.print("Error: invalid water occupancy cutoff '{s}'\n", .{args[i]});
+                std.process.exit(1);
+            };
+        } else if (std.mem.eql(u8, arg, "--water-b-cutoff")) {
+            i += 1;
+            if (i >= args.len) {
+                std.debug.print("Error: --water-b-cutoff requires a number\n", .{});
+                std.process.exit(1);
+            }
+            config.water_b_factor_cutoff = std.fmt.parseFloat(f32, args[i]) catch {
+                std.debug.print("Error: invalid water B-factor cutoff '{s}'\n", .{args[i]});
+                std.process.exit(1);
+            };
         } else if (arg.len > 0 and arg[0] == '-') {
             std.debug.print("Error: unknown option '{s}'\n", .{arg});
             std.process.exit(1);
@@ -232,6 +294,10 @@ fn printBatchUsage() void {
         \\    --no-opt           Skip optimization
         \\    --no-flip          Disable flips
         \\    --quiet            Suppress progress output
+        \\    --water            Add water hydrogens (default: off)
+        \\    --water-phantom    Allow zero-occupancy phantom water H when orientation is underdetermined
+        \\    --water-occ-cutoff N  Skip waters with occupancy below N (default: 0.66)
+        \\    --water-b-cutoff N    Skip waters with B-factor above N (default: 40.0)
         \\
     , .{});
 }
@@ -274,6 +340,10 @@ fn runSubcommand(allocator: Allocator, args: []const []const u8) void {
         .no_opt = config.no_opt,
         .no_flip = config.no_flip,
         .validate_flag = config.validate,
+        .water_enabled = config.water,
+        .water_phantom = config.water_phantom,
+        .water_occupancy_cutoff = config.water_occ_cutoff,
+        .water_b_factor_cutoff = config.water_b_cutoff,
     };
 
     const result = zreduce.run.processFile(allocator, proc_config) catch |err| {

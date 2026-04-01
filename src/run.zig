@@ -15,6 +15,10 @@ pub const ProcessConfig = struct {
     validate_flag: bool = false,
     opt_threads: u32 = 0, // 0 = auto; batch sets to 1
     quiet: bool = false, // suppress diagnostic prints (batch mode)
+    water_enabled: bool = false,
+    water_phantom: bool = false,
+    water_occupancy_cutoff: f32 = 0.66,
+    water_b_factor_cutoff: f32 = 40.0,
 };
 
 pub const ProcessResult = struct {
@@ -95,10 +99,18 @@ pub fn processFile(allocator: Allocator, config: ProcessConfig) !ProcessResult {
     zreduce.mmcif.flagLeavingAtoms(&mdl, if (inline_dict) |*d| d else null, config.dict);
 
     // 5. Place hydrogens (per-component fallback: inline dict first, then external CCD)
-    const place_result = try zreduce.place.addHydrogens(
+    const place_result = try zreduce.place.addHydrogensWithConfig(
         &mdl,
         config.dict,
         if (inline_dict) |*d| d else null,
+        .{
+            .water = .{
+                .enabled = config.water_enabled,
+                .phantom = config.water_phantom,
+                .occupancy_cutoff = config.water_occupancy_cutoff,
+                .b_factor_cutoff = config.water_b_factor_cutoff,
+            },
+        },
     );
 
     var result = ProcessResult{
