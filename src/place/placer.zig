@@ -91,9 +91,13 @@ pub fn addHydrogens(
         const res = mdl.residues.items[res_idx];
         const comp_id = res.compIdSlice();
 
-        // Detect terminal residues (first/last in chain, or adjacent to chain break)
+        // Detect terminal residues.
+        // Residues after a chain break behave like fake termini for bond topology,
+        // but should not receive full NH3+/NH2+ protonation.
         const chain = mdl.chains.items[res.chain_idx];
-        const is_nterm = (res_idx == chain.residue_start) or res.is_chain_break_before;
+        const is_real_nterm = (res_idx == chain.residue_start) and !res.is_chain_break_before;
+        const is_break_nterm = res.is_chain_break_before;
+        const is_nterm_for_bonding = is_real_nterm or is_break_nterm;
         const is_cterm = (res_idx == chain.residue_end - 1) or
             (res_idx + 1 < n_residues and mdl.residues.items[res_idx + 1].is_chain_break_before);
 
@@ -117,15 +121,16 @@ pub fn addHydrogens(
 
             for (targets) |alt| {
                 for (plans) |plan| {
-                    // Skip backbone amide H on N-terminal residues (NH3+, not NH)
-                    if (is_nterm and isBackboneH(&plan)) continue;
+                    // Skip backbone amide H only on real N-termini (NH3+/NH2+, not NH).
+                    // After a chain break, keep the single amide H.
+                    if (is_real_nterm and isBackboneH(&plan)) continue;
 
                     result.tally(try executePlan(mdl, res, @intCast(res_idx), &plan, bonds, alt));
                 }
 
-                // N-terminal peptide residues: place NH3+/NH2+ instead of single backbone H.
-                // Only applies to residues with backbone amide H in their plans.
-                if (is_nterm and has_backbone) {
+                // Real N-terminal peptide residues: place NH3+/NH2+ instead of single backbone H.
+                // Residues after a chain break keep a single break-amide H.
+                if (is_real_nterm and has_backbone) {
                     const nterm = if (std.mem.eql(u8, comp_id, "PRO"))
                         try placeNtermNH2Pro(mdl, res, @intCast(res_idx), alt)
                     else
@@ -162,7 +167,7 @@ pub fn addHydrogens(
                     mdl,
                     res,
                     explicit_ir,
-                    is_nterm,
+                    is_nterm_for_bonding,
                     is_cterm,
                 );
                 defer mdl.allocator.free(ir_atoms);
@@ -172,7 +177,7 @@ pub fn addHydrogens(
                 // For non-5'-terminal nucleotides, skip H on phosphate O (HOP2/HOP3).
                 // Phosphodiester bonds are implicit polymer bonds (not in struct_conn),
                 // so phosphate H should only be placed at the 5' terminus.
-                const skip_phosphate_h = !is_nterm and hasPhosphorusAtom(mdl, res);
+                const skip_phosphate_h = !is_nterm_for_bonding and hasPhosphorusAtom(mdl, res);
 
                 for (plans) |plan| {
                     if (skip_phosphate_h and isPhosphateH(plan.h_name)) {
@@ -214,9 +219,9 @@ pub fn applyChemistry(mdl: *Model) void {
         const res = mdl.residues.items[res_idx];
         const comp_id = res.compIdSlice();
 
-        // Detect terminal residues
+        // Detect terminal residues. Only real chain starts are positively charged.
         const chain = mdl.chains.items[res.chain_idx];
-        const is_nterm = (res_idx == chain.residue_start) or res.is_chain_break_before;
+        const is_nterm = (res_idx == chain.residue_start) and !res.is_chain_break_before;
         const is_cterm = (res_idx == chain.residue_end - 1) or
             (res_idx + 1 < n_residues and mdl.residues.items[res_idx + 1].is_chain_break_before);
 
@@ -1437,7 +1442,7 @@ test "placed H atoms have correct mover_hint" {
     try testing.expectEqual(@as(u32, 3), methyl_count);
 }
 
-test "chain break residue gets NH3+ placement" {
+test "chain break residue keeps single backbone H" {
     const source = @embedFile("../test_data/gap_chain.cif");
     var mdl = try mmcif.parseModel(testing.allocator, source);
     defer mdl.deinit();
@@ -1445,15 +1450,41 @@ test "chain break residue gets NH3+ placement" {
     applyChemistry(&mdl);
     _ = try addHydrogens(&mdl, null, null);
 
-    // Second residue (seq_id 3, index 1) should be N-terminal after chain break
-    // -> should have H1, H2, H3 (NH3+)
+    // Second residue (seq_id 3, index 1) is after a chain break.
+    // It should keep the single backbone amide H, not gain NH3+.
+    var h_count: u32 = 0;
     var h1_count: u32 = 0;
+    var h2_count: u32 = 0;
+    var h3_count: u32 = 0;
     for (mdl.atoms.items) |atom| {
-        if (atom.is_added and atom.residue_idx == 1 and std.mem.eql(u8, atom.nameSlice(), "H1")) {
-            h1_count += 1;
+        if (!atom.is_added or atom.residue_idx != 1) continue;
+        if (std.mem.eql(u8, atom.nameSlice(), "H")) h_count += 1;
+        if (std.mem.eql(u8, atom.nameSlice(), "H1")) h1_count += 1;
+        if (std.mem.eql(u8, atom.nameSlice(), "H2")) h2_count += 1;
+        if (std.mem.eql(u8, atom.nameSlice(), "H3")) h3_count += 1;
+    }
+    try testing.expectEqual(@as(u32, 1), h_count);
+    try testing.expectEqual(@as(u32, 0), h1_count);
+    try testing.expectEqual(@as(u32, 0), h2_count);
+    try testing.expectEqual(@as(u32, 0), h3_count);
+}
+
+test "chain break residue is not annotated as positively charged N-terminus" {
+    const source = @embedFile("../test_data/gap_chain.cif");
+    var mdl = try mmcif.parseModel(testing.allocator, source);
+    defer mdl.deinit();
+
+    applyChemistry(&mdl);
+
+    const res1 = mdl.residues.items[1];
+    const atoms1 = mdl.atoms.items[res1.atom_start..res1.atom_end];
+    var n_positive = false;
+    for (atoms1) |atom| {
+        if (std.mem.eql(u8, atom.nameSlice(), "N")) {
+            n_positive = atom.flags.positive;
         }
     }
-    try testing.expectEqual(@as(u32, 1), h1_count);
+    try testing.expect(!n_positive);
 }
 
 test "residue before chain break gets C-terminal charge" {
