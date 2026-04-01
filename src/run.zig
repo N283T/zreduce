@@ -172,7 +172,7 @@ pub fn processFile(allocator: Allocator, config: ProcessConfig) !ProcessResult {
         }
 
         if (fix_overrides) |*ov| {
-            zreduce.optimize.fix.applyFixes(ov, &mdl, movers);
+            try zreduce.optimize.fix.applyFixes(ov, &mdl, movers);
             for (movers) |*m| {
                 if (m.is_fixed) m.applyOrientation(mdl.atoms.items, m.best_orientation);
             }

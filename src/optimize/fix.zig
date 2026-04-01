@@ -104,41 +104,41 @@ pub fn parseString(allocator: std.mem.Allocator, source: []const u8) !FixOverrid
 
         var toks = std.mem.tokenizeAny(u8, line, " \t");
         const selector_tok = toks.next() orelse {
-            std.debug.print("Warning: fix override line {d}: expected 'chain:seq comp target value'\n", .{line_num});
-            continue;
+            std.debug.print("Error: fix override line {d}: expected 'chain:seq comp target value'\n", .{line_num});
+            return error.InvalidFixOverride;
         };
         const comp_tok = toks.next() orelse {
-            std.debug.print("Warning: fix override line {d}: missing comp_id\n", .{line_num});
-            continue;
+            std.debug.print("Error: fix override line {d}: missing comp_id\n", .{line_num});
+            return error.InvalidFixOverride;
         };
         const target_tok = toks.next() orelse {
-            std.debug.print("Warning: fix override line {d}: missing target\n", .{line_num});
-            continue;
+            std.debug.print("Error: fix override line {d}: missing target\n", .{line_num});
+            return error.InvalidFixOverride;
         };
         const value_tok = toks.next() orelse {
-            std.debug.print("Warning: fix override line {d}: missing value\n", .{line_num});
-            continue;
+            std.debug.print("Error: fix override line {d}: missing value\n", .{line_num});
+            return error.InvalidFixOverride;
         };
         if (toks.next() != null) {
-            std.debug.print("Warning: fix override line {d}: unexpected extra tokens\n", .{line_num});
-            continue;
+            std.debug.print("Error: fix override line {d}: unexpected extra tokens\n", .{line_num});
+            return error.InvalidFixOverride;
         }
         if (comp_tok.len == 0 or comp_tok.len > 3) {
-            std.debug.print("Warning: fix override line {d}: invalid comp_id '{s}'\n", .{ line_num, comp_tok });
-            continue;
+            std.debug.print("Error: fix override line {d}: invalid comp_id '{s}'\n", .{ line_num, comp_tok });
+            return error.InvalidFixOverride;
         }
 
+        // Validate value before allocating (parseValue is pure)
+        const value = parseValue(target_tok, value_tok) catch {
+            std.debug.print("Error: fix override line {d}: invalid value '{s}' for target '{s}'\n", .{ line_num, value_tok, target_tok });
+            return error.InvalidFixOverride;
+        };
         const selector = parseSelector(allocator, selector_tok) catch {
-            std.debug.print("Warning: fix override line {d}: invalid selector '{s}'\n", .{ line_num, selector_tok });
-            continue;
+            std.debug.print("Error: fix override line {d}: invalid selector '{s}' (expected chain:seq[:ins])\n", .{ line_num, selector_tok });
+            return error.InvalidFixOverride;
         };
         errdefer allocator.free(selector.chain_id);
         const target = try allocator.dupe(u8, target_tok);
-        errdefer allocator.free(target);
-        const value = parseValue(target_tok, value_tok) catch {
-            std.debug.print("Warning: fix override line {d}: invalid value '{s}' for target '{s}'\n", .{ line_num, value_tok, target_tok });
-            continue;
-        };
 
         var comp_id: [3]u8 = .{ ' ', ' ', ' ' };
         const comp_id_len: u2 = @intCast(comp_tok.len);
@@ -156,7 +156,7 @@ pub fn parseString(allocator: std.mem.Allocator, source: []const u8) !FixOverrid
     return .{ .allocator = allocator, .entries = try entries.toOwnedSlice(allocator) };
 }
 
-pub fn applyFixes(overrides: *const FixOverrides, mdl: *const Model, movers: []Mover) void {
+pub fn applyFixes(overrides: *const FixOverrides, mdl: *const Model, movers: []Mover) !void {
     for (movers) |*m| {
         const res = mdl.residues.items[m.residue_idx];
         var i = overrides.entries.len;
@@ -169,12 +169,14 @@ pub fn applyFixes(overrides: *const FixOverrides, mdl: *const Model, movers: []M
             if (entryOrientation(m, entry.value)) |idx| {
                 m.lockToOrientation(idx);
             } else {
-                std.debug.print("  warning: fix override for {s}:{d} {s} {s} is not valid for this mover\n", .{
+                std.debug.print("Error: fix override for {s}:{d} {s} {s}: value is not valid for this mover (has {d} orientations)\n", .{
                     entry.selector.chain_id,
                     entry.selector.auth_seq_id,
                     entry.compIdSlice(),
                     entry.target,
+                    m.nOrientations(),
                 });
+                return error.InvalidFixOverride;
             }
             break;
         }
@@ -292,15 +294,19 @@ test "parse fix override file" {
     try testing.expectEqual(@as(u16, 6), overrides.entries[2].value.orientation);
 }
 
-test "invalid fix lines are ignored" {
-    var overrides = try parseString(testing.allocator,
-        \\A:1 ASN amide FLIP
-        \\bad line
-        \\A:2 HIST his HIE
-    );
-    defer overrides.deinit();
-
-    try testing.expectEqual(@as(usize, 1), overrides.entries.len);
+test "parser rejects invalid input" {
+    // Missing tokens
+    try testing.expectError(error.InvalidFixOverride, parseString(testing.allocator, "A:1 ASN amide"));
+    // Extra tokens
+    try testing.expectError(error.InvalidFixOverride, parseString(testing.allocator, "A:1 ASN amide FLIP extra"));
+    // Invalid comp_id (too long)
+    try testing.expectError(error.InvalidFixOverride, parseString(testing.allocator, "A:1 ASNX amide FLIP"));
+    // Invalid selector
+    try testing.expectError(error.InvalidFixOverride, parseString(testing.allocator, "A ASN amide FLIP"));
+    // Invalid value for target
+    try testing.expectError(error.InvalidFixOverride, parseString(testing.allocator, "A:1 ASN amide BADVALUE"));
+    // Invalid numeric value for rotator
+    try testing.expectError(error.InvalidFixOverride, parseString(testing.allocator, "A:1 SER OG abc"));
 }
 
 test "apply fix locks his mover state" {
@@ -322,7 +328,7 @@ test "apply fix locks his mover state" {
         \\A:1 HIS his HID_FLIP
     );
     defer overrides.deinit();
-    applyFixes(&overrides, &mdl, movers);
+    try applyFixes(&overrides, &mdl, movers);
 
     try testing.expectEqual(@as(usize, 1), movers.len);
     try testing.expect(movers[0].is_fixed);
@@ -349,7 +355,7 @@ test "apply fix locks amide and rotator movers" {
             \\A:1 ASN amide FLIP
         );
         defer overrides.deinit();
-        applyFixes(&overrides, &mdl, movers);
+        try applyFixes(&overrides, &mdl, movers);
 
         try testing.expect(movers[0].is_fixed);
         try testing.expectEqual(@as(u16, 1), movers[0].best_orientation);
@@ -374,7 +380,7 @@ test "apply fix locks amide and rotator movers" {
             \\A:1 ALA CB 2
         );
         defer overrides.deinit();
-        applyFixes(&overrides, &mdl, movers);
+        try applyFixes(&overrides, &mdl, movers);
 
         try testing.expect(movers[0].is_fixed);
         try testing.expectEqual(@as(u16, 2), movers[0].best_orientation);
@@ -400,4 +406,54 @@ test "dump movers lists symbolic states" {
     defer buf.deinit(testing.allocator);
     try dumpMovers(buf.writer(testing.allocator), &mdl, movers);
     try testing.expect(std.mem.indexOf(u8, buf.items, "A:1 HIS his 0 HIE|HID|HIE_FLIP|HID_FLIP") != null);
+}
+
+test "applyFixes rejects out-of-range orientation" {
+    const source = @embedFile("../test_data/tiny.cif");
+    var mdl = try mmcif.parseModel(testing.allocator, source);
+    defer mdl.deinit();
+    mdl.residues.items[0].auth_seq_id = 1;
+
+    place.applyChemistry(&mdl);
+    _ = try place.addHydrogens(&mdl, null, null);
+    const gen = try optimize.generateMovers(testing.allocator, &mdl, false, null, null, null);
+    const movers = gen.movers;
+    defer {
+        for (movers) |*m| m.deinit();
+        testing.allocator.free(movers);
+    }
+
+    var overrides = try parseString(testing.allocator,
+        \\A:1 ALA CB 999
+    );
+    defer overrides.deinit();
+    try testing.expectError(error.InvalidFixOverride, applyFixes(&overrides, &mdl, movers));
+    try testing.expect(!movers[0].is_fixed);
+}
+
+test "fixed mover preserved through optimize()" {
+    const source = @embedFile("../test_data/his.cif");
+    var mdl = try mmcif.parseModel(testing.allocator, source);
+    defer mdl.deinit();
+    mdl.residues.items[0].auth_seq_id = 1;
+
+    place.applyChemistry(&mdl);
+    _ = try place.addHydrogens(&mdl, null, null);
+    const gen = try optimize.generateMovers(testing.allocator, &mdl, false, null, null, null);
+    const movers = gen.movers;
+    defer {
+        for (movers) |*m| m.deinit();
+        testing.allocator.free(movers);
+    }
+
+    // Lock the His flipper to HID_FLIP (orientation 3)
+    movers[0].lockToOrientation(3);
+    movers[0].applyOrientation(mdl.atoms.items, 3);
+
+    const opt_result = try @import("optimizer.zig").optimize(testing.allocator, movers, &mdl, .{});
+    _ = opt_result;
+
+    // Orientation must be preserved after optimization
+    try testing.expect(movers[0].is_fixed);
+    try testing.expectEqual(@as(u16, 3), movers[0].best_orientation);
 }

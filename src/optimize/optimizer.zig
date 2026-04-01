@@ -352,6 +352,9 @@ fn optimizeBruteForce(
     const best_indices = try allocator.alloc(u16, n);
     defer allocator.free(best_indices);
     @memset(best_indices, 0);
+    for (clq, 0..) |mi, i| {
+        if (movers[mi].is_fixed) best_indices[i] = movers[mi].best_orientation;
+    }
 
     // Enumerate all combinations
     while (true) {
