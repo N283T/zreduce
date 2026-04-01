@@ -30,6 +30,7 @@ pub const Mover = struct {
     orientations: []Orientation,
     best_orientation: u16 = 0,
     current_orientation: u16 = 0,
+    is_fixed: bool = false,
     allocator: std.mem.Allocator,
 
     // Rotation axis geometry (for fine search, rotators only)
@@ -68,6 +69,16 @@ pub const Mover = struct {
 
     pub fn nOrientations(self: *const Mover) u16 {
         return @intCast(self.orientations.len);
+    }
+
+    pub fn effectiveOrientations(self: *const Mover) u16 {
+        return if (self.is_fixed) 1 else self.nOrientations();
+    }
+
+    pub fn lockToOrientation(self: *Mover, idx: u16) void {
+        self.best_orientation = idx;
+        self.current_orientation = idx;
+        self.is_fixed = true;
     }
 };
 

@@ -22,6 +22,7 @@ pub const BatchConfig = struct {
     json_version: []const u8 = "", // passed from main
     water: zreduce.place.WaterConfig = .{},
     protonation_path: ?[]const u8 = null,
+    fix_path: ?[]const u8 = null,
 };
 
 // ---------------------------------------------------------------------------
@@ -146,6 +147,7 @@ fn processFileInBatch(
         .quiet = true, // suppress per-file diagnostics in batch mode
         .water = config.water,
         .protonation_path = config.protonation_path,
+        .fix_path = config.fix_path,
     };
 
     var timer = try std.time.Timer.start();
