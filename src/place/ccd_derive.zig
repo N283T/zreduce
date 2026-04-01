@@ -23,6 +23,9 @@ const BondInfo = struct {
     total_bonds: u8,
     heavy_neighbor_count: u8,
     h_neighbor_count: u8,
+    /// Heavy neighbors available in the CCD template (excludes inter-residue extras).
+    /// Use this for plan type selection (finding reference atoms in CCD).
+    ccd_heavy_neighbor_count: u8,
     has_double: bool,
     has_triple: bool,
     has_aromatic: bool,
@@ -170,6 +173,7 @@ fn analyzeBonds(component: *const ccd.Component, atom_idx: u16, extra_bonds: u8,
         .total_bonds = 0,
         .heavy_neighbor_count = 0,
         .h_neighbor_count = 0,
+        .ccd_heavy_neighbor_count = 0,
         .has_double = false,
         .has_triple = false,
         .has_aromatic = false,
@@ -202,6 +206,10 @@ fn analyzeBonds(component: *const ccd.Component, atom_idx: u16, extra_bonds: u8,
         }
     }
 
+    // Record CCD-only heavy neighbor count before adjustments.
+    // This is used for plan type selection (finding reference atoms in CCD).
+    info.ccd_heavy_neighbor_count = info.heavy_neighbor_count;
+
     // Account for inter-residue bonds not in the CCD template
     info.total_bonds += extra_bonds;
     info.heavy_neighbor_count += extra_bonds;
@@ -210,6 +218,7 @@ fn analyzeBonds(component: *const ccd.Component, atom_idx: u16, extra_bonds: u8,
     if (missing_neighbors > 0) {
         info.heavy_neighbor_count -|= missing_neighbors;
         info.total_bonds -|= missing_neighbors;
+        info.ccd_heavy_neighbor_count -|= missing_neighbors;
     }
 
     // Note: total_valence is intentionally NOT adjusted for missing neighbors.
@@ -284,9 +293,16 @@ fn deriveSinglePlan(
         else => .none,
     };
 
+    // Use CCD-available heavy neighbor count for plan type selection.
+    // This is the count of heavy neighbors actually findable in the CCD template,
+    // excluding inter-residue extras (which have no CCD atom entry to reference).
+    // The full heavy_neighbor_count (including extras) is used for hybridization
+    // and valence calculations above.
+    const avail_heavy = bond_info.ccd_heavy_neighbor_count;
+
     switch (bond_info.hybridization) {
         .sp3 => {
-            if (bond_info.heavy_neighbor_count >= 3) {
+            if (avail_heavy >= 3) {
                 // HXR3: tetrahedral with 3 heavy neighbors.
                 // executePlan expects connected = {center, n1, n2} where center is
                 // the parent heavy atom. The 3rd neighbor is found geometrically.
@@ -299,7 +315,7 @@ fn deriveSinglePlan(
                     .bond_len = bond_len,
                     .atom_type = atom_type,
                 };
-            } else if (bond_info.heavy_neighbor_count == 2) {
+            } else if (avail_heavy >= 2) {
                 // H2XR2: 2 heavy neighbors, dihedral-controlled
                 const refs = findHeavyNeighborNamesFiltered(component, heavy_idx, 2, existing_atom_names) orelse return null;
                 const dihedral = estimateDihedral(component, h_atom, heavy_idx, refs[0]);
@@ -313,7 +329,7 @@ fn deriveSinglePlan(
                     .dihedral = dihedral,
                     .atom_type = atom_type,
                 };
-            } else if (bond_info.heavy_neighbor_count == 1) {
+            } else if (avail_heavy >= 1) {
                 // H3XR: dihedral-controlled (e.g., methyl)
                 const refs = findHeavyNeighborNamesFiltered(component, heavy_idx, 1, existing_atom_names) orelse return null;
                 // Find a second reference for dihedral (neighbor of the heavy neighbor)
@@ -335,7 +351,7 @@ fn deriveSinglePlan(
         },
         .sp2 => {
             // Planar placement
-            if (bond_info.heavy_neighbor_count >= 2) {
+            if (avail_heavy >= 2) {
                 const refs = findHeavyNeighborNamesFiltered(component, heavy_idx, 2, existing_atom_names) orelse return null;
                 return PlacementPlan{
                     .h_name = h_atom.name,
@@ -345,7 +361,7 @@ fn deriveSinglePlan(
                     .bond_len = bond_len,
                     .atom_type = atom_type,
                 };
-            } else if (bond_info.heavy_neighbor_count == 1) {
+            } else if (avail_heavy >= 1) {
                 // Only one heavy neighbor on sp2 — use dihedral placement
                 const refs = findHeavyNeighborNamesFiltered(component, heavy_idx, 1, existing_atom_names) orelse return null;
                 const second_ref = findSecondReferenceFiltered(component, heavy_idx, refs[0], existing_atom_names) orelse return null;
@@ -365,7 +381,7 @@ fn deriveSinglePlan(
         },
         .sp => {
             // Linear placement (HXY)
-            if (bond_info.heavy_neighbor_count >= 1) {
+            if (avail_heavy >= 1) {
                 const refs = findHeavyNeighborNamesFiltered(component, heavy_idx, 1, existing_atom_names) orelse return null;
                 return PlacementPlan{
                     .h_name = h_atom.name,
