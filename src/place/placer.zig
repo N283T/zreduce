@@ -15,6 +15,7 @@ const nucleotide = @import("nucleotide.zig");
 const modified = @import("modified.zig");
 const ccd_derive = @import("ccd_derive.zig");
 const geometry = @import("geometry.zig");
+const bond_policy = @import("bond_policy.zig");
 const math_mod = @import("../math.zig");
 const element = @import("../element.zig");
 
@@ -65,6 +66,7 @@ pub const WaterConfig = struct {
 pub const PlacementConfig = struct {
     water: WaterConfig = .{},
     protonation: ?*const protonation.ProtonationOverrides = null,
+    bond_policy: bond_policy.BondPolicy = .{},
 };
 
 const AltlocSet = struct { locs: [10]u8, count: usize };
@@ -118,7 +120,7 @@ pub fn addHydrogensWithConfig(
         const protonation_state = if (config.protonation) |overrides| overrides.find(mdl, res_idx) else null;
 
         if (config.water.enabled and isWaterResidue(res, comp_id)) {
-            const water_result = try placeWaterHydrogens(mdl, res, @intCast(res_idx), config.water);
+            const water_result = try placeWaterHydrogens(mdl, res, @intCast(res_idx), config.water, config.bond_policy.mode);
             result.n_placed += water_result.n_placed;
             result.n_skipped_existing += water_result.n_skipped_existing;
             result.n_skipped_inter_residue += water_result.n_skipped_inter_residue;
@@ -165,28 +167,28 @@ pub fn addHydrogensWithConfig(
                     // After a chain break, keep the single amide H.
                     if (is_real_nterm and isBackboneH(&plan)) continue;
 
-                    result.tally(try executePlan(mdl, res, @intCast(res_idx), &plan, bonds, alt));
+                    result.tally(try executePlan(mdl, res, @intCast(res_idx), &plan, bonds, alt, config.bond_policy.mode));
                 }
 
                 // Real N-terminal peptide residues: place NH3+/NH2+ instead of single backbone H.
                 // Residues after a chain break keep a single break-amide H.
                 if (is_real_nterm and has_backbone) {
                     const nterm = if (std.mem.eql(u8, comp_id, "PRO"))
-                        try placeNtermNH2Pro(mdl, res, @intCast(res_idx), alt)
+                        try placeNtermNH2Pro(mdl, res, @intCast(res_idx), alt, config.bond_policy.mode)
                     else
-                        try placeNtermNH3(mdl, res, @intCast(res_idx), alt);
+                        try placeNtermNH3(mdl, res, @intCast(res_idx), alt, config.bond_policy.mode);
                     result.n_placed += nterm.placed;
                     result.n_skipped_existing += nterm.skipped;
                 }
 
                 // 3' terminal nucleotide: place HO3' (leaving atom, absent mid-chain).
                 if (is_cterm and nucleotide.getPlans(comp_id) != null) {
-                    const oh = try place3primeOH(mdl, res, @intCast(res_idx), alt);
+                    const oh = try place3primeOH(mdl, res, @intCast(res_idx), alt, config.bond_policy.mode);
                     result.n_placed += oh.placed;
                     result.n_skipped_existing += oh.skipped;
                 }
 
-                if (try placeOverrideHydrogen(mdl, res, @intCast(res_idx), alt, protonation_state)) |place_result| {
+                if (try placeOverrideHydrogen(mdl, res, @intCast(res_idx), alt, protonation_state, config.bond_policy.mode)) |place_result| {
                     result.tally(place_result);
                 }
             }
@@ -228,7 +230,7 @@ pub fn addHydrogensWithConfig(
                         result.n_skipped_inter_residue += 1;
                         continue;
                     }
-                    result.tally(try executePlan(mdl, res, @intCast(res_idx), &plan, null, ' '));
+                    result.tally(try executePlan(mdl, res, @intCast(res_idx), &plan, null, ' ', config.bond_policy.mode));
                 }
 
                 // 3' terminal nucleotide (CCD path): place HO3' only if CCD
@@ -239,7 +241,7 @@ pub fn addHydrogensWithConfig(
                         if (std.mem.eql(u8, &plan.h_name, &ho3_name)) break true;
                     } else false;
                     if (!already_in_plans) {
-                        const oh = try place3primeOH(mdl, res, @intCast(res_idx), ' ');
+                        const oh = try place3primeOH(mdl, res, @intCast(res_idx), ' ', config.bond_policy.mode);
                         result.n_placed += oh.placed;
                         result.n_skipped_existing += oh.skipped;
                     }
@@ -320,22 +322,22 @@ fn shouldSkipPlanForProtonation(comp_id: []const u8, plan: *const standard.Place
     return false;
 }
 
-fn placeOverrideHydrogen(mdl: *Model, res: Residue, res_idx: u32, target_altloc: u8, state: ?protonation.ResidueState) !?PlaceResult {
+fn placeOverrideHydrogen(mdl: *Model, res: Residue, res_idx: u32, target_altloc: u8, state: ?protonation.ResidueState, mode: bond_policy.BondLengthMode) !?PlaceResult {
     const s = state orelse return null;
     const comp_id = res.compIdSlice();
 
     if (std.mem.eql(u8, comp_id, "ASP") and s == .asp) {
         return switch (s.asp) {
             .deprotonated => null,
-            .atom1 => try placeCarboxylHydrogen(mdl, res, res_idx, target_altloc, "OD1", "OD2", "CG", "HD1"),
-            .atom2 => try placeCarboxylHydrogen(mdl, res, res_idx, target_altloc, "OD2", "OD1", "CG", "HD2"),
+            .atom1 => try placeCarboxylHydrogen(mdl, res, res_idx, target_altloc, mode, "OD1", "OD2", "CG", "HD1"),
+            .atom2 => try placeCarboxylHydrogen(mdl, res, res_idx, target_altloc, mode, "OD2", "OD1", "CG", "HD2"),
         };
     }
     if (std.mem.eql(u8, comp_id, "GLU") and s == .glu) {
         return switch (s.glu) {
             .deprotonated => null,
-            .atom1 => try placeCarboxylHydrogen(mdl, res, res_idx, target_altloc, "OE1", "OE2", "CD", "HE1"),
-            .atom2 => try placeCarboxylHydrogen(mdl, res, res_idx, target_altloc, "OE2", "OE1", "CD", "HE2"),
+            .atom1 => try placeCarboxylHydrogen(mdl, res, res_idx, target_altloc, mode, "OE1", "OE2", "CD", "HE1"),
+            .atom2 => try placeCarboxylHydrogen(mdl, res, res_idx, target_altloc, mode, "OE2", "OE1", "CD", "HE2"),
         };
     }
     return null;
@@ -346,6 +348,7 @@ fn placeCarboxylHydrogen(
     res: Residue,
     res_idx: u32,
     target_altloc: u8,
+    mode: bond_policy.BondLengthMode,
     protonated_o_name: []const u8,
     partner_o_name: []const u8,
     carbon_name: []const u8,
@@ -366,7 +369,7 @@ fn placeCarboxylHydrogen(
         o_pos.cast(f64),
         carbon_pos.cast(f64),
         partner_o_pos.cast(f64),
-        0.97,
+        bond_policy.adjustedBondLength(mode, 0.97, protonated_o.element_type, .Hpol),
         0.0,
     );
     try appendHydrogenNamed(mdl, h_pos.cast(f32), h_name, .Hpol, .none, res_idx, meta);
@@ -379,7 +382,7 @@ fn placeCarboxylHydrogen(
 
 /// Execute a single placement plan: find reference atoms, compute H position, add to model.
 /// Returns true if placed, false if skipped (duplicate H or missing reference atoms).
-fn executePlan(mdl: *Model, res: Residue, res_idx: u32, plan: *const standard.PlacementPlan, bonds: ?[]const topology.BondEntry, target_altloc: u8) !PlaceResult {
+fn executePlan(mdl: *Model, res: Residue, res_idx: u32, plan: *const standard.PlacementPlan, bonds: ?[]const topology.BondEntry, target_altloc: u8, mode: bond_policy.BondLengthMode) !PlaceResult {
     // Resolve parent heavy atom (connected[0]) for metadata and position
     const base_atom = findAtom(mdl, res, plan.connected[0], target_altloc) orelse return .missing_parent;
 
@@ -399,6 +402,8 @@ fn executePlan(mdl: *Model, res: Residue, res_idx: u32, plan: *const standard.Pl
     // Skip if this hydrogen already exists in the residue
     if (existsInResidue(mdl, res, plan.h_name, meta.altloc)) return .existing_h;
 
+    const effective_bond_len = bond_policy.adjustedBondLength(mode, plan.bond_len, base_atom.element_type, plan.atom_type);
+
     switch (plan.placement_type) {
         .hxr3 => {
             // connected[0]=center, connected[1..2]=two known neighbors
@@ -416,7 +421,7 @@ fn executePlan(mdl: *Model, res: Residue, res_idx: u32, plan: *const standard.Pl
                 n1_pos.cast(f64),
                 n2_pos.cast(f64),
                 n3_pos.cast(f64),
-                plan.bond_len,
+                effective_bond_len,
             );
             try appendHydrogen(mdl, h_pos.cast(f32), plan, res_idx, meta);
             return .placed;
@@ -435,7 +440,7 @@ fn executePlan(mdl: *Model, res: Residue, res_idx: u32, plan: *const standard.Pl
                 center_pos.cast(f64),
                 n1_pos.cast(f64),
                 n2_pos.cast(f64),
-                plan.bond_len,
+                effective_bond_len,
                 plan.angle,
                 plan.dihedral,
             );
@@ -457,7 +462,7 @@ fn executePlan(mdl: *Model, res: Residue, res_idx: u32, plan: *const standard.Pl
                         a1_pos.cast(f64),
                         prev_c_pos.cast(f64),
                         a2_pos.cast(f64),
-                        plan.bond_len,
+                        effective_bond_len,
                         0.0,
                     );
                     try appendHydrogen(mdl, h_pos.cast(f32), plan, res_idx, meta);
@@ -478,7 +483,7 @@ fn executePlan(mdl: *Model, res: Residue, res_idx: u32, plan: *const standard.Pl
                 a1_pos.cast(f64),
                 a2_pos.cast(f64),
                 a3_pos.cast(f64),
-                plan.bond_len,
+                effective_bond_len,
                 plan.angle,
                 plan.dihedral,
             );
@@ -499,7 +504,7 @@ fn executePlan(mdl: *Model, res: Residue, res_idx: u32, plan: *const standard.Pl
                 center_pos.cast(f64),
                 n1_pos.cast(f64),
                 n2_pos.cast(f64),
-                plan.bond_len,
+                effective_bond_len,
                 plan.fudge,
             );
             try appendHydrogen(mdl, h_pos.cast(f32), plan, res_idx, meta);
@@ -515,7 +520,7 @@ fn executePlan(mdl: *Model, res: Residue, res_idx: u32, plan: *const standard.Pl
                 a1_pos.cast(f64),
                 a2_pos.cast(f64),
                 a3_pos.cast(f64),
-                plan.bond_len,
+                effective_bond_len,
                 plan.fudge,
             );
             try appendHydrogen(mdl, h_pos.cast(f32), plan, res_idx, meta);
@@ -529,7 +534,7 @@ fn executePlan(mdl: *Model, res: Residue, res_idx: u32, plan: *const standard.Pl
             const h_pos = geometry.placeHXY(
                 center_pos.cast(f64),
                 neighbor_pos.cast(f64),
-                plan.bond_len,
+                effective_bond_len,
             );
             try appendHydrogen(mdl, h_pos.cast(f32), plan, res_idx, meta);
             return .placed;
@@ -838,7 +843,7 @@ const NtermResult = struct { placed: u32, skipped: u32 };
 
 /// Place NH3+ hydrogens (H1, H2, H3) on the N-terminal residue.
 /// Uses h3xr (dihedral-controlled) placement around the N-CA bond.
-fn placeNtermNH3(mdl: *Model, res: Residue, res_idx: u32, target_altloc: u8) !NtermResult {
+fn placeNtermNH3(mdl: *Model, res: Residue, res_idx: u32, target_altloc: u8, mode: bond_policy.BondLengthMode) !NtermResult {
     const n_atom = findAtom(mdl, res, .{ ' ', 'N', ' ', ' ' }, target_altloc) orelse return .{ .placed = 0, .skipped = 0 };
     const ca_pos = findAtomPos(mdl, res, .{ ' ', 'C', 'A', ' ' }, target_altloc) orelse return .{ .placed = 0, .skipped = 0 };
     const c_pos = findAtomPos(mdl, res, .{ ' ', 'C', ' ', ' ' }, target_altloc) orelse return .{ .placed = 0, .skipped = 0 };
@@ -850,7 +855,7 @@ fn placeNtermNH3(mdl: *Model, res: Residue, res_idx: u32, target_altloc: u8) !Nt
     const ca64 = math_mod.Vec3(f64){ .x = ca_pos.x, .y = ca_pos.y, .z = ca_pos.z };
     const c64 = math_mod.Vec3(f64){ .x = c_pos.x, .y = c_pos.y, .z = c_pos.z };
 
-    const bond_len: f64 = 1.00; // N-H sidechain/terminal (CCD mean: 1.000)
+    const bond_len: f64 = bond_policy.adjustedBondLength(mode, 1.00, n_atom.element_type, .Hpol);
     const angle_deg: f64 = 109.5;
     const dihedrals = [3]f64{ 180.0, 60.0, -60.0 };
     const names = [3][]const u8{ "H1", "H2", "H3" };
@@ -873,7 +878,7 @@ fn placeNtermNH3(mdl: *Model, res: Residue, res_idx: u32, target_altloc: u8) !Nt
 
 /// Place NH2+ hydrogens (H2, H3) on N-terminal PRO.
 /// PRO has CD bonded to N (secondary amine), so only 2 H positions.
-fn placeNtermNH2Pro(mdl: *Model, res: Residue, res_idx: u32, target_altloc: u8) !NtermResult {
+fn placeNtermNH2Pro(mdl: *Model, res: Residue, res_idx: u32, target_altloc: u8, mode: bond_policy.BondLengthMode) !NtermResult {
     const n_atom = findAtom(mdl, res, .{ ' ', 'N', ' ', ' ' }, target_altloc) orelse return .{ .placed = 0, .skipped = 0 };
     const ca_pos = findAtomPos(mdl, res, .{ ' ', 'C', 'A', ' ' }, target_altloc) orelse return .{ .placed = 0, .skipped = 0 };
     const cd_pos = findAtomPos(mdl, res, .{ ' ', 'C', 'D', ' ' }, target_altloc) orelse return .{ .placed = 0, .skipped = 0 };
@@ -887,7 +892,7 @@ fn placeNtermNH2Pro(mdl: *Model, res: Residue, res_idx: u32, target_altloc: u8) 
     const ca64 = math_mod.Vec3(f64){ .x = ca_pos.x, .y = ca_pos.y, .z = ca_pos.z };
     const cd64 = math_mod.Vec3(f64){ .x = cd_pos.x, .y = cd_pos.y, .z = cd_pos.z };
 
-    const bond_len: f64 = 1.00; // N-H sidechain/terminal (CCD mean: 1.000)
+    const bond_len: f64 = bond_policy.adjustedBondLength(mode, 1.00, n_atom.element_type, .Hpol);
     const angle_deg: f64 = 109.5;
     const names = [2][]const u8{ "H2", "H3" };
     const dihedrals = [2]f64{ 120.0, -120.0 };
@@ -911,7 +916,7 @@ fn placeNtermNH2Pro(mdl: *Model, res: Residue, res_idx: u32, target_altloc: u8) 
 /// Place HO3' on 3' terminal nucleotide residues.
 /// O3' is sp3 with 2 heavy-atom neighbors (C3', and normally the next P — absent at 3' terminus).
 /// Uses h3xr geometry: O3' center, C3' and C4' as references, tetrahedral angle.
-fn place3primeOH(mdl: *Model, res: Residue, res_idx: u32, target_altloc: u8) !NtermResult {
+fn place3primeOH(mdl: *Model, res: Residue, res_idx: u32, target_altloc: u8, mode: bond_policy.BondLengthMode) !NtermResult {
     const o3_atom = findAtom(mdl, res, .{ ' ', 'O', '3', '\'' }, target_altloc) orelse return .{ .placed = 0, .skipped = 0 };
     const c3_pos = findAtomPos(mdl, res, .{ ' ', 'C', '3', '\'' }, target_altloc) orelse return .{ .placed = 0, .skipped = 0 };
     const c4_pos = findAtomPos(mdl, res, .{ ' ', 'C', '4', '\'' }, target_altloc) orelse return .{ .placed = 0, .skipped = 0 };
@@ -928,7 +933,7 @@ fn place3primeOH(mdl: *Model, res: Residue, res_idx: u32, target_altloc: u8) !Nt
     const c3_64 = math_mod.Vec3(f64){ .x = c3_pos.x, .y = c3_pos.y, .z = c3_pos.z };
     const c4_64 = math_mod.Vec3(f64){ .x = c4_pos.x, .y = c4_pos.y, .z = c4_pos.z };
 
-    const bond_len: f64 = 0.97; // O-H (CCD mean: 0.968)
+    const bond_len: f64 = bond_policy.adjustedBondLength(mode, 0.97, o3_atom.element_type, .Hpol);
     const h64 = geometry.placeH3XR(o3_64, c3_64, c4_64, bond_len, 109.5, 180.0);
     const h_pos = Vec3f32{ .x = @floatCast(h64.x), .y = @floatCast(h64.y), .z = @floatCast(h64.z) };
 
@@ -1058,7 +1063,7 @@ fn awayFromNearbyAtoms(mdl: *const Model, res_idx: u32, oxygen: Atom, target_alt
     return oxygen.pos.sub(sum.scale(1.0 / @as(f32, @floatFromInt(count)))).normalize();
 }
 
-fn placeWaterHydrogens(mdl: *Model, res: Residue, res_idx: u32, config: WaterConfig) !PlacementResult {
+fn placeWaterHydrogens(mdl: *Model, res: Residue, res_idx: u32, config: WaterConfig, mode: bond_policy.BondLengthMode) !PlacementResult {
     var result = PlacementResult{};
     const altlocs = collectAltlocs(mdl, res);
     const targets: []const u8 = if (altlocs.count == 0)
@@ -1068,7 +1073,6 @@ fn placeWaterHydrogens(mdl: *Model, res: Residue, res_idx: u32, config: WaterCon
 
     const h1_name = padName("H1");
     const h2_name = padName("H2");
-    const bond_len: f32 = 0.97;
     const half_angle: f32 = 52.25;
 
     for (targets) |alt| {
@@ -1079,6 +1083,7 @@ fn placeWaterHydrogens(mdl: *Model, res: Residue, res_idx: u32, config: WaterCon
 
         var meta = ParentMeta.fromAtom(oxygen);
         if (alt != ' ') meta.altloc = alt;
+        const bond_len = bond_policy.adjustedBondLength(mode, 0.97, oxygen.element_type, .Hpol);
 
         if (oxygen.flags.bonded_inter_residue) {
             result.n_skipped_inter_residue += 1;

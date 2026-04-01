@@ -74,6 +74,7 @@ fn runPipeline(allocator: std.mem.Allocator, path: []const u8) !PipelineResult {
         null,
         if (inline_dict) |*d| d else null,
         null,
+        .neutron,
     );
     var movers = gen_result.movers;
     defer {

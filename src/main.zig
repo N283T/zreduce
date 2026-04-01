@@ -13,10 +13,23 @@ const RunConfig = struct {
     no_flip: bool = false,
     validate: bool = false,
     water: zreduce.place.WaterConfig = .{},
+    bond_policy: zreduce.place.BondPolicy = .{},
     protonation_path: ?[]const u8 = null,
     fix_path: ?[]const u8 = null,
     dump_movers_path: ?[]const u8 = null,
 };
+
+fn parseBondModeValue(s: []const u8) ?zreduce.place.BondLengthMode {
+    if (std.ascii.eqlIgnoreCase(s, "neutron")) return .neutron;
+    if (std.ascii.eqlIgnoreCase(s, "xray")) return .xray;
+    return null;
+}
+
+fn parseOutputIsotopeValue(s: []const u8) ?zreduce.place.OutputIsotope {
+    if (std.ascii.eqlIgnoreCase(s, "hydrogen") or std.ascii.eqlIgnoreCase(s, "h")) return .hydrogen;
+    if (std.ascii.eqlIgnoreCase(s, "deuterium") or std.ascii.eqlIgnoreCase(s, "d")) return .deuterium;
+    return null;
+}
 
 fn parseRunArgs(args: []const []const u8) ?RunConfig {
     var config = RunConfig{ .input_path = undefined };
@@ -116,6 +129,30 @@ fn parseRunArgs(args: []const []const u8) ?RunConfig {
             }
             config.water.b_factor_cutoff = val;
             config.water.enabled = true;
+        } else if (std.mem.eql(u8, arg, "--bond-mode")) {
+            i += 1;
+            if (i >= args.len) {
+                std.debug.print("Error: --bond-mode requires 'neutron' or 'xray'\n", .{});
+                std.process.exit(1);
+            }
+            const parsed = parseBondModeValue(args[i]) orelse {
+                std.debug.print("Error: invalid --bond-mode '{s}' (expected 'neutron' or 'xray')\n", .{args[i]});
+                std.process.exit(1);
+            };
+            config.bond_policy.mode = parsed;
+        } else if (std.mem.eql(u8, arg, "--isotope")) {
+            i += 1;
+            if (i >= args.len) {
+                std.debug.print("Error: --isotope requires 'hydrogen'/'h' or 'deuterium'/'d'\n", .{});
+                std.process.exit(1);
+            }
+            const parsed = parseOutputIsotopeValue(args[i]) orelse {
+                std.debug.print("Error: invalid --isotope '{s}' (expected hydrogen|h|deuterium|d)\n", .{args[i]});
+                std.process.exit(1);
+            };
+            config.bond_policy.output_isotope = parsed;
+        } else if (std.mem.eql(u8, arg, "--deuterium")) {
+            config.bond_policy.output_isotope = .deuterium;
         } else if (arg.len > 0 and arg[0] == '-') {
             std.debug.print("Error: unknown option '{s}'\n", .{arg});
             std.process.exit(1);
@@ -178,6 +215,9 @@ fn printRunUsage() void {
         \\    --water-phantom    Allow zero-occupancy phantom water H when orientation is underdetermined
         \\    --water-occ-cutoff N  Skip waters with occupancy below N (default: 0.66)
         \\    --water-b-cutoff N    Skip waters with B-factor above N (default: 40.0)
+        \\    --bond-mode MODE   Bond-length mode: neutron|xray (default: neutron)
+        \\    --isotope NAME     Output isotope for added H: hydrogen|h|deuterium|d (default: hydrogen)
+        \\    --deuterium        Shortcut for --isotope deuterium
         \\
     , .{});
 }
@@ -319,6 +359,30 @@ fn parseBatchArgs(args: []const []const u8) ?zreduce.batch.BatchConfig {
             }
             config.water.b_factor_cutoff = val;
             config.water.enabled = true;
+        } else if (std.mem.eql(u8, arg, "--bond-mode")) {
+            i += 1;
+            if (i >= args.len) {
+                std.debug.print("Error: --bond-mode requires 'neutron' or 'xray'\n", .{});
+                std.process.exit(1);
+            }
+            const parsed = parseBondModeValue(args[i]) orelse {
+                std.debug.print("Error: invalid --bond-mode '{s}' (expected 'neutron' or 'xray')\n", .{args[i]});
+                std.process.exit(1);
+            };
+            config.bond_policy.mode = parsed;
+        } else if (std.mem.eql(u8, arg, "--isotope")) {
+            i += 1;
+            if (i >= args.len) {
+                std.debug.print("Error: --isotope requires 'hydrogen'/'h' or 'deuterium'/'d'\n", .{});
+                std.process.exit(1);
+            }
+            const parsed = parseOutputIsotopeValue(args[i]) orelse {
+                std.debug.print("Error: invalid --isotope '{s}' (expected hydrogen|h|deuterium|d)\n", .{args[i]});
+                std.process.exit(1);
+            };
+            config.bond_policy.output_isotope = parsed;
+        } else if (std.mem.eql(u8, arg, "--deuterium")) {
+            config.bond_policy.output_isotope = .deuterium;
         } else if (arg.len > 0 and arg[0] == '-') {
             std.debug.print("Error: unknown option '{s}'\n", .{arg});
             std.process.exit(1);
@@ -362,6 +426,9 @@ fn printBatchUsage() void {
         \\    --water-phantom    Allow zero-occupancy phantom water H when orientation is underdetermined
         \\    --water-occ-cutoff N  Skip waters with occupancy below N (default: 0.66)
         \\    --water-b-cutoff N    Skip waters with B-factor above N (default: 40.0)
+        \\    --bond-mode MODE   Bond-length mode: neutron|xray (default: neutron)
+        \\    --isotope NAME     Output isotope for added H: hydrogen|h|deuterium|d (default: hydrogen)
+        \\    --deuterium        Shortcut for --isotope deuterium
         \\
     , .{});
 }
@@ -405,6 +472,7 @@ fn runSubcommand(allocator: Allocator, args: []const []const u8) void {
         .no_flip = config.no_flip,
         .validate_flag = config.validate,
         .water = config.water,
+        .bond_policy = config.bond_policy,
         .protonation_path = config.protonation_path,
         .fix_path = config.fix_path,
         .dump_movers_path = config.dump_movers_path,

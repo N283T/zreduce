@@ -16,6 +16,7 @@ pub const ProcessConfig = struct {
     opt_threads: u32 = 0, // 0 = auto; batch sets to 1
     quiet: bool = false, // suppress diagnostic prints (batch mode)
     water: zreduce.place.WaterConfig = .{},
+    bond_policy: zreduce.place.BondPolicy = .{},
     protonation_path: ?[]const u8 = null,
     fix_path: ?[]const u8 = null,
     dump_movers_path: ?[]const u8 = null,
@@ -126,6 +127,7 @@ pub fn processFile(allocator: Allocator, config: ProcessConfig) !ProcessResult {
         if (inline_dict) |*d| d else null,
         .{
             .water = config.water,
+            .bond_policy = config.bond_policy,
             .protonation = if (protonation_overrides) |*ov| ov else null,
         },
     );
@@ -162,6 +164,7 @@ pub fn processFile(allocator: Allocator, config: ProcessConfig) !ProcessResult {
             config.dict,
             if (inline_dict) |*d| d else null,
             if (protonation_overrides) |*ov| ov else null,
+            config.bond_policy.mode,
         );
         movers = gen_result.movers;
         movers_owned = true;
@@ -226,12 +229,12 @@ pub fn processFile(allocator: Allocator, config: ProcessConfig) !ProcessResult {
         const file = try std.fs.cwd().createFile(out_path, .{});
         defer file.close();
         var fw = file.writer(&out_buf);
-        try zreduce.writer.mmcif_writer.writeWithDocument(&fw.interface, &mdl, &doc);
+        try zreduce.writer.mmcif_writer.writeWithDocumentWithPolicy(&fw.interface, &mdl, &doc, config.bond_policy);
         try fw.interface.flush();
     } else {
         const stdout = std.fs.File.stdout();
         var sw = stdout.writer(&out_buf);
-        try zreduce.writer.mmcif_writer.writeWithDocument(&sw.interface, &mdl, &doc);
+        try zreduce.writer.mmcif_writer.writeWithDocumentWithPolicy(&sw.interface, &mdl, &doc, config.bond_policy);
         try sw.interface.flush();
     }
 
@@ -246,6 +249,7 @@ pub fn processFile(allocator: Allocator, config: ProcessConfig) !ProcessResult {
             config.json_version,
             config.input_path,
             countAddedHydrogens(&mdl),
+            config.bond_policy,
             movers,
             mdl.residues.items,
             mdl.chains.items,

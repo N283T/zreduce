@@ -140,6 +140,7 @@ test "end-to-end: JSON log output" {
         "0.1.0",
         "tiny.cif",
         n_added,
+        .{},
         &.{}, // no movers
         model.residues.items,
         model.chains.items,
@@ -202,7 +203,7 @@ test "end-to-end: HIS sentinel cleanup matches output and JSON count" {
     place.applyChemistry(&model);
     _ = try place.addHydrogens(&model, null, null);
 
-    const gen_result = try optimize.generateMovers(testing.allocator, &model, false, null, null, null);
+    const gen_result = try optimize.generateMovers(testing.allocator, &model, false, null, null, null, .neutron);
     const movers = gen_result.movers;
     defer {
         for (0..movers.len) |i| @constCast(&movers[i]).deinit();
@@ -239,6 +240,7 @@ test "end-to-end: HIS sentinel cleanup matches output and JSON count" {
         "0.1.0",
         "his.cif",
         final_h_count,
+        .{},
         movers,
         model.residues.items,
         model.chains.items,

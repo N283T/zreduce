@@ -11,15 +11,15 @@ const Mover = mover_mod.Mover;
 const Orientation = mover_mod.Orientation;
 const element = @import("../element.zig");
 const AtomFlags = element.AtomFlags;
+const bond_policy = @import("../place/bond_policy.zig");
 
 /// Compute planar NH2 hydrogen positions given:
 ///   n_pos: the nitrogen position
 ///   c_pos: the carbon bonded to N (e.g. CG or CD)
 ///   o_pos: the oxygen bonded to C (for reference plane)
 /// Returns [2]Vec3(f32): the two H positions on the amide nitrogen.
-fn computeAmideNH2(n_pos: Vec3(f32), c_pos: Vec3(f32), o_pos: Vec3(f32)) [2]Vec3(f32) {
-    // N-H bond length for sidechain amide NH2 (CCD mean: 1.000 Å)
-    const bond_len: f32 = 1.00;
+fn computeAmideNH2(n_pos: Vec3(f32), c_pos: Vec3(f32), o_pos: Vec3(f32), mode: bond_policy.BondLengthMode) [2]Vec3(f32) {
+    const bond_len = bond_policy.adjustedBondLength(mode, 1.00, .N, .Hpol);
     const half_angle_deg: f32 = 60.0; // half of 120°
 
     // Vector from C to N
@@ -53,6 +53,7 @@ pub fn createAmideFlipper(
     h2_idx: u32,
     c_idx: u32,
     residue_idx: u32,
+    mode: bond_policy.BondLengthMode,
 ) !Mover {
     const o_pos = atoms[o_idx].pos;
     const n_pos = atoms[n_idx].pos;
@@ -71,7 +72,7 @@ pub fn createAmideFlipper(
     // After swap: new N is at old O position, new O is at old N position
     const new_n_pos = o_pos; // N moves to where O was
     const new_o_pos = n_pos; // O moves to where N was
-    const new_hs = computeAmideNH2(new_n_pos, c_pos, new_o_pos);
+    const new_hs = computeAmideNH2(new_n_pos, c_pos, new_o_pos, mode);
 
     const pos1 = try allocator.alloc(Vec3(f32), 4);
     pos1[0] = new_o_pos;
@@ -103,9 +104,8 @@ const ABSENT_H_POS = Mover.ABSENT_H_POS;
 /// Compute position of a ring H (HD1 on ND1 or HE2 on NE2) given:
 ///   n_pos: the nitrogen bearing the H
 ///   bonded1, bonded2: the two atoms bonded to N in the ring
-fn computeRingNH(n_pos: Vec3(f32), bonded1: Vec3(f32), bonded2: Vec3(f32)) Vec3(f32) {
-    // N-H bond length for HIS imidazole ring (CCD: 1.016 Å)
-    const bond_len: f32 = 1.02;
+fn computeRingNH(n_pos: Vec3(f32), bonded1: Vec3(f32), bonded2: Vec3(f32), mode: bond_policy.BondLengthMode) Vec3(f32) {
+    const bond_len = bond_policy.adjustedBondLength(mode, 1.02, .N, .Hpol);
     // Place H in the plane opposite to the bisector of the two ring bonds
     const v1 = bonded1.sub(n_pos).normalize();
     const v2 = bonded2.sub(n_pos).normalize();
@@ -130,6 +130,7 @@ pub fn createHisFlipper(
     hd1_idx: ?u32,
     he2_idx: ?u32,
     residue_idx: u32,
+    mode: bond_policy.BondLengthMode,
 ) !Mover {
     // --- Original ring positions ---
     const nd1 = atoms[nd1_idx].pos;
@@ -143,9 +144,9 @@ pub fn createHisFlipper(
 
     // Compute H positions based on ring geometry (for orientations that need them)
     // HD1 sits on ND1, bonded to CE1 and CG (we don't have CG here; use CE1 and CD2 as the two ring neighbours of ND1)
-    const hd1_computed = computeRingNH(nd1, ce1, cd2);
+    const hd1_computed = computeRingNH(nd1, ce1, cd2, mode);
     // HE2 sits on NE2, bonded to CE1 and CD2
-    const he2_computed = computeRingNH(ne2, ce1, cd2);
+    const he2_computed = computeRingNH(ne2, ce1, cd2, mode);
 
     // --- Flipped ring positions ---
     // Swap ND1<->CD2 and CE1<->NE2
@@ -155,8 +156,8 @@ pub fn createHisFlipper(
     const ne2_f = ce1; // NE2 goes to CE1 position
 
     // Flipped H positions
-    const hd1_f_computed = computeRingNH(nd1_f, ce1_f, cd2_f);
-    const he2_f_computed = computeRingNH(ne2_f, ce1_f, cd2_f);
+    const hd1_f_computed = computeRingNH(nd1_f, ce1_f, cd2_f, mode);
+    const he2_f_computed = computeRingNH(ne2_f, ce1_f, cd2_f, mode);
 
     // --- Build 4 orientations ---
     // At neutral pH, HIS is predominantly neutral (HID or HIE, pKa ~6.0).
@@ -272,7 +273,7 @@ test "amide flipper has 2 orientations" {
         .{ .pos = .{ .x = -1.0, .y = -1.0, .z = 0.0 } }, // 5: CB
     };
 
-    var mover = try createAmideFlipper(allocator, &atoms, 0, 1, 2, 3, 4, 7);
+    var mover = try createAmideFlipper(allocator, &atoms, 0, 1, 2, 3, 4, 7, .neutron);
     defer mover.deinit();
 
     try testing.expectEqual(@as(usize, 2), mover.orientations.len);
@@ -292,7 +293,7 @@ test "amide flipper swaps O and N positions" {
         .{ .pos = .{ .x = -1.0, .y = -1.0, .z = 0.0 } }, // 5: CB
     };
 
-    var mover = try createAmideFlipper(allocator, &atoms, 0, 1, 2, 3, 4, 0);
+    var mover = try createAmideFlipper(allocator, &atoms, 0, 1, 2, 3, 4, 0, .neutron);
     defer mover.deinit();
 
     const orient0 = mover.orientations[0];
@@ -322,7 +323,7 @@ test "his flipper has 6 orientations" {
         .{ .pos = .{ .x = -0.9, .y = -2.0, .z = 0.0 } }, // 5: HE2
     };
 
-    var mover = try createHisFlipper(allocator, &atoms, 0, 1, 2, 3, 4, 5, 3);
+    var mover = try createHisFlipper(allocator, &atoms, 0, 1, 2, 3, 4, 5, 3, .neutron);
     defer mover.deinit();
 
     try testing.expectEqual(@as(usize, 4), mover.orientations.len);
@@ -340,7 +341,7 @@ test "his flipper penalties match spec" {
         .{ .pos = .{ .x = -0.9, .y = -2.0, .z = 0.0 } }, // 5: HE2
     };
 
-    var mover = try createHisFlipper(allocator, &atoms, 0, 1, 2, 3, 4, 5, 3);
+    var mover = try createHisFlipper(allocator, &atoms, 0, 1, 2, 3, 4, 5, 3, .neutron);
     defer mover.deinit();
 
     const expected_penalties = [4]f32{ 0.00, 0.00, 0.50, 0.50 };
@@ -361,7 +362,7 @@ test "his flipper orientations have chemistry flags" {
         .{ .pos = .{ .x = -0.9, .y = -2.0, .z = 0.0 } }, // 5: HE2
     };
 
-    var mover = try createHisFlipper(allocator, &atoms, 0, 1, 2, 3, 4, 5, 3);
+    var mover = try createHisFlipper(allocator, &atoms, 0, 1, 2, 3, 4, 5, 3, .neutron);
     defer mover.deinit();
 
     // All 4 orientations should have flags

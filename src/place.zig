@@ -1,6 +1,7 @@
 //! Place module: hydrogen placement geometry and utilities.
 
 pub const chemistry = @import("place/chemistry.zig");
+pub const bond_policy = @import("place/bond_policy.zig");
 pub const geometry = @import("place/geometry.zig");
 pub const standard = @import("place/standard.zig");
 pub const nucleotide = @import("place/nucleotide.zig");
@@ -18,6 +19,9 @@ pub const applyChemistryWithConfig = placer.applyChemistryWithConfig;
 pub const PlacementResult = placer.PlacementResult;
 pub const PlacementConfig = placer.PlacementConfig;
 pub const WaterConfig = placer.WaterConfig;
+pub const BondLengthMode = bond_policy.BondLengthMode;
+pub const OutputIsotope = bond_policy.OutputIsotope;
+pub const BondPolicy = bond_policy.BondPolicy;
 pub const ProtonationOverrides = protonation.ProtonationOverrides;
 pub const derivePlans = ccd_derive.derivePlans;
 

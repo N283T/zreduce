@@ -317,7 +317,7 @@ test "apply fix locks his mover state" {
 
     place.applyChemistry(&mdl);
     _ = try place.addHydrogens(&mdl, null, null);
-    const gen = try optimize.generateMovers(testing.allocator, &mdl, false, null, null, null);
+    const gen = try optimize.generateMovers(testing.allocator, &mdl, false, null, null, null, .neutron);
     const movers = gen.movers;
     defer {
         for (movers) |*m| m.deinit();
@@ -344,7 +344,7 @@ test "apply fix locks amide and rotator movers" {
 
         place.applyChemistry(&mdl);
         _ = try place.addHydrogens(&mdl, null, null);
-        const gen = try optimize.generateMovers(testing.allocator, &mdl, false, null, null, null);
+        const gen = try optimize.generateMovers(testing.allocator, &mdl, false, null, null, null, .neutron);
         const movers = gen.movers;
         defer {
             for (movers) |*m| m.deinit();
@@ -369,7 +369,7 @@ test "apply fix locks amide and rotator movers" {
 
         place.applyChemistry(&mdl);
         _ = try place.addHydrogens(&mdl, null, null);
-        const gen = try optimize.generateMovers(testing.allocator, &mdl, false, null, null, null);
+        const gen = try optimize.generateMovers(testing.allocator, &mdl, false, null, null, null, .neutron);
         const movers = gen.movers;
         defer {
             for (movers) |*m| m.deinit();
@@ -395,7 +395,7 @@ test "dump movers lists symbolic states" {
 
     place.applyChemistry(&mdl);
     _ = try place.addHydrogens(&mdl, null, null);
-    const gen = try optimize.generateMovers(testing.allocator, &mdl, false, null, null, null);
+    const gen = try optimize.generateMovers(testing.allocator, &mdl, false, null, null, null, .neutron);
     const movers = gen.movers;
     defer {
         for (movers) |*m| m.deinit();
@@ -416,7 +416,7 @@ test "applyFixes rejects out-of-range orientation" {
 
     place.applyChemistry(&mdl);
     _ = try place.addHydrogens(&mdl, null, null);
-    const gen = try optimize.generateMovers(testing.allocator, &mdl, false, null, null, null);
+    const gen = try optimize.generateMovers(testing.allocator, &mdl, false, null, null, null, .neutron);
     const movers = gen.movers;
     defer {
         for (movers) |*m| m.deinit();
@@ -439,7 +439,7 @@ test "fixed mover preserved through optimize()" {
 
     place.applyChemistry(&mdl);
     _ = try place.addHydrogens(&mdl, null, null);
-    const gen = try optimize.generateMovers(testing.allocator, &mdl, false, null, null, null);
+    const gen = try optimize.generateMovers(testing.allocator, &mdl, false, null, null, null, .neutron);
     const movers = gen.movers;
     defer {
         for (movers) |*m| m.deinit();

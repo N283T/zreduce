@@ -68,6 +68,11 @@ const Item = cif_types.Item;
 /// The _atom_site loop is replaced with the model's atoms (including added H).
 /// If doc is null, writes atom_site only (atom-site-only mode).
 pub fn writeWithDocument(writer: anytype, model: *const Model, doc: ?*const Document) !void {
+    return writeWithDocumentWithPolicy(writer, model, doc, .{});
+}
+
+/// Write a model as mmCIF with explicit bond/output policy.
+pub fn writeWithDocumentWithPolicy(writer: anytype, model: *const Model, doc: ?*const Document, bond_policy: place.BondPolicy) !void {
     if (doc) |d| {
         if (d.blocks.items.len > 0) {
             const block = &d.blocks.items[0];
@@ -83,7 +88,7 @@ pub fn writeWithDocument(writer: anytype, model: *const Model, doc: ?*const Docu
                     .loop => |l| {
                         if (isAtomSiteLoop(&l)) {
                             try writer.writeAll("#\n");
-                            try writeAtomSitePreserving(writer, model, &l);
+                            try writeAtomSitePreserving(writer, model, &l, bond_policy.output_isotope);
                             try writer.writeAll("#\n");
                             atom_site_written = true;
                         } else {
@@ -96,7 +101,7 @@ pub fn writeWithDocument(writer: anytype, model: *const Model, doc: ?*const Docu
             // If no atom_site loop was found in original, append it
             if (!atom_site_written) {
                 try writer.writeAll("#\n");
-                try writeAtomSite(writer, model);
+                try writeAtomSite(writer, model, bond_policy.output_isotope);
                 try writer.writeAll("#\n");
             }
             return;
@@ -105,14 +110,19 @@ pub fn writeWithDocument(writer: anytype, model: *const Model, doc: ?*const Docu
 
     // Fallback: atom-site-only mode
     try writer.writeAll("data_ZREDUCE\n#\n");
-    try writeAtomSite(writer, model);
+    try writeAtomSite(writer, model, bond_policy.output_isotope);
     try writer.writeAll("#\n");
 }
 
 /// Write atom-site-only output (no original document preservation).
 pub fn write(writer: anytype, model: *const Model, block_name: []const u8) !void {
+    return writeWithPolicy(writer, model, block_name, .{});
+}
+
+/// Write atom-site-only output with explicit bond/output policy.
+pub fn writeWithPolicy(writer: anytype, model: *const Model, block_name: []const u8, bond_policy: place.BondPolicy) !void {
     try writer.print("data_{s}\n#\n", .{block_name});
-    try writeAtomSite(writer, model);
+    try writeAtomSite(writer, model, bond_policy.output_isotope);
     try writer.writeAll("#\n");
 }
 
@@ -126,7 +136,7 @@ fn isAtomSiteLoop(loop: *const Loop) bool {
 /// Write _atom_site loop preserving the original column structure.
 /// Heavy atom rows are written from the original loop data.
 /// Added H atom rows fill known columns and use '.' for the rest.
-fn writeAtomSitePreserving(writer: anytype, model: *const Model, orig_loop: *const Loop) !void {
+fn writeAtomSitePreserving(writer: anytype, model: *const Model, orig_loop: *const Loop, output_isotope: place.OutputIsotope) !void {
     const w = orig_loop.width();
     if (w == 0) return;
 
@@ -228,7 +238,7 @@ fn writeAtomSitePreserving(writer: anytype, model: *const Model, orig_loop: *con
                 } else if (cm.id != null and col == cm.id.?) {
                     try writer.print("{d}", .{serial});
                 } else if (cm.type_symbol != null and col == cm.type_symbol.?) {
-                    try writer.writeAll(elementSymbol(atom.element_type));
+                    try writer.writeAll(atomTypeSymbol(atom, output_isotope));
                 } else if (cm.label_atom_id != null and col == cm.label_atom_id.?) {
                     try writeAtomName(writer, atom.nameSlice());
                 } else if (cm.label_alt_id != null and col == cm.label_alt_id.?) {
@@ -449,7 +459,7 @@ fn writePairValue(writer: anytype, tag: []const u8, val: []const u8) !void {
 }
 
 /// Write the _atom_site loop with all atoms.
-fn writeAtomSite(writer: anytype, model: *const Model) !void {
+fn writeAtomSite(writer: anytype, model: *const Model, output_isotope: place.OutputIsotope) !void {
     try writer.writeAll(
         \\loop_
         \\_atom_site.group_PDB
@@ -475,7 +485,7 @@ fn writeAtomSite(writer: anytype, model: *const Model) !void {
     for (model.residues.items, 0..) |res, res_idx| {
         // First pass: original heavy atoms in this residue's range
         for (model.atoms.items[res.atom_start..res.atom_end]) |atom| {
-            try writeAtomRow(writer, model, atom, res, serial);
+            try writeAtomRow(writer, model, atom, res, serial, output_isotope);
             serial += 1;
         }
         // Second pass: added H atoms belonging to this residue (appended at end)
@@ -484,19 +494,19 @@ fn writeAtomSite(writer: anytype, model: *const Model) !void {
             if (atom.residue_idx != res_idx) continue;
             // Skip absent H atoms (flipper sentinel position)
             if (mover_mod.isAbsentH(atom)) continue;
-            try writeAtomRow(writer, model, atom, res, serial);
+            try writeAtomRow(writer, model, atom, res, serial, output_isotope);
             serial += 1;
         }
     }
 }
 
-fn writeAtomRow(writer: anytype, model: *const Model, atom: Atom, res: Residue, serial: u32) !void {
+fn writeAtomRow(writer: anytype, model: *const Model, atom: Atom, res: Residue, serial: u32, output_isotope: place.OutputIsotope) !void {
     const chain = model.chains.items[res.chain_idx];
     const group = switch (res.entity_type) {
         .water, .non_polymer, .branched => "HETATM",
         .polymer, .unknown => "ATOM",
     };
-    const elem_str = elementSymbol(atom.element_type);
+    const elem_str = atomTypeSymbol(atom, output_isotope);
     try writer.print(
         "{s} {d} {s} {s} {s} {s} {d} ",
         .{
@@ -521,6 +531,11 @@ fn writeAtomRow(writer: anytype, model: *const Model, atom: Atom, res: Residue, 
     try writer.writeByte(' ');
     try writeAltId(writer, atom.altloc);
     try writer.writeByte('\n');
+}
+
+fn atomTypeSymbol(atom: Atom, output_isotope: place.OutputIsotope) []const u8 {
+    if (output_isotope == .deuterium and atom.is_added and atom.is_hydrogen) return "D";
+    return elementSymbol(atom.element_type);
 }
 
 fn writeAltId(writer: anytype, altloc: u8) !void {
@@ -759,6 +774,38 @@ test "writeWithDocument preserves added hydrogen altloc" {
 
     try testing.expectEqual(@as(u32, 1), ha_a_count);
     try testing.expectEqual(@as(u32, 1), ha_b_count);
+}
+
+test "writeWithPolicy outputs D for added hydrogens when isotope is deuterium" {
+    const source = @embedFile("../test_data/tiny.cif");
+
+    var mdl = try mmcif.parseModel(testing.allocator, source);
+    defer mdl.deinit();
+    _ = try place.addHydrogens(&mdl, null, null);
+
+    var out: std.ArrayListUnmanaged(u8) = .empty;
+    defer out.deinit(testing.allocator);
+    try writeWithPolicy(out.writer(testing.allocator), &mdl, "TEST", .{
+        .output_isotope = .deuterium,
+    });
+
+    var doc = try cif.readString(testing.allocator, out.items);
+    defer doc.deinit();
+
+    const block = &doc.blocks.items[0];
+    const atom_site = block.findLoop("_atom_site.label_atom_id").?;
+    const atom_name_col = atom_site.findTag("_atom_site.label_atom_id").?;
+    const type_symbol_col = atom_site.findTag("_atom_site.type_symbol").?;
+
+    var found_added_h: bool = false;
+    for (0..atom_site.length()) |row| {
+        const atom_name = atom_site.val(row, atom_name_col) orelse continue;
+        if (!std.mem.startsWith(u8, atom_name, "H")) continue;
+        found_added_h = true;
+        const type_symbol = atom_site.val(row, type_symbol_col) orelse continue;
+        try testing.expectEqualStrings("D", type_symbol);
+    }
+    try testing.expect(found_added_h);
 }
 
 test "elementSymbol returns correct symbols" {

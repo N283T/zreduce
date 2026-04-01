@@ -19,6 +19,7 @@ const standard = @import("../place/standard.zig");
 const nucleotide = @import("../place/nucleotide.zig");
 const modified = @import("../place/modified.zig");
 const protonation = @import("../place/protonation.zig");
+const bond_policy = @import("../place/bond_policy.zig");
 const ccd_mod = @import("../ccd.zig");
 const ComponentDict = ccd_mod.ComponentDict;
 
@@ -139,6 +140,7 @@ pub fn generateMovers(
     ccd_dict: ?*const ComponentDict,
     inline_dict: ?*const ComponentDict,
     overrides: ?*const protonation.ProtonationOverrides,
+    mode: bond_policy.BondLengthMode,
 ) !MoverGenResult {
     var movers: std.ArrayListUnmanaged(Mover) = .empty;
     errdefer {
@@ -373,6 +375,7 @@ pub fn generateMovers(
                     h_indices[1],
                     c_at_idx,
                     residue_idx,
+                    mode,
                 );
                 try movers.append(allocator, m);
             },
@@ -423,6 +426,7 @@ pub fn generateMovers(
                     hd1_idx,
                     he2_idx,
                     residue_idx,
+                    mode,
                 );
                 try movers.append(allocator, m);
             },
@@ -509,7 +513,7 @@ test "generateMovers creates methyl rotator for ALA" {
     placer.applyChemistry(&mdl);
     _ = try placer.addHydrogens(&mdl, null, null);
 
-    const gen_result = try generateMovers(testing.allocator, &mdl, false, null, null, null);
+    const gen_result = try generateMovers(testing.allocator, &mdl, false, null, null, null, .neutron);
     const movers = gen_result.movers;
     defer {
         for (0..movers.len) |i| @constCast(&movers[i]).deinit();
@@ -532,7 +536,7 @@ test "generateMovers creates separate methyl rotators per altloc conformer" {
     placer.applyChemistry(&mdl);
     _ = try placer.addHydrogens(&mdl, null, null);
 
-    const gen_result = try generateMovers(testing.allocator, &mdl, false, null, null, null);
+    const gen_result = try generateMovers(testing.allocator, &mdl, false, null, null, null, .neutron);
     const movers = gen_result.movers;
     defer {
         for (0..movers.len) |i| @constCast(&movers[i]).deinit();
@@ -563,7 +567,7 @@ test "generateMovers total count for ALA" {
     placer.applyChemistry(&mdl);
     _ = try placer.addHydrogens(&mdl, null, null);
 
-    const gen_result = try generateMovers(testing.allocator, &mdl, false, null, null, null);
+    const gen_result = try generateMovers(testing.allocator, &mdl, false, null, null, null, .neutron);
     const movers = gen_result.movers;
     defer {
         for (0..movers.len) |i| @constCast(&movers[i]).deinit();
@@ -586,7 +590,7 @@ test "optimizer pipeline runs without error on ALA" {
     placer.applyChemistry(&mdl);
     _ = try placer.addHydrogens(&mdl, null, null);
 
-    const gen_result = try generateMovers(testing.allocator, &mdl, false, null, null, null);
+    const gen_result = try generateMovers(testing.allocator, &mdl, false, null, null, null, .neutron);
     const movers = gen_result.movers;
     defer {
         for (0..movers.len) |i| @constCast(&movers[i]).deinit();
@@ -608,7 +612,7 @@ test "methyl rotator controls 3 atoms" {
     placer.applyChemistry(&mdl);
     _ = try placer.addHydrogens(&mdl, null, null);
 
-    const gen_result = try generateMovers(testing.allocator, &mdl, false, null, null, null);
+    const gen_result = try generateMovers(testing.allocator, &mdl, false, null, null, null, .neutron);
     const movers = gen_result.movers;
     defer {
         for (0..movers.len) |i| @constCast(&movers[i]).deinit();
@@ -631,7 +635,7 @@ test "generateMovers creates amide flipper for ASN" {
     placer.applyChemistry(&mdl);
     _ = try placer.addHydrogens(&mdl, null, null);
 
-    const gen_result = try generateMovers(testing.allocator, &mdl, false, null, null, null);
+    const gen_result = try generateMovers(testing.allocator, &mdl, false, null, null, null, .neutron);
     const movers = gen_result.movers;
     defer {
         for (0..movers.len) |i| @constCast(&movers[i]).deinit();
@@ -653,7 +657,7 @@ test "no_flip suppresses flip movers" {
     placer.applyChemistry(&mdl);
     _ = try placer.addHydrogens(&mdl, null, null);
 
-    const gen_result = try generateMovers(testing.allocator, &mdl, true, null, null, null);
+    const gen_result = try generateMovers(testing.allocator, &mdl, true, null, null, null, .neutron);
     const movers = gen_result.movers;
     defer {
         for (0..movers.len) |i| @constCast(&movers[i]).deinit();
@@ -674,7 +678,7 @@ test "generateMovers creates His flipper" {
     placer.applyChemistry(&mdl);
     _ = try placer.addHydrogens(&mdl, null, null);
 
-    const gen_result = try generateMovers(testing.allocator, &mdl, false, null, null, null);
+    const gen_result = try generateMovers(testing.allocator, &mdl, false, null, null, null, .neutron);
     const movers = gen_result.movers;
     defer {
         for (0..movers.len) |i| @constCast(&movers[i]).deinit();
@@ -705,7 +709,7 @@ test "generateMovers skips fixed His override" {
     placer.applyChemistryWithConfig(&mdl, .{ .protonation = &overrides });
     _ = try placer.addHydrogensWithConfig(&mdl, null, null, .{ .protonation = &overrides });
 
-    const gen_result = try generateMovers(testing.allocator, &mdl, false, null, null, &overrides);
+    const gen_result = try generateMovers(testing.allocator, &mdl, false, null, null, &overrides, .neutron);
     const movers = gen_result.movers;
     defer {
         for (0..movers.len) |i| @constCast(&movers[i]).deinit();

@@ -4,6 +4,7 @@ const std = @import("std");
 const testing = std.testing;
 const model_mod = @import("../model.zig");
 const mover_mod = @import("../optimize/mover.zig");
+const bond_policy_mod = @import("../place/bond_policy.zig");
 
 /// Write JSON log of optimization results.
 pub fn writeLog(
@@ -11,6 +12,7 @@ pub fn writeLog(
     version: []const u8,
     input_file: []const u8,
     n_hydrogens: u32,
+    bond_policy: bond_policy_mod.BondPolicy,
     movers: []const mover_mod.Mover,
     residues: []const model_mod.Residue,
     chains: []const model_mod.Chain,
@@ -23,6 +25,8 @@ pub fn writeLog(
     try writeJsonString(out_writer, input_file);
     try out_writer.writeAll("\",\n");
     try out_writer.print("  \"hydrogens_added\": {d},\n", .{n_hydrogens});
+    try out_writer.print("  \"bond_mode\": \"{s}\",\n", .{bondModeStr(bond_policy.mode)});
+    try out_writer.print("  \"output_isotope\": \"{s}\",\n", .{outputIsotopeStr(bond_policy.output_isotope)});
     try out_writer.writeAll("  \"movers\": [\n");
 
     for (movers, 0..) |m, i| {
@@ -76,13 +80,29 @@ fn moverKindStr(kind: mover_mod.MoverKind) []const u8 {
     };
 }
 
+fn bondModeStr(mode: bond_policy_mod.BondLengthMode) []const u8 {
+    return switch (mode) {
+        .xray => "xray",
+        .neutron => "neutron",
+    };
+}
+
+fn outputIsotopeStr(isotope: bond_policy_mod.OutputIsotope) []const u8 {
+    return switch (isotope) {
+        .hydrogen => "hydrogen",
+        .deuterium => "deuterium",
+    };
+}
+
 test "write JSON log" {
     var buf: std.ArrayListUnmanaged(u8) = .empty;
     defer buf.deinit(testing.allocator);
 
-    try writeLog(buf.writer(testing.allocator), "0.1.0", "test.cif", 42, &.{}, &.{}, &.{});
+    try writeLog(buf.writer(testing.allocator), "0.1.0", "test.cif", 42, .{}, &.{}, &.{}, &.{});
 
     const output = buf.items;
     try testing.expect(std.mem.indexOf(u8, output, "\"version\": \"0.1.0\"") != null);
     try testing.expect(std.mem.indexOf(u8, output, "\"hydrogens_added\": 42") != null);
+    try testing.expect(std.mem.indexOf(u8, output, "\"bond_mode\": \"neutron\"") != null);
+    try testing.expect(std.mem.indexOf(u8, output, "\"output_isotope\": \"hydrogen\"") != null);
 }
