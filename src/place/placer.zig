@@ -36,10 +36,11 @@ pub const PlacementResult = struct {
     n_skipped_existing: u32 = 0,
     n_skipped_inter_residue: u32 = 0,
     n_skipped_missing_ref: u32 = 0,
+    n_skipped_quality_filter: u32 = 0,
     n_residues: u32 = 0,
 
     pub fn totalSkipped(self: PlacementResult) u32 {
-        return self.n_skipped_existing + self.n_skipped_inter_residue + self.n_skipped_missing_ref;
+        return self.n_skipped_existing + self.n_skipped_inter_residue + self.n_skipped_missing_ref + self.n_skipped_quality_filter;
     }
 
     fn tally(self: *PlacementResult, r: PlaceResult) void {
@@ -119,6 +120,7 @@ pub fn addHydrogensWithConfig(
             result.n_skipped_existing += water_result.n_skipped_existing;
             result.n_skipped_inter_residue += water_result.n_skipped_inter_residue;
             result.n_skipped_missing_ref += water_result.n_skipped_missing_ref;
+            result.n_skipped_quality_filter += water_result.n_skipped_quality_filter;
             result.n_residues += 1;
             continue;
         }
@@ -1006,7 +1008,7 @@ fn placeWaterHydrogens(mdl: *Model, res: Residue, res_idx: u32, config: WaterCon
             }
         }
         if (oxygen.occupancy < config.occupancy_cutoff or oxygen.b_factor > config.b_factor_cutoff) {
-            result.n_skipped_missing_ref += 1;
+            result.n_skipped_quality_filter += 1;
             continue;
         }
         if (existsInResidue(mdl, res, h1_name, meta.altloc) or existsInResidue(mdl, res, h2_name, meta.altloc)) {
@@ -1827,16 +1829,27 @@ test "water placement adds two hydrogens when enabled" {
 
     try testing.expectEqual(@as(u32, 2), result.n_placed);
 
+    const oxygen_pos = findAtomPos(&mdl, mdl.residues.items[1], padName("O"), ' ') orelse unreachable;
+    var h_positions: [2]Vec3f32 = undefined;
     var h_count: u32 = 0;
     for (mdl.atoms.items) |atom| {
         if (atom.is_added and atom.residue_idx == 1) {
-            h_count += 1;
             try testing.expect(atom.is_hydrogen);
             try testing.expectApproxEqAbs(@as(f32, 1.0), atom.occupancy, 1e-6);
             try testing.expectApproxEqAbs(@as(f32, 12.0), atom.b_factor, 1e-6);
+            if (h_count < 2) h_positions[h_count] = atom.pos;
+            h_count += 1;
         }
     }
     try testing.expectEqual(@as(u32, 2), h_count);
+
+    // Verify O-H bond length (~0.97 A)
+    try testing.expectApproxEqAbs(@as(f32, 0.97), oxygen_pos.distance(h_positions[0]), 0.02);
+    try testing.expectApproxEqAbs(@as(f32, 0.97), oxygen_pos.distance(h_positions[1]), 0.02);
+
+    // Verify H-O-H angle (~104.5 degrees)
+    const hoh_angle = math_mod.angle(f32, h_positions[0], oxygen_pos, h_positions[1]);
+    try testing.expectApproxEqAbs(@as(f32, 104.5), hoh_angle, 1.0);
 }
 
 test "water placement respects occupancy cutoff" {
@@ -1881,7 +1894,7 @@ test "water placement respects occupancy cutoff" {
     });
 
     try testing.expectEqual(@as(u32, 0), result.n_placed);
-    try testing.expect(result.n_skipped_missing_ref > 0);
+    try testing.expectEqual(@as(u32, 1), result.n_skipped_quality_filter);
 }
 
 test "water placement skips coordinated water oxygen" {
@@ -2015,6 +2028,94 @@ test "water placement skips water near metal by distance" {
 
     try testing.expectEqual(@as(u32, 0), result.n_placed);
     try testing.expect(result.n_skipped_inter_residue > 0);
+}
+
+test "water placement respects B-factor cutoff" {
+    const water_cif =
+        \\data_WATER_BFAC
+        \\#
+        \\loop_
+        \\_entity.id
+        \\_entity.type
+        \\1 polymer
+        \\2 water
+        \\#
+        \\loop_
+        \\_atom_site.group_PDB
+        \\_atom_site.id
+        \\_atom_site.type_symbol
+        \\_atom_site.label_atom_id
+        \\_atom_site.label_comp_id
+        \\_atom_site.label_asym_id
+        \\_atom_site.label_entity_id
+        \\_atom_site.label_seq_id
+        \\_atom_site.Cartn_x
+        \\_atom_site.Cartn_y
+        \\_atom_site.Cartn_z
+        \\_atom_site.occupancy
+        \\_atom_site.B_iso_or_equiv
+        \\_atom_site.label_alt_id
+        \\ATOM   1  N  N   GLY A 1 1  0.000 0.000 0.000 1.00 10.0 .
+        \\ATOM   2  O  O   GLY A 1 1  1.200 1.100 0.000 1.00 10.0 .
+        \\ATOM   3  O  O   HOH B 2 1  2.700 0.200 0.000 1.00 50.0 .
+        \\#
+    ;
+
+    var mdl = try mmcif.parseModel(testing.allocator, water_cif);
+    defer mdl.deinit();
+
+    const result = try addHydrogensWithConfig(&mdl, null, null, .{
+        .water = .{
+            .enabled = true,
+            .b_factor_cutoff = 40.0,
+        },
+    });
+
+    try testing.expectEqual(@as(u32, 0), result.n_placed);
+    try testing.expectEqual(@as(u32, 1), result.n_skipped_quality_filter);
+}
+
+test "water placement skips water with existing H atoms" {
+    const water_cif =
+        \\data_WATER_EXIST_H
+        \\#
+        \\loop_
+        \\_entity.id
+        \\_entity.type
+        \\1 polymer
+        \\2 water
+        \\#
+        \\loop_
+        \\_atom_site.group_PDB
+        \\_atom_site.id
+        \\_atom_site.type_symbol
+        \\_atom_site.label_atom_id
+        \\_atom_site.label_comp_id
+        \\_atom_site.label_asym_id
+        \\_atom_site.label_entity_id
+        \\_atom_site.label_seq_id
+        \\_atom_site.Cartn_x
+        \\_atom_site.Cartn_y
+        \\_atom_site.Cartn_z
+        \\_atom_site.occupancy
+        \\_atom_site.B_iso_or_equiv
+        \\_atom_site.label_alt_id
+        \\ATOM   1  N  N   GLY A 1 1  0.000 0.000 0.000 1.00 10.0 .
+        \\ATOM   2  O  O   GLY A 1 1  1.200 1.100 0.000 1.00 10.0 .
+        \\ATOM   3  O  O   HOH B 2 1  2.700 0.200 0.000 1.00 12.0 .
+        \\ATOM   4  H  H1  HOH B 2 1  3.100 0.800 0.500 1.00 12.0 .
+        \\#
+    ;
+
+    var mdl = try mmcif.parseModel(testing.allocator, water_cif);
+    defer mdl.deinit();
+
+    const result = try addHydrogensWithConfig(&mdl, null, null, .{
+        .water = .{ .enabled = true },
+    });
+
+    try testing.expectEqual(@as(u32, 0), result.n_placed);
+    try testing.expectEqual(@as(u32, 1), result.n_skipped_existing);
 }
 
 test "backbone NH placed in peptide plane using C(i-1)" {

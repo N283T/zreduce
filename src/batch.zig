@@ -20,10 +20,7 @@ pub const BatchConfig = struct {
     no_flip: bool = false,
     quiet: bool = false,
     json_version: []const u8 = "", // passed from main
-    water_enabled: bool = false,
-    water_phantom: bool = false,
-    water_occupancy_cutoff: f32 = 0.66,
-    water_b_factor_cutoff: f32 = 40.0,
+    water: zreduce.place.WaterConfig = .{},
 };
 
 // ---------------------------------------------------------------------------
@@ -146,10 +143,7 @@ fn processFileInBatch(
         .no_flip = config.no_flip,
         .opt_threads = 1,
         .quiet = true, // suppress per-file diagnostics in batch mode
-        .water_enabled = config.water_enabled,
-        .water_phantom = config.water_phantom,
-        .water_occupancy_cutoff = config.water_occupancy_cutoff,
-        .water_b_factor_cutoff = config.water_b_factor_cutoff,
+        .water = config.water,
     };
 
     var timer = try std.time.Timer.start();

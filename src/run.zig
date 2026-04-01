@@ -15,10 +15,7 @@ pub const ProcessConfig = struct {
     validate_flag: bool = false,
     opt_threads: u32 = 0, // 0 = auto; batch sets to 1
     quiet: bool = false, // suppress diagnostic prints (batch mode)
-    water_enabled: bool = false,
-    water_phantom: bool = false,
-    water_occupancy_cutoff: f32 = 0.66,
-    water_b_factor_cutoff: f32 = 40.0,
+    water: zreduce.place.WaterConfig = .{},
 };
 
 pub const ProcessResult = struct {
@@ -27,13 +24,14 @@ pub const ProcessResult = struct {
     n_skipped_existing: u32,
     n_skipped_inter_residue: u32,
     n_skipped_missing_ref: u32,
+    n_skipped_quality_filter: u32 = 0,
     n_movers: u32 = 0,
     n_singletons: u32 = 0,
     n_brute_force: u32 = 0,
     n_vertex_cut: u32 = 0,
 
     pub fn totalSkipped(self: ProcessResult) u32 {
-        return self.n_skipped_existing + self.n_skipped_inter_residue + self.n_skipped_missing_ref;
+        return self.n_skipped_existing + self.n_skipped_inter_residue + self.n_skipped_missing_ref + self.n_skipped_quality_filter;
     }
 };
 
@@ -103,14 +101,7 @@ pub fn processFile(allocator: Allocator, config: ProcessConfig) !ProcessResult {
         &mdl,
         config.dict,
         if (inline_dict) |*d| d else null,
-        .{
-            .water = .{
-                .enabled = config.water_enabled,
-                .phantom = config.water_phantom,
-                .occupancy_cutoff = config.water_occupancy_cutoff,
-                .b_factor_cutoff = config.water_b_factor_cutoff,
-            },
-        },
+        .{ .water = config.water },
     );
 
     var result = ProcessResult{
@@ -119,6 +110,7 @@ pub fn processFile(allocator: Allocator, config: ProcessConfig) !ProcessResult {
         .n_skipped_existing = place_result.n_skipped_existing,
         .n_skipped_inter_residue = place_result.n_skipped_inter_residue,
         .n_skipped_missing_ref = place_result.n_skipped_missing_ref,
+        .n_skipped_quality_filter = place_result.n_skipped_quality_filter,
     };
 
     // 6. Optimize (unless --no-opt)
