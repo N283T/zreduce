@@ -84,7 +84,10 @@ pub fn processFile(allocator: Allocator, config: ProcessConfig) !ProcessResult {
     var protonation_overrides: ?zreduce.place.ProtonationOverrides = null;
     defer if (protonation_overrides) |*ov| ov.deinit();
     if (config.protonation_path) |path| {
-        protonation_overrides = try zreduce.place.protonation.parseFile(allocator, path);
+        protonation_overrides = zreduce.place.protonation.parseFile(allocator, path) catch |err| {
+            std.debug.print("Error: failed to load protonation override file '{s}': {s}\n", .{ path, @errorName(err) });
+            return err;
+        };
     }
 
     // 4. Apply chemistry annotations
@@ -115,6 +118,11 @@ pub fn processFile(allocator: Allocator, config: ProcessConfig) !ProcessResult {
             .protonation = if (protonation_overrides) |*ov| ov else null,
         },
     );
+
+    // Warn about unmatched protonation overrides
+    if (protonation_overrides) |*ov| {
+        if (!config.quiet) ov.warnUnmatched(&mdl);
+    }
 
     var result = ProcessResult{
         .n_placed = place_result.n_placed,

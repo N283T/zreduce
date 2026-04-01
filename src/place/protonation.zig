@@ -34,7 +34,7 @@ pub const ResidueSelector = struct {
 pub const Entry = struct {
     selector: ResidueSelector,
     comp_id: [3]u8,
-    comp_id_len: u3,
+    comp_id_len: u2,
     state: ResidueState,
 
     pub fn compIdSlice(self: *const Entry) []const u8 {
@@ -52,6 +52,8 @@ pub const ProtonationOverrides = struct {
         self.entries = &.{};
     }
 
+    /// Find the protonation state override for a residue.
+    /// When multiple entries match, the last entry in the file wins.
     pub fn find(self: *const ProtonationOverrides, mdl: *const Model, res_idx: usize) ?ResidueState {
         const res = mdl.residues.items[res_idx];
         var i = self.entries.len;
@@ -62,6 +64,37 @@ pub const ProtonationOverrides = struct {
             if (entry.selector.matches(mdl, res_idx)) return entry.state;
         }
         return null;
+    }
+
+    /// Warn about override entries that did not match any residue.
+    pub fn warnUnmatched(self: *const ProtonationOverrides, mdl: *const Model) void {
+        for (self.entries) |entry| {
+            var matched = false;
+            for (0..mdl.residues.items.len) |res_idx| {
+                if (!entry.selector.matches(mdl, res_idx)) continue;
+                const res = mdl.residues.items[res_idx];
+                if (std.mem.eql(u8, entry.compIdSlice(), res.compIdSlice())) {
+                    matched = true;
+                    break;
+                } else {
+                    std.debug.print("  warning: protonation override for {s}:{d} expects {s} but residue is {s}\n", .{
+                        entry.selector.chain_id,
+                        entry.selector.auth_seq_id,
+                        entry.compIdSlice(),
+                        res.compIdSlice(),
+                    });
+                    matched = true; // selector matched but comp_id mismatch
+                    break;
+                }
+            }
+            if (!matched) {
+                std.debug.print("  warning: protonation override for {s}:{d} {s} did not match any residue\n", .{
+                    entry.selector.chain_id,
+                    entry.selector.auth_seq_id,
+                    entry.compIdSlice(),
+                });
+            }
+        }
     }
 };
 
@@ -81,22 +114,46 @@ pub fn parseString(allocator: std.mem.Allocator, source: []const u8) !Protonatio
     }
 
     var lines = std.mem.splitScalar(u8, source, '\n');
+    var line_num: u32 = 0;
     while (lines.next()) |line_raw| {
+        line_num += 1;
         const line = std.mem.trim(u8, line_raw, " \t\r");
         if (line.len == 0 or line[0] == '#') continue;
 
         var toks = std.mem.tokenizeAny(u8, line, " \t");
-        const selector_tok = toks.next() orelse return error.InvalidProtonationOverride;
-        const comp_tok = toks.next() orelse return error.InvalidProtonationOverride;
-        const state_tok = toks.next() orelse return error.InvalidProtonationOverride;
-        if (toks.next() != null) return error.InvalidProtonationOverride;
+        const selector_tok = toks.next() orelse {
+            std.debug.print("Error: protonation override line {d}: expected 'chain:seq comp state'\n", .{line_num});
+            return error.InvalidProtonationOverride;
+        };
+        const comp_tok = toks.next() orelse {
+            std.debug.print("Error: protonation override line {d}: missing comp_id and state\n", .{line_num});
+            return error.InvalidProtonationOverride;
+        };
+        const state_tok = toks.next() orelse {
+            std.debug.print("Error: protonation override line {d}: missing state\n", .{line_num});
+            return error.InvalidProtonationOverride;
+        };
+        if (toks.next() != null) {
+            std.debug.print("Error: protonation override line {d}: unexpected extra tokens\n", .{line_num});
+            return error.InvalidProtonationOverride;
+        }
+        if (comp_tok.len > 3) {
+            std.debug.print("Error: protonation override line {d}: comp_id '{s}' exceeds 3 characters\n", .{ line_num, comp_tok });
+            return error.InvalidProtonationOverride;
+        }
 
-        const selector = try parseSelector(allocator, selector_tok);
+        const selector = parseSelector(allocator, selector_tok) catch {
+            std.debug.print("Error: protonation override line {d}: invalid selector '{s}' (expected chain:seq[:ins])\n", .{ line_num, selector_tok });
+            return error.InvalidProtonationOverride;
+        };
         errdefer allocator.free(selector.chain_id);
-        const state = try parseState(comp_tok, state_tok);
+        const state = parseState(comp_tok, state_tok) catch {
+            std.debug.print("Error: protonation override line {d}: invalid state '{s}' for {s}\n", .{ line_num, state_tok, comp_tok });
+            return error.InvalidProtonationOverride;
+        };
 
         var comp_id: [3]u8 = .{ ' ', ' ', ' ' };
-        const comp_id_len: u3 = @intCast(@min(comp_tok.len, 3));
+        const comp_id_len: u2 = @intCast(comp_tok.len);
         for (0..comp_id_len) |i| comp_id[i] = std.ascii.toUpper(comp_tok[i]);
 
         entries.append(allocator, .{
@@ -225,4 +282,21 @@ test "selector matches residue by chain and auth seq" {
 
     try testing.expect(overrides.entries[0].selector.matches(&mdl, 0));
     try testing.expectEqual(HisState.hid, overrides.entries[0].state.his);
+}
+
+test "parser rejects invalid input" {
+    // Extra token
+    try testing.expectError(error.InvalidProtonationOverride, parseString(testing.allocator, "A:1 HIS HIE extra"));
+    // Missing state
+    try testing.expectError(error.InvalidProtonationOverride, parseString(testing.allocator, "A:1 HIS"));
+    // Unknown state for known residue
+    try testing.expectError(error.InvalidProtonationOverride, parseString(testing.allocator, "A:1 HIS BADSTATE"));
+    // Unknown residue type
+    try testing.expectError(error.InvalidProtonationOverride, parseString(testing.allocator, "A:1 ALA SOMETHING"));
+    // No colon in selector
+    try testing.expectError(error.InvalidProtonationOverride, parseString(testing.allocator, "A HIS HIE"));
+    // Non-numeric seq_id
+    try testing.expectError(error.InvalidProtonationOverride, parseString(testing.allocator, "A:XYZ HIS HIE"));
+    // comp_id > 3 characters
+    try testing.expectError(error.InvalidProtonationOverride, parseString(testing.allocator, "A:1 HIST HIE"));
 }

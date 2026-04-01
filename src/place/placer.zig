@@ -1369,6 +1369,141 @@ test "protonation override adds ASP sidechain proton" {
     try testing.expect(findAddedAtomIdx(&mdl, 0, "HD2") != null);
 }
 
+test "protonation override adds GLU sidechain proton" {
+    const source =
+        \\data_GLU
+        \\#
+        \\loop_
+        \\_atom_site.group_PDB
+        \\_atom_site.id
+        \\_atom_site.type_symbol
+        \\_atom_site.label_atom_id
+        \\_atom_site.label_comp_id
+        \\_atom_site.label_asym_id
+        \\_atom_site.label_seq_id
+        \\_atom_site.Cartn_x
+        \\_atom_site.Cartn_y
+        \\_atom_site.Cartn_z
+        \\_atom_site.occupancy
+        \\_atom_site.B_iso_or_equiv
+        \\_atom_site.label_alt_id
+        \\_atom_site.auth_asym_id
+        \\_atom_site.auth_seq_id
+        \\ATOM 1 N N GLU A 1 0.0 0.0 0.0 1.00 10.0 . A 1
+        \\ATOM 2 C CA GLU A 1 1.5 0.0 0.0 1.00 10.0 . A 1
+        \\ATOM 3 C C GLU A 1 2.1 1.4 0.0 1.00 10.0 . A 1
+        \\ATOM 4 O O GLU A 1 3.3 1.6 0.0 1.00 10.0 . A 1
+        \\ATOM 5 C CB GLU A 1 2.0 -0.8 1.2 1.00 10.0 . A 1
+        \\ATOM 6 C CG GLU A 1 3.4 -0.4 1.4 1.00 10.0 . A 1
+        \\ATOM 7 C CD GLU A 1 4.3 -1.3 0.6 1.00 10.0 . A 1
+        \\ATOM 8 O OE1 GLU A 1 5.5 -0.9 0.4 1.00 10.0 . A 1
+        \\ATOM 9 O OE2 GLU A 1 3.8 -2.4 0.2 1.00 10.0 . A 1
+        \\#
+    ;
+    var mdl = try mmcif.parseModel(testing.allocator, source);
+    defer mdl.deinit();
+
+    var overrides = try protonation.parseString(testing.allocator,
+        \\A:1 GLU OE2
+    );
+    defer overrides.deinit();
+
+    applyChemistryWithConfig(&mdl, .{ .protonation = &overrides });
+    _ = try addHydrogensWithConfig(&mdl, null, null, .{ .protonation = &overrides });
+
+    try testing.expect(findAddedAtomIdx(&mdl, 0, "HE2") != null);
+    try testing.expect(findAddedAtomIdx(&mdl, 0, "HE1") == null);
+}
+
+test "protonation override LYS neutral skips HZ3" {
+    const source =
+        \\data_LYS
+        \\#
+        \\loop_
+        \\_atom_site.group_PDB
+        \\_atom_site.id
+        \\_atom_site.type_symbol
+        \\_atom_site.label_atom_id
+        \\_atom_site.label_comp_id
+        \\_atom_site.label_asym_id
+        \\_atom_site.label_seq_id
+        \\_atom_site.Cartn_x
+        \\_atom_site.Cartn_y
+        \\_atom_site.Cartn_z
+        \\_atom_site.occupancy
+        \\_atom_site.B_iso_or_equiv
+        \\_atom_site.label_alt_id
+        \\_atom_site.auth_asym_id
+        \\_atom_site.auth_seq_id
+        \\ATOM  1 N N   LYS A 1  0.000  0.000  0.000 1.00 10.0 . A 1
+        \\ATOM  2 C CA  LYS A 1  1.458  0.000  0.000 1.00 10.0 . A 1
+        \\ATOM  3 C C   LYS A 1  2.009  1.420  0.000 1.00 10.0 . A 1
+        \\ATOM  4 O O   LYS A 1  3.200  1.600  0.000 1.00 10.0 . A 1
+        \\ATOM  5 C CB  LYS A 1  1.986 -0.760  1.220 1.00 10.0 . A 1
+        \\ATOM  6 C CG  LYS A 1  3.500 -0.800  1.220 1.00 10.0 . A 1
+        \\ATOM  7 C CD  LYS A 1  4.028 -1.560  2.440 1.00 10.0 . A 1
+        \\ATOM  8 C CE  LYS A 1  5.542 -1.600  2.440 1.00 10.0 . A 1
+        \\ATOM  9 N NZ  LYS A 1  6.070 -2.360  3.660 1.00 10.0 . A 1
+        \\#
+    ;
+    var mdl = try mmcif.parseModel(testing.allocator, source);
+    defer mdl.deinit();
+
+    var overrides = try protonation.parseString(testing.allocator,
+        \\A:1 LYS NEUTRAL
+    );
+    defer overrides.deinit();
+
+    applyChemistryWithConfig(&mdl, .{ .protonation = &overrides });
+    _ = try addHydrogensWithConfig(&mdl, null, null, .{ .protonation = &overrides });
+
+    try testing.expect(findAddedAtomIdx(&mdl, 0, "HZ1") != null);
+    try testing.expect(findAddedAtomIdx(&mdl, 0, "HZ2") != null);
+    try testing.expect(findAddedAtomIdx(&mdl, 0, "HZ3") == null);
+}
+
+test "protonation override CYS thiolate skips HG" {
+    const source =
+        \\data_CYS
+        \\#
+        \\loop_
+        \\_atom_site.group_PDB
+        \\_atom_site.id
+        \\_atom_site.type_symbol
+        \\_atom_site.label_atom_id
+        \\_atom_site.label_comp_id
+        \\_atom_site.label_asym_id
+        \\_atom_site.label_seq_id
+        \\_atom_site.Cartn_x
+        \\_atom_site.Cartn_y
+        \\_atom_site.Cartn_z
+        \\_atom_site.occupancy
+        \\_atom_site.B_iso_or_equiv
+        \\_atom_site.label_alt_id
+        \\_atom_site.auth_asym_id
+        \\_atom_site.auth_seq_id
+        \\ATOM 1 N N   CYS A 1  0.000  0.000  0.000 1.00 10.0 . A 1
+        \\ATOM 2 C CA  CYS A 1  1.458  0.000  0.000 1.00 10.0 . A 1
+        \\ATOM 3 C C   CYS A 1  2.009  1.420  0.000 1.00 10.0 . A 1
+        \\ATOM 4 O O   CYS A 1  3.200  1.600  0.000 1.00 10.0 . A 1
+        \\ATOM 5 C CB  CYS A 1  1.986 -0.760  1.220 1.00 10.0 . A 1
+        \\ATOM 6 S SG  CYS A 1  1.300 -0.200  2.800 1.00 10.0 . A 1
+        \\#
+    ;
+    var mdl = try mmcif.parseModel(testing.allocator, source);
+    defer mdl.deinit();
+
+    var overrides = try protonation.parseString(testing.allocator,
+        \\A:1 CYS THIOLATE
+    );
+    defer overrides.deinit();
+
+    applyChemistryWithConfig(&mdl, .{ .protonation = &overrides });
+    _ = try addHydrogensWithConfig(&mdl, null, null, .{ .protonation = &overrides });
+
+    try testing.expect(findAddedAtomIdx(&mdl, 0, "HG") == null);
+}
+
 fn findAddedAtomIdx(mdl: *const Model, residue_idx: u32, name: []const u8) ?u32 {
     for (mdl.atoms.items, 0..) |atom, idx| {
         if (atom.residue_idx != residue_idx) continue;
