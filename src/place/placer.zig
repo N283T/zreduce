@@ -92,11 +92,13 @@ pub fn addHydrogens(
         const comp_id = res.compIdSlice();
 
         // Detect terminal residues.
-        // Residues after a chain break behave like fake termini for bond topology,
-        // but should not receive full NH3+/NH2+ protonation.
+        // The first residue in a chain is always a real N-terminus (gets NH3+/NH2+),
+        // even if is_chain_break_before is set due to unobserved leading residues.
+        // Mid-chain residues after a gap are terminal for bond topology but keep
+        // a single backbone amide H (no NH3+/NH2+ protonation).
         const chain = mdl.chains.items[res.chain_idx];
-        const is_real_nterm = (res_idx == chain.residue_start) and !res.is_chain_break_before;
-        const is_break_nterm = res.is_chain_break_before;
+        const is_real_nterm = (res_idx == chain.residue_start);
+        const is_break_nterm = res.is_chain_break_before and (res_idx != chain.residue_start);
         const is_nterm_for_bonding = is_real_nterm or is_break_nterm;
         const is_cterm = (res_idx == chain.residue_end - 1) or
             (res_idx + 1 < n_residues and mdl.residues.items[res_idx + 1].is_chain_break_before);
@@ -219,9 +221,11 @@ pub fn applyChemistry(mdl: *Model) void {
         const res = mdl.residues.items[res_idx];
         const comp_id = res.compIdSlice();
 
-        // Detect terminal residues. Only real chain starts are positively charged.
+        // Detect terminal residues.
+        // N-terminal positive charge applies only at real chain starts (first residue).
+        // C-terminal negative charge applies at chain ends and before chain breaks.
         const chain = mdl.chains.items[res.chain_idx];
-        const is_nterm = (res_idx == chain.residue_start) and !res.is_chain_break_before;
+        const is_real_nterm = (res_idx == chain.residue_start);
         const is_cterm = (res_idx == chain.residue_end - 1) or
             (res_idx + 1 < n_residues and mdl.residues.items[res_idx + 1].is_chain_break_before);
 
@@ -241,7 +245,7 @@ pub fn applyChemistry(mdl: *Model) void {
 
             // Apply terminal annotations (merge flags via OR)
             // Only set element_type/vdw_radius for atoms without standard annotation (e.g. OXT)
-            if (chemistry.getTerminalAnnotation(atom.name, is_nterm, is_cterm)) |term_ann| {
+            if (chemistry.getTerminalAnnotation(atom.name, is_real_nterm, is_cterm)) |term_ann| {
                 atom.flags = element.mergeFlags(atom.flags, term_ann.flags);
                 if (!has_std_ann) {
                     atom.element_type = term_ann.atom_type;
@@ -1485,6 +1489,55 @@ test "chain break residue is not annotated as positively charged N-terminus" {
         }
     }
     try testing.expect(!n_positive);
+}
+
+test "first observed residue with N-terminal disorder gets NH3+" {
+    const source = @embedFile("../test_data/nterm_disorder.cif");
+    var mdl = try mmcif.parseModel(testing.allocator, source);
+    defer mdl.deinit();
+
+    // First observed residue (seq_id 2, index 0) has is_chain_break_before
+    // because seq_id 1 is unobserved. It is still the physical N-terminus
+    // and should receive NH3+ (H1, H2, H3), not a single amide H.
+    try testing.expect(mdl.residues.items[0].is_chain_break_before);
+
+    applyChemistry(&mdl);
+    _ = try addHydrogens(&mdl, null, null);
+
+    var h_count: u32 = 0;
+    var h1_count: u32 = 0;
+    var h2_count: u32 = 0;
+    var h3_count: u32 = 0;
+    for (mdl.atoms.items) |atom| {
+        if (!atom.is_added or atom.residue_idx != 0) continue;
+        if (std.mem.eql(u8, atom.nameSlice(), "H")) h_count += 1;
+        if (std.mem.eql(u8, atom.nameSlice(), "H1")) h1_count += 1;
+        if (std.mem.eql(u8, atom.nameSlice(), "H2")) h2_count += 1;
+        if (std.mem.eql(u8, atom.nameSlice(), "H3")) h3_count += 1;
+    }
+    // NH3+: no single backbone H, but H1/H2/H3 present
+    try testing.expectEqual(@as(u32, 0), h_count);
+    try testing.expectEqual(@as(u32, 1), h1_count);
+    try testing.expectEqual(@as(u32, 1), h2_count);
+    try testing.expectEqual(@as(u32, 1), h3_count);
+}
+
+test "first observed residue with N-terminal disorder gets positive charge" {
+    const source = @embedFile("../test_data/nterm_disorder.cif");
+    var mdl = try mmcif.parseModel(testing.allocator, source);
+    defer mdl.deinit();
+
+    applyChemistry(&mdl);
+
+    const res0 = mdl.residues.items[0];
+    const atoms0 = mdl.atoms.items[res0.atom_start..res0.atom_end];
+    var n_positive = false;
+    for (atoms0) |atom| {
+        if (std.mem.eql(u8, atom.nameSlice(), "N")) {
+            n_positive = atom.flags.positive;
+        }
+    }
+    try testing.expect(n_positive);
 }
 
 test "residue before chain break gets C-terminal charge" {
