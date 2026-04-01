@@ -47,8 +47,8 @@ class AtomPos:
         )
 
 
-def extract_h(path: str) -> dict[tuple, list[AtomPos]]:
-    """Return {(auth_chain, auth_seq, comp_id): [AtomPos, ...]}"""
+def extract_h(path: str) -> tuple[dict[tuple, list[AtomPos]], dict[str, int]]:
+    """Return ({(auth_chain, auth_seq, comp_id): [AtomPos, ...]}, {skipped_comp: count})"""
     doc = gemmi.cif.read(path)
     block = doc[0]
     table = block.find(
@@ -67,6 +67,7 @@ def extract_h(path: str) -> dict[tuple, list[AtomPos]]:
         ],
     )
     result: dict[tuple, list[AtomPos]] = {}
+    skipped: dict[str, int] = {}
     for row in table:
         if row[0].strip() != "H":
             continue
@@ -81,10 +82,11 @@ def extract_h(path: str) -> dict[tuple, list[AtomPos]]:
         except ValueError:
             continue
         if comp in SKIP_COMP_IDS:
+            skipped[comp] = skipped.get(comp, 0) + 1
             continue
         key = (chain, seq, comp, ins)
         result.setdefault(key, []).append(AtomPos(name=name, x=x, y=y, z=z, altloc=alt))
-    return result
+    return result, skipped
 
 
 def match_nearest(
@@ -132,12 +134,31 @@ class Stats:
     res_diffs: list[tuple[str, int, int, list[str], list[str]]] = field(
         default_factory=list
     )
+    skipped: dict[str, int] = field(default_factory=dict)
 
 
 # Standard residue types for grouping
 STANDARD_AA = {
-    "ALA", "ARG", "ASN", "ASP", "CYS", "GLN", "GLU", "GLY", "HIS", "ILE",
-    "LEU", "LYS", "MET", "PHE", "PRO", "SER", "THR", "TRP", "TYR", "VAL",
+    "ALA",
+    "ARG",
+    "ASN",
+    "ASP",
+    "CYS",
+    "GLN",
+    "GLU",
+    "GLY",
+    "HIS",
+    "ILE",
+    "LEU",
+    "LYS",
+    "MET",
+    "PHE",
+    "PRO",
+    "SER",
+    "THR",
+    "TRP",
+    "TYR",
+    "VAL",
 }
 STANDARD_NUC = {"DA", "DC", "DG", "DT", "A", "C", "G", "U"}
 
@@ -185,21 +206,38 @@ def compare_all(h_a: dict, h_b: dict) -> Stats:
         if only_a or only_b or len(aa) != len(bb):
             label = f"{key[0]}/{key[2]} {key[1]}"
             stats.res_diffs.append(
-                (label, len(aa), len(bb), [a.name for a in only_a], [b.name for b in only_b])
+                (
+                    label,
+                    len(aa),
+                    len(bb),
+                    [a.name for a in only_a],
+                    [b.name for b in only_b],
+                )
             )
 
     return stats
 
 
-def print_report(stats: Stats, label_a: str, label_b: str, verbose: bool, summary_only: bool):
+def print_report(
+    stats: Stats, label_a: str, label_b: str, verbose: bool, summary_only: bool
+):
     print(f"\n{'=' * 60}")
-    print("Hydrogen Placement Comparison (coordinate-based matching)")
+    skip_label = ", ".join(sorted(SKIP_COMP_IDS))
+    print(f"Hydrogen Placement Comparison (coordinate-based, skipped: {skip_label})")
     print(f"  A: {label_a}")
     print(f"  B: {label_b}")
     print(f"{'=' * 60}")
 
-    print(f"\n  Total H:  A={stats.total_a}  B={stats.total_b}  diff={stats.total_a - stats.total_b:+d}")
-    print(f"  Matched:  {stats.n_matched}  only-A: {stats.n_only_a}  only-B: {stats.n_only_b}")
+    if stats.skipped:
+        parts = [f"{comp}={n}" for comp, n in sorted(stats.skipped.items())]
+        print(f"  Skipped H atoms (both files): {', '.join(parts)}")
+
+    print(
+        f"\n  Total H:  A={stats.total_a}  B={stats.total_b}  diff={stats.total_a - stats.total_b:+d}"
+    )
+    print(
+        f"  Matched:  {stats.n_matched}  only-A: {stats.n_only_a}  only-B: {stats.n_only_b}"
+    )
 
     if stats.dists:
         _print_dist_stats("All residues", stats.dists)
@@ -207,7 +245,11 @@ def print_report(stats: Stats, label_a: str, label_b: str, verbose: bool, summar
         # Per-type breakdown
         for rtype in ["standard_aa", "standard_nuc", "ccd_other"]:
             if rtype in stats.type_dists:
-                labels = {"standard_aa": "Standard AA", "standard_nuc": "Standard nucleotides", "ccd_other": "CCD-derived (other)"}
+                labels = {
+                    "standard_aa": "Standard AA",
+                    "standard_nuc": "Standard nucleotides",
+                    "ccd_other": "CCD-derived (other)",
+                }
                 _print_dist_stats(labels[rtype], stats.type_dists[rtype])
 
     if summary_only:
@@ -215,9 +257,17 @@ def print_report(stats: Stats, label_a: str, label_b: str, verbose: bool, summar
             print(f"\n  Residues with count differences: {len(stats.res_diffs)}")
         return
 
-    only_a_res = [(r, ca, cb, oa, ob) for r, ca, cb, oa, ob in stats.res_diffs if cb == 0]
-    only_b_res = [(r, ca, cb, oa, ob) for r, ca, cb, oa, ob in stats.res_diffs if ca == 0]
-    count_diff = [(r, ca, cb, oa, ob) for r, ca, cb, oa, ob in stats.res_diffs if ca > 0 and cb > 0]
+    only_a_res = [
+        (r, ca, cb, oa, ob) for r, ca, cb, oa, ob in stats.res_diffs if cb == 0
+    ]
+    only_b_res = [
+        (r, ca, cb, oa, ob) for r, ca, cb, oa, ob in stats.res_diffs if ca == 0
+    ]
+    count_diff = [
+        (r, ca, cb, oa, ob)
+        for r, ca, cb, oa, ob in stats.res_diffs
+        if ca > 0 and cb > 0
+    ]
 
     if only_a_res:
         print(f"\n  Residues with H only in A ({len(only_a_res)}):")
@@ -261,7 +311,9 @@ def _print_dist_stats(label: str, dists: list[float]):
     n_bad = sum(1 for d in dists_sorted if d >= 1.0)
 
     print(f"\n  {label} ({n} pairs):")
-    print(f"    RMSD={rmsd:.3f}A  mean={mean_d:.3f}A  median={median_d:.3f}A  P95={p95:.3f}A  max={max_d:.3f}A")
+    print(
+        f"    RMSD={rmsd:.3f}A  mean={mean_d:.3f}A  median={median_d:.3f}A  P95={p95:.3f}A  max={max_d:.3f}A"
+    )
     print(f"    <0.1A: {n_close:5d} ({100 * n_close / n:5.1f}%)")
     print(f"    0.1-0.5A: {n_mid:3d} ({100 * n_mid / n:5.1f}%)")
     print(f"    0.5-1.0A: {n_far:3d} ({100 * n_far / n:5.1f}%)")
@@ -269,16 +321,22 @@ def _print_dist_stats(label: str, dists: list[float]):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Compare H placement (coordinate-based)")
+    parser = argparse.ArgumentParser(
+        description="Compare H placement (coordinate-based)"
+    )
     parser.add_argument("file_a", help="First mmCIF (e.g. zreduce)")
     parser.add_argument("file_b", help="Second mmCIF (e.g. ChimeraX)")
     parser.add_argument("--verbose", "-v", action="store_true")
     parser.add_argument("--summary-only", "-s", action="store_true")
     args = parser.parse_args()
 
-    h_a = extract_h(args.file_a)
-    h_b = extract_h(args.file_b)
+    h_a, skipped_a = extract_h(args.file_a)
+    h_b, skipped_b = extract_h(args.file_b)
     stats = compare_all(h_a, h_b)
+    all_skipped: dict[str, int] = {}
+    for comp in {*skipped_a, *skipped_b}:
+        all_skipped[comp] = skipped_a.get(comp, 0) + skipped_b.get(comp, 0)
+    stats.skipped = all_skipped
     print_report(stats, args.file_a, args.file_b, args.verbose, args.summary_only)
 
 

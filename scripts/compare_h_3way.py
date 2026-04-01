@@ -134,7 +134,8 @@ class CompareResult:
     details: list[tuple[str, str, str, float]] = field(default_factory=list)
 
 
-def extract_h(path: str) -> dict[tuple, list[AtomPos]]:
+def extract_h(path: str) -> tuple[dict[tuple, list[AtomPos]], dict[str, int]]:
+    """Return ({residue_key: [AtomPos, ...]}, {skipped_comp: count})"""
     doc = gemmi.cif.read(path)
     block = doc[0]
     table = block.find(
@@ -153,12 +154,14 @@ def extract_h(path: str) -> dict[tuple, list[AtomPos]]:
         ],
     )
     result: dict[tuple, list[AtomPos]] = {}
+    skipped: dict[str, int] = {}
     for row in table:
         if row[0].strip() != "H":
             continue
         name = row[1].strip()
         comp = row[2].strip()
         if comp in SKIP_COMP_IDS:
+            skipped[comp] = skipped.get(comp, 0) + 1
             continue
         chain = row[3].strip()
         seq = row[4].strip()
@@ -170,7 +173,7 @@ def extract_h(path: str) -> dict[tuple, list[AtomPos]]:
             continue
         key = (chain, seq, comp, ins)
         result.setdefault(key, []).append(AtomPos(name=name, x=x, y=y, z=z, altloc=alt))
-    return result
+    return result, skipped
 
 
 def match_atoms(
@@ -262,9 +265,8 @@ def find_file(stem: str, tool: str) -> str | None:
 def print_summary_table(rows: list[dict]):
     """Print the main comparison table."""
     print(f"\n{'=' * 120}")
-    print(
-        "Three-way H placement comparison: zreduce (Z) vs reduce2 (R) vs ChimeraX (C)"
-    )
+    skip_label = ", ".join(sorted(SKIP_COMP_IDS))
+    print(f"Three-way H placement comparison: Z vs R vs C (skipped: {skip_label})")
     print(f"{'=' * 120}")
 
     # Header
@@ -370,7 +372,7 @@ def main():
         h_cache = {}
         for key, path in files.items():
             if path:
-                h_cache[key] = extract_h(path)
+                h_cache[key], _ = extract_h(path)
 
         for pair, a_key, b_key in [
             ("zc", "z", "c"),

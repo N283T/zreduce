@@ -133,8 +133,8 @@ class AtomPos:
         )
 
 
-def extract_h(path: str) -> dict[tuple, list[AtomPos]]:
-    """Return {(auth_chain, auth_seq, comp_id, ins): [AtomPos, ...]}
+def extract_h(path: str) -> tuple[dict[tuple, list[AtomPos]], dict[str, int]]:
+    """Return ({(auth_chain, auth_seq, comp_id, ins): [AtomPos, ...]}, {skipped_comp: count})
 
     Uses auth_asym_id + auth_seq_id as the residue key for cross-tool
     compatibility: label_seq_id for non-polymer residues varies between
@@ -159,6 +159,7 @@ def extract_h(path: str) -> dict[tuple, list[AtomPos]]:
         ],
     )
     result: dict[tuple, list[AtomPos]] = {}
+    skipped: dict[str, int] = {}
     for row in table:
         if row[0].strip() != "H":
             continue
@@ -172,12 +173,12 @@ def extract_h(path: str) -> dict[tuple, list[AtomPos]]:
             x, y, z = float(row[5]), float(row[6]), float(row[7])
         except ValueError:
             continue
-        # Skip water and intentionally unsupported unknown residues.
         if comp in SKIP_COMP_IDS:
+            skipped[comp] = skipped.get(comp, 0) + 1
             continue
         key = (chain, seq, comp, ins)
         result.setdefault(key, []).append(AtomPos(name=name, x=x, y=y, z=z, altloc=alt))
-    return result
+    return result, skipped
 
 
 def are_equivalent(name_a: str, name_b: str) -> bool:
@@ -237,6 +238,7 @@ class Stats:
     res_diffs: list[tuple[str, int, int, list[str], list[str]]] = field(
         default_factory=list
     )
+    skipped: dict[str, int] = field(default_factory=dict)
 
 
 def compare_all(h_a: dict, h_b: dict) -> Stats:
@@ -286,10 +288,15 @@ def print_report(
     stats: Stats, label_a: str, label_b: str, verbose: bool, summary_only: bool
 ):
     print(f"\n{'=' * 60}")
-    print("Hydrogen Placement Comparison (equiv-aware, HOH excluded)")
+    skip_label = ", ".join(sorted(SKIP_COMP_IDS))
+    print(f"Hydrogen Placement Comparison (equiv-aware, skipped: {skip_label})")
     print(f"  A: {label_a}")
     print(f"  B: {label_b}")
     print(f"{'=' * 60}")
+
+    if stats.skipped:
+        parts = [f"{comp}={n}" for comp, n in sorted(stats.skipped.items())]
+        print(f"  Skipped H atoms (both files): {', '.join(parts)}")
 
     print(
         f"\n  Total H:  A={stats.total_a}  B={stats.total_b}  diff={stats.total_a - stats.total_b:+d}"
@@ -376,9 +383,14 @@ def main():
     parser.add_argument("--summary-only", "-s", action="store_true")
     args = parser.parse_args()
 
-    h_a = extract_h(args.file_a)
-    h_b = extract_h(args.file_b)
+    h_a, skipped_a = extract_h(args.file_a)
+    h_b, skipped_b = extract_h(args.file_b)
     stats = compare_all(h_a, h_b)
+    # Merge skip counts from both files for reporting
+    all_skipped: dict[str, int] = {}
+    for comp, n in {**skipped_a, **skipped_b}.items():
+        all_skipped[comp] = skipped_a.get(comp, 0) + skipped_b.get(comp, 0)
+    stats.skipped = all_skipped
     print_report(stats, args.file_a, args.file_b, args.verbose, args.summary_only)
 
 
