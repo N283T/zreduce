@@ -7,15 +7,18 @@ pub const nucleotide = @import("place/nucleotide.zig");
 pub const modified = @import("place/modified.zig");
 pub const topology = @import("place/topology.zig");
 pub const ccd_derive = @import("place/ccd_derive.zig");
+pub const protonation = @import("place/protonation.zig");
 pub const placer = @import("place/placer.zig");
 
 // Convenience re-exports
 pub const addHydrogens = placer.addHydrogens;
 pub const addHydrogensWithConfig = placer.addHydrogensWithConfig;
 pub const applyChemistry = placer.applyChemistry;
+pub const applyChemistryWithConfig = placer.applyChemistryWithConfig;
 pub const PlacementResult = placer.PlacementResult;
 pub const PlacementConfig = placer.PlacementConfig;
 pub const WaterConfig = placer.WaterConfig;
+pub const ProtonationOverrides = protonation.ProtonationOverrides;
 pub const derivePlans = ccd_derive.derivePlans;
 
 test {

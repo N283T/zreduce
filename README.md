@@ -63,16 +63,19 @@ zreduce run input.cif -o output.cif --water --water-occ-cutoff 0.5 --water-b-cut
 # Write JSON optimization log
 zreduce run input.cif -o output.cif --json log.json
 
+# Force residue protonation states from a control file
+zreduce run input.cif -o output.cif --protonation protonation.txt
+
 # Batch processing (parallel)
 zreduce batch input_dir/ -o output_dir/
-zreduce batch input_dir/ -d components.cif --jsonl log.jsonl
+zreduce batch input_dir/ -d components.cif --jsonl log.jsonl --protonation protonation.txt
 zreduce batch input_dir/ -j 4    # limit to 4 threads
 ```
 
 ### Test
 
 ```bash
-zig build test --summary all    # 253+ tests
+zig build test --summary all    # 325 tests
 ```
 
 ## CLI
@@ -87,6 +90,7 @@ zreduce uses subcommands: `run` for single files, `batch` for directories.
 | `-o, --output PATH` | Output mmCIF file (default: stdout) |
 | `-d, --dict PATH` | Path to components.cif for non-standard residues |
 | `--json PATH` | Write JSON optimization log |
+| `--protonation PATH` | Residue protonation override file |
 | `--no-opt` | Skip optimization (placement only) |
 | `--no-flip` | Disable Asn/Gln/His flips |
 | `--validate` | Print detailed validation diagnostics |
@@ -104,6 +108,7 @@ zreduce uses subcommands: `run` for single files, `batch` for directories.
 | `-d, --dict PATH` | CCD dictionary (loaded once, shared across files) |
 | `-j, --threads N` | Thread count (default: auto-detect CPU count) |
 | `--jsonl PATH` | Aggregated JSONL log file |
+| `--protonation PATH` | Residue protonation override file |
 | `--no-opt` | Skip optimization |
 | `--no-flip` | Disable flips |
 | `--quiet` | Suppress progress output |
@@ -118,6 +123,27 @@ zreduce uses subcommands: `run` for single files, `batch` for directories.
 |------|-------------|
 | `-h, --help` | Show help and subcommand list |
 | `-V, --version` | Show version |
+
+### Protonation Override File
+
+One override per line:
+
+```text
+# chain:auth_seq[:ins_code] comp_id state
+A:57 HIS HIE
+A:102 ASP OD2
+B:14 GLU DEPROTONATED
+C:88 LYS NEUTRAL
+D:5 CYS THIOLATE
+```
+
+Supported states:
+
+- `HIS`: `AUTO`, `HID`, `HIE`, `HIP`
+- `ASP`: `DEPROTONATED`, `OD1`, `OD2`
+- `GLU`: `DEPROTONATED`, `OE1`, `OE2`
+- `LYS`: `CHARGED`, `NEUTRAL`
+- `CYS`: `THIOL`, `THIOLATE`
 
 ## Architecture
 

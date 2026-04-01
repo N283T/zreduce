@@ -21,6 +21,7 @@ const element = @import("../element.zig");
 const Vec3f32 = math_mod.Vec3(f32);
 const topology = @import("topology.zig");
 const chemistry = @import("chemistry.zig");
+const protonation = @import("protonation.zig");
 
 /// Result of a single executePlan call — why a hydrogen was or wasn't placed.
 pub const PlaceResult = enum {
@@ -63,6 +64,7 @@ pub const WaterConfig = struct {
 
 pub const PlacementConfig = struct {
     water: WaterConfig = .{},
+    protonation: ?*const protonation.ProtonationOverrides = null,
 };
 
 const AltlocSet = struct { locs: [10]u8, count: usize };
@@ -113,6 +115,7 @@ pub fn addHydrogensWithConfig(
     for (0..n_residues) |res_idx| {
         const res = mdl.residues.items[res_idx];
         const comp_id = res.compIdSlice();
+        const protonation_state = if (config.protonation) |overrides| overrides.find(mdl, res_idx) else null;
 
         if (config.water.enabled and isWaterResidue(res, comp_id)) {
             const water_result = try placeWaterHydrogens(mdl, res, @intCast(res_idx), config.water);
@@ -157,6 +160,7 @@ pub fn addHydrogensWithConfig(
 
             for (targets) |alt| {
                 for (plans) |plan| {
+                    if (shouldSkipPlanForProtonation(comp_id, &plan, protonation_state)) continue;
                     // Skip backbone amide H only on real N-termini (NH3+/NH2+, not NH).
                     // After a chain break, keep the single amide H.
                     if (is_real_nterm and isBackboneH(&plan)) continue;
@@ -180,6 +184,10 @@ pub fn addHydrogensWithConfig(
                     const oh = try place3primeOH(mdl, res, @intCast(res_idx), alt);
                     result.n_placed += oh.placed;
                     result.n_skipped_existing += oh.skipped;
+                }
+
+                if (try placeOverrideHydrogen(mdl, res, @intCast(res_idx), alt, protonation_state)) |place_result| {
+                    result.tally(place_result);
                 }
             }
 
@@ -250,10 +258,15 @@ pub fn addHydrogensWithConfig(
 /// Also applies terminal charge annotations (N-terminal positive, C-terminal negative).
 /// Should be called once after parsing, before hydrogen placement.
 pub fn applyChemistry(mdl: *Model) void {
+    applyChemistryWithConfig(mdl, .{});
+}
+
+pub fn applyChemistryWithConfig(mdl: *Model, config: PlacementConfig) void {
     const n_residues = mdl.residues.items.len;
     for (0..n_residues) |res_idx| {
         const res = mdl.residues.items[res_idx];
         const comp_id = res.compIdSlice();
+        const protonation_state = if (config.protonation) |overrides| overrides.find(mdl, res_idx) else null;
 
         // Detect terminal residues.
         // N-terminal positive charge applies only at real chain starts (first residue).
@@ -268,7 +281,7 @@ pub fn applyChemistry(mdl: *Model) void {
             if (atom.is_hydrogen) continue;
 
             // Apply standard residue annotations (replace flags, but preserve bonded_inter_residue)
-            const has_std_ann = if (chemistry.getAnnotation(comp_id, atom.name)) |ann| blk: {
+            const has_std_ann = if (chemistry.getAnnotationWithOverride(comp_id, atom.name, protonation_state)) |ann| blk: {
                 atom.element_type = ann.atom_type;
                 const keep_bonded = atom.flags.bonded_inter_residue;
                 atom.flags = ann.flags;
@@ -288,6 +301,76 @@ pub fn applyChemistry(mdl: *Model) void {
             }
         }
     }
+}
+
+fn shouldSkipPlanForProtonation(comp_id: []const u8, plan: *const standard.PlacementPlan, state: ?protonation.ResidueState) bool {
+    const s = state orelse return false;
+
+    if (std.mem.eql(u8, comp_id, "HIS") and s == .his) {
+        if (s.his == .hid and std.mem.eql(u8, &plan.h_name, " HE2")) return true;
+        if (s.his == .hie and std.mem.eql(u8, &plan.h_name, " HD1")) return true;
+        return false;
+    }
+    if (std.mem.eql(u8, comp_id, "LYS") and s == .lys and s.lys == .neutral) {
+        return std.mem.eql(u8, &plan.h_name, " HZ3");
+    }
+    if (std.mem.eql(u8, comp_id, "CYS") and s == .cys and s.cys == .thiolate) {
+        return std.mem.eql(u8, &plan.h_name, " HG ");
+    }
+    return false;
+}
+
+fn placeOverrideHydrogen(mdl: *Model, res: Residue, res_idx: u32, target_altloc: u8, state: ?protonation.ResidueState) !?PlaceResult {
+    const s = state orelse return null;
+    const comp_id = res.compIdSlice();
+
+    if (std.mem.eql(u8, comp_id, "ASP") and s == .asp) {
+        return switch (s.asp) {
+            .deprotonated => null,
+            .atom1 => try placeCarboxylHydrogen(mdl, res, res_idx, target_altloc, "OD1", "OD2", "CG", "HD1"),
+            .atom2 => try placeCarboxylHydrogen(mdl, res, res_idx, target_altloc, "OD2", "OD1", "CG", "HD2"),
+        };
+    }
+    if (std.mem.eql(u8, comp_id, "GLU") and s == .glu) {
+        return switch (s.glu) {
+            .deprotonated => null,
+            .atom1 => try placeCarboxylHydrogen(mdl, res, res_idx, target_altloc, "OE1", "OE2", "CD", "HE1"),
+            .atom2 => try placeCarboxylHydrogen(mdl, res, res_idx, target_altloc, "OE2", "OE1", "CD", "HE2"),
+        };
+    }
+    return null;
+}
+
+fn placeCarboxylHydrogen(
+    mdl: *Model,
+    res: Residue,
+    res_idx: u32,
+    target_altloc: u8,
+    protonated_o_name: []const u8,
+    partner_o_name: []const u8,
+    carbon_name: []const u8,
+    h_name: []const u8,
+) !PlaceResult {
+    const protonated_o = findAtom(mdl, res, padName(protonated_o_name), target_altloc) orelse return .missing_parent;
+    if (protonated_o.flags.bonded_inter_residue) return .inter_residue;
+
+    var meta = ParentMeta.fromAtom(protonated_o);
+    if (target_altloc != ' ') meta.altloc = target_altloc;
+    const h_padded = padName(h_name);
+    if (existsInResidue(mdl, res, h_padded, meta.altloc)) return .existing_h;
+
+    const o_pos = protonated_o.pos;
+    const partner_o_pos = findAtomPos(mdl, res, padName(partner_o_name), target_altloc) orelse return .missing_ref;
+    const carbon_pos = findAtomPos(mdl, res, padName(carbon_name), target_altloc) orelse return .missing_ref;
+    const h_pos = geometry.placeHXR2Planar(
+        o_pos.cast(f64),
+        carbon_pos.cast(f64),
+        partner_o_pos.cast(f64),
+        0.97,
+        0.0,
+    );
+    try appendHydrogenNamed(mdl, h_pos.cast(f32), h_name, .Hpol, .none, res_idx, meta);
+    return .placed;
 }
 
 // ---------------------------------------------------------------------------
@@ -1138,26 +1221,41 @@ fn collectInterResidueAtomNames(allocator: std.mem.Allocator, mdl: *const Model,
 
 /// Append a new hydrogen atom to the model.
 fn appendHydrogen(mdl: *Model, pos: Vec3f32, plan: *const standard.PlacementPlan, res_idx: u32, meta: ParentMeta) !void {
+    try appendHydrogenNamed(mdl, pos, trimPlanName(&plan.h_name), plan.atom_type, plan.mover_hint, res_idx, meta);
+}
+
+fn appendHydrogenNamed(
+    mdl: *Model,
+    pos: Vec3f32,
+    name: []const u8,
+    atom_type: element.AtomType,
+    mover_hint: standard.MoverHint,
+    res_idx: u32,
+    meta: ParentMeta,
+) !void {
     var atom = Atom{
         .pos = pos,
-        .element_type = plan.atom_type,
+        .element_type = atom_type,
         .residue_idx = res_idx,
         .is_hydrogen = true,
         .is_added = true,
-        .vdw_radius = plan.atom_type.info().explicit_radius,
-        .flags = plan.atom_type.info().flags,
+        .vdw_radius = atom_type.info().explicit_radius,
+        .flags = atom_type.info().flags,
         .altloc = meta.altloc,
         .occupancy = meta.occupancy,
         .b_factor = meta.b_factor,
-        .mover_hint = plan.mover_hint,
+        .mover_hint = mover_hint,
     };
-    // Set name from plan h_name (trimmed of spaces)
-    var start: usize = 0;
-    while (start < 4 and plan.h_name[start] == ' ') start += 1;
-    var end: usize = 4;
-    while (end > start and plan.h_name[end - 1] == ' ') end -= 1;
-    atom.setName(plan.h_name[start..end]);
+    atom.setName(name);
     try mdl.atoms.append(mdl.allocator, atom);
+}
+
+fn trimPlanName(name: *const [4]u8) []const u8 {
+    var start: usize = 0;
+    while (start < 4 and name[start] == ' ') start += 1;
+    var end: usize = 4;
+    while (end > start and name[end - 1] == ' ') end -= 1;
+    return name[start..end];
 }
 
 // ---------------------------------------------------------------------------
@@ -1207,6 +1305,212 @@ test "place hydrogens on ALA" {
         }
     }
     try testing.expect(found_ha);
+}
+
+test "protonation override fixes HIS tautomer during placement" {
+    const source = @embedFile("../test_data/his.cif");
+    var mdl = try mmcif.parseModel(testing.allocator, source);
+    defer mdl.deinit();
+    mdl.residues.items[0].auth_seq_id = 1;
+
+    var overrides = try protonation.parseString(testing.allocator,
+        \\A:1 HIS HIE
+    );
+    defer overrides.deinit();
+
+    applyChemistryWithConfig(&mdl, .{ .protonation = &overrides });
+    _ = try addHydrogensWithConfig(&mdl, null, null, .{ .protonation = &overrides });
+
+    try testing.expect(findAddedAtomIdx(&mdl, 0, "HE2") != null);
+    try testing.expect(findAddedAtomIdx(&mdl, 0, "HD1") == null);
+}
+
+test "protonation override adds ASP sidechain proton" {
+    const source =
+        \\data_ASP
+        \\#
+        \\loop_
+        \\_atom_site.group_PDB
+        \\_atom_site.id
+        \\_atom_site.type_symbol
+        \\_atom_site.label_atom_id
+        \\_atom_site.label_comp_id
+        \\_atom_site.label_asym_id
+        \\_atom_site.label_seq_id
+        \\_atom_site.Cartn_x
+        \\_atom_site.Cartn_y
+        \\_atom_site.Cartn_z
+        \\_atom_site.occupancy
+        \\_atom_site.B_iso_or_equiv
+        \\_atom_site.label_alt_id
+        \\_atom_site.auth_asym_id
+        \\_atom_site.auth_seq_id
+        \\ATOM 1 N N ASP A 1 0.0 0.0 0.0 1.00 10.0 . A 1
+        \\ATOM 2 C CA ASP A 1 1.5 0.0 0.0 1.00 10.0 . A 1
+        \\ATOM 3 C C ASP A 1 2.1 1.4 0.0 1.00 10.0 . A 1
+        \\ATOM 4 O O ASP A 1 3.3 1.6 0.0 1.00 10.0 . A 1
+        \\ATOM 5 C CB ASP A 1 2.0 -0.8 1.2 1.00 10.0 . A 1
+        \\ATOM 6 C CG ASP A 1 3.4 -0.4 1.4 1.00 10.0 . A 1
+        \\ATOM 7 O OD1 ASP A 1 4.2 0.3 0.7 1.00 10.0 . A 1
+        \\ATOM 8 O OD2 ASP A 1 3.8 -0.8 2.6 1.00 10.0 . A 1
+        \\#
+    ;
+    var mdl = try mmcif.parseModel(testing.allocator, source);
+    defer mdl.deinit();
+
+    var overrides = try protonation.parseString(testing.allocator,
+        \\A:1 ASP OD2
+    );
+    defer overrides.deinit();
+
+    applyChemistryWithConfig(&mdl, .{ .protonation = &overrides });
+    _ = try addHydrogensWithConfig(&mdl, null, null, .{ .protonation = &overrides });
+
+    try testing.expect(findAddedAtomIdx(&mdl, 0, "HD2") != null);
+}
+
+test "protonation override adds GLU sidechain proton" {
+    const source =
+        \\data_GLU
+        \\#
+        \\loop_
+        \\_atom_site.group_PDB
+        \\_atom_site.id
+        \\_atom_site.type_symbol
+        \\_atom_site.label_atom_id
+        \\_atom_site.label_comp_id
+        \\_atom_site.label_asym_id
+        \\_atom_site.label_seq_id
+        \\_atom_site.Cartn_x
+        \\_atom_site.Cartn_y
+        \\_atom_site.Cartn_z
+        \\_atom_site.occupancy
+        \\_atom_site.B_iso_or_equiv
+        \\_atom_site.label_alt_id
+        \\_atom_site.auth_asym_id
+        \\_atom_site.auth_seq_id
+        \\ATOM 1 N N GLU A 1 0.0 0.0 0.0 1.00 10.0 . A 1
+        \\ATOM 2 C CA GLU A 1 1.5 0.0 0.0 1.00 10.0 . A 1
+        \\ATOM 3 C C GLU A 1 2.1 1.4 0.0 1.00 10.0 . A 1
+        \\ATOM 4 O O GLU A 1 3.3 1.6 0.0 1.00 10.0 . A 1
+        \\ATOM 5 C CB GLU A 1 2.0 -0.8 1.2 1.00 10.0 . A 1
+        \\ATOM 6 C CG GLU A 1 3.4 -0.4 1.4 1.00 10.0 . A 1
+        \\ATOM 7 C CD GLU A 1 4.3 -1.3 0.6 1.00 10.0 . A 1
+        \\ATOM 8 O OE1 GLU A 1 5.5 -0.9 0.4 1.00 10.0 . A 1
+        \\ATOM 9 O OE2 GLU A 1 3.8 -2.4 0.2 1.00 10.0 . A 1
+        \\#
+    ;
+    var mdl = try mmcif.parseModel(testing.allocator, source);
+    defer mdl.deinit();
+
+    var overrides = try protonation.parseString(testing.allocator,
+        \\A:1 GLU OE2
+    );
+    defer overrides.deinit();
+
+    applyChemistryWithConfig(&mdl, .{ .protonation = &overrides });
+    _ = try addHydrogensWithConfig(&mdl, null, null, .{ .protonation = &overrides });
+
+    try testing.expect(findAddedAtomIdx(&mdl, 0, "HE2") != null);
+    try testing.expect(findAddedAtomIdx(&mdl, 0, "HE1") == null);
+}
+
+test "protonation override LYS neutral skips HZ3" {
+    const source =
+        \\data_LYS
+        \\#
+        \\loop_
+        \\_atom_site.group_PDB
+        \\_atom_site.id
+        \\_atom_site.type_symbol
+        \\_atom_site.label_atom_id
+        \\_atom_site.label_comp_id
+        \\_atom_site.label_asym_id
+        \\_atom_site.label_seq_id
+        \\_atom_site.Cartn_x
+        \\_atom_site.Cartn_y
+        \\_atom_site.Cartn_z
+        \\_atom_site.occupancy
+        \\_atom_site.B_iso_or_equiv
+        \\_atom_site.label_alt_id
+        \\_atom_site.auth_asym_id
+        \\_atom_site.auth_seq_id
+        \\ATOM  1 N N   LYS A 1  0.000  0.000  0.000 1.00 10.0 . A 1
+        \\ATOM  2 C CA  LYS A 1  1.458  0.000  0.000 1.00 10.0 . A 1
+        \\ATOM  3 C C   LYS A 1  2.009  1.420  0.000 1.00 10.0 . A 1
+        \\ATOM  4 O O   LYS A 1  3.200  1.600  0.000 1.00 10.0 . A 1
+        \\ATOM  5 C CB  LYS A 1  1.986 -0.760  1.220 1.00 10.0 . A 1
+        \\ATOM  6 C CG  LYS A 1  3.500 -0.800  1.220 1.00 10.0 . A 1
+        \\ATOM  7 C CD  LYS A 1  4.028 -1.560  2.440 1.00 10.0 . A 1
+        \\ATOM  8 C CE  LYS A 1  5.542 -1.600  2.440 1.00 10.0 . A 1
+        \\ATOM  9 N NZ  LYS A 1  6.070 -2.360  3.660 1.00 10.0 . A 1
+        \\#
+    ;
+    var mdl = try mmcif.parseModel(testing.allocator, source);
+    defer mdl.deinit();
+
+    var overrides = try protonation.parseString(testing.allocator,
+        \\A:1 LYS NEUTRAL
+    );
+    defer overrides.deinit();
+
+    applyChemistryWithConfig(&mdl, .{ .protonation = &overrides });
+    _ = try addHydrogensWithConfig(&mdl, null, null, .{ .protonation = &overrides });
+
+    try testing.expect(findAddedAtomIdx(&mdl, 0, "HZ1") != null);
+    try testing.expect(findAddedAtomIdx(&mdl, 0, "HZ2") != null);
+    try testing.expect(findAddedAtomIdx(&mdl, 0, "HZ3") == null);
+}
+
+test "protonation override CYS thiolate skips HG" {
+    const source =
+        \\data_CYS
+        \\#
+        \\loop_
+        \\_atom_site.group_PDB
+        \\_atom_site.id
+        \\_atom_site.type_symbol
+        \\_atom_site.label_atom_id
+        \\_atom_site.label_comp_id
+        \\_atom_site.label_asym_id
+        \\_atom_site.label_seq_id
+        \\_atom_site.Cartn_x
+        \\_atom_site.Cartn_y
+        \\_atom_site.Cartn_z
+        \\_atom_site.occupancy
+        \\_atom_site.B_iso_or_equiv
+        \\_atom_site.label_alt_id
+        \\_atom_site.auth_asym_id
+        \\_atom_site.auth_seq_id
+        \\ATOM 1 N N   CYS A 1  0.000  0.000  0.000 1.00 10.0 . A 1
+        \\ATOM 2 C CA  CYS A 1  1.458  0.000  0.000 1.00 10.0 . A 1
+        \\ATOM 3 C C   CYS A 1  2.009  1.420  0.000 1.00 10.0 . A 1
+        \\ATOM 4 O O   CYS A 1  3.200  1.600  0.000 1.00 10.0 . A 1
+        \\ATOM 5 C CB  CYS A 1  1.986 -0.760  1.220 1.00 10.0 . A 1
+        \\ATOM 6 S SG  CYS A 1  1.300 -0.200  2.800 1.00 10.0 . A 1
+        \\#
+    ;
+    var mdl = try mmcif.parseModel(testing.allocator, source);
+    defer mdl.deinit();
+
+    var overrides = try protonation.parseString(testing.allocator,
+        \\A:1 CYS THIOLATE
+    );
+    defer overrides.deinit();
+
+    applyChemistryWithConfig(&mdl, .{ .protonation = &overrides });
+    _ = try addHydrogensWithConfig(&mdl, null, null, .{ .protonation = &overrides });
+
+    try testing.expect(findAddedAtomIdx(&mdl, 0, "HG") == null);
+}
+
+fn findAddedAtomIdx(mdl: *const Model, residue_idx: u32, name: []const u8) ?u32 {
+    for (mdl.atoms.items, 0..) |atom, idx| {
+        if (atom.residue_idx != residue_idx) continue;
+        if (!atom.is_added) continue;
+        if (std.mem.eql(u8, atom.nameSlice(), name)) return @intCast(idx);
+    }
+    return null;
 }
 
 test "placed atoms have correct metadata" {

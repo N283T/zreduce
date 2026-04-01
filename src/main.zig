@@ -13,6 +13,7 @@ const RunConfig = struct {
     no_flip: bool = false,
     validate: bool = false,
     water: zreduce.place.WaterConfig = .{},
+    protonation_path: ?[]const u8 = null,
 };
 
 fn parseRunArgs(args: []const []const u8) ?RunConfig {
@@ -47,6 +48,13 @@ fn parseRunArgs(args: []const []const u8) ?RunConfig {
                 std.process.exit(1);
             }
             config.json_path = args[i];
+        } else if (std.mem.eql(u8, arg, "--protonation")) {
+            i += 1;
+            if (i >= args.len) {
+                std.debug.print("Error: --protonation requires a path argument\n", .{});
+                std.process.exit(1);
+            }
+            config.protonation_path = args[i];
         } else if (std.mem.eql(u8, arg, "--no-opt")) {
             config.no_opt = true;
         } else if (std.mem.eql(u8, arg, "--no-flip")) {
@@ -144,6 +152,7 @@ fn printRunUsage() void {
         \\    -d, --dict PATH    CCD dictionary
         \\    -o, --output PATH  Output file (default: stdout)
         \\    --json PATH        Write JSON log to file
+        \\    --protonation PATH  Residue protonation override file
         \\    --no-opt           Skip optimization
         \\    --no-flip          Disable Asn/Gln/His flips
         \\    --validate         Print validation diagnostics
@@ -223,6 +232,13 @@ fn parseBatchArgs(args: []const []const u8) ?zreduce.batch.BatchConfig {
                 std.process.exit(1);
             }
             config.jsonl_path = args[i];
+        } else if (std.mem.eql(u8, arg, "--protonation")) {
+            i += 1;
+            if (i >= args.len) {
+                std.debug.print("Error: --protonation requires a path\n", .{});
+                std.process.exit(1);
+            }
+            config.protonation_path = args[i];
         } else if (std.mem.eql(u8, arg, "-j") or std.mem.eql(u8, arg, "--threads")) {
             i += 1;
             if (i >= args.len) {
@@ -312,6 +328,7 @@ fn printBatchUsage() void {
         \\    -o, --output PATH  Output directory (default: <input>_reduced/)
         \\    -j, --threads N    Thread count (default: auto-detect)
         \\    --jsonl PATH       Aggregated JSONL log file
+        \\    --protonation PATH  Residue protonation override file
         \\    --no-opt           Skip optimization
         \\    --no-flip          Disable flips
         \\    --quiet            Suppress progress output
@@ -362,6 +379,7 @@ fn runSubcommand(allocator: Allocator, args: []const []const u8) void {
         .no_flip = config.no_flip,
         .validate_flag = config.validate,
         .water = config.water,
+        .protonation_path = config.protonation_path,
     };
 
     const result = zreduce.run.processFile(allocator, proc_config) catch |err| {

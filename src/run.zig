@@ -16,6 +16,7 @@ pub const ProcessConfig = struct {
     opt_threads: u32 = 0, // 0 = auto; batch sets to 1
     quiet: bool = false, // suppress diagnostic prints (batch mode)
     water: zreduce.place.WaterConfig = .{},
+    protonation_path: ?[]const u8 = null,
 };
 
 pub const ProcessResult = struct {
@@ -80,8 +81,19 @@ pub fn processFile(allocator: Allocator, config: ProcessConfig) !ProcessResult {
     var inline_dict = try zreduce.mmcif.parseInlineComponents(allocator, block);
     defer if (inline_dict) |*d| d.deinit();
 
+    var protonation_overrides: ?zreduce.place.ProtonationOverrides = null;
+    defer if (protonation_overrides) |*ov| ov.deinit();
+    if (config.protonation_path) |path| {
+        protonation_overrides = zreduce.place.protonation.parseFile(allocator, path) catch |err| {
+            std.debug.print("Error: failed to load protonation override file '{s}': {s}\n", .{ path, @errorName(err) });
+            return err;
+        };
+    }
+
     // 4. Apply chemistry annotations
-    zreduce.place.applyChemistry(&mdl);
+    zreduce.place.applyChemistryWithConfig(&mdl, .{
+        .protonation = if (protonation_overrides) |*ov| ov else null,
+    });
 
     // Build atom lookup once for bond parsing
     var atom_lookup = try zreduce.mmcif.buildAtomLookup(allocator, block);
@@ -101,8 +113,16 @@ pub fn processFile(allocator: Allocator, config: ProcessConfig) !ProcessResult {
         &mdl,
         config.dict,
         if (inline_dict) |*d| d else null,
-        .{ .water = config.water },
+        .{
+            .water = config.water,
+            .protonation = if (protonation_overrides) |*ov| ov else null,
+        },
     );
+
+    // Warn about unmatched protonation overrides
+    if (protonation_overrides) |*ov| {
+        if (!config.quiet) ov.warnUnmatched(&mdl);
+    }
 
     var result = ProcessResult{
         .n_placed = place_result.n_placed,
@@ -129,6 +149,7 @@ pub fn processFile(allocator: Allocator, config: ProcessConfig) !ProcessResult {
             config.no_flip,
             config.dict,
             if (inline_dict) |*d| d else null,
+            if (protonation_overrides) |*ov| ov else null,
         );
         movers = gen_result.movers;
         movers_owned = true;
