@@ -291,7 +291,11 @@ fn deriveSinglePlan(
         .sp3 => {
             if (bond_info.heavy_neighbor_count >= 3) {
                 // HXR3: tetrahedral with 3 heavy neighbors.
-                if (findHeavyNeighborNamesFiltered(component, heavy_idx, 2, existing_atom_names)) |refs| {
+                // Only use hxr3 if CCD template has 3+ heavy neighbors in the model,
+                // because executePlan needs to geometrically find the 3rd neighbor
+                // within the same residue. When the 3rd is an inter-residue partner
+                // (not in CCD), it won't be found — fall through to h2xr2 instead.
+                if (findHeavyNeighborNamesFiltered(component, heavy_idx, 3, existing_atom_names)) |refs| {
                     return PlacementPlan{
                         .h_name = h_atom.name,
                         .placement_type = .hxr3,

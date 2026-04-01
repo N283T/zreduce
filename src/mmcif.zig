@@ -449,6 +449,9 @@ pub fn parseStructConn(mdl: *Model, block: *const cif.Block, lookup: *const Atom
     const col_sym1 = sc.findTag("_struct_conn.ptnr1_symmetry");
     const col_sym2 = sc.findTag("_struct_conn.ptnr2_symmetry");
     const col_order = sc.findTag("_struct_conn.pdbx_value_order");
+    // auth_seq_id columns: fallback for branched entities where label_seq_id is "."
+    const col_auth_seq1 = sc.findTag("_struct_conn.ptnr1_auth_seq_id");
+    const col_auth_seq2 = sc.findTag("_struct_conn.ptnr2_auth_seq_id");
 
     const nrows = sc.length();
     for (0..nrows) |row| {
@@ -469,8 +472,20 @@ pub fn parseStructConn(mdl: *Model, block: *const cif.Block, lookup: *const Atom
         const seq2 = cif.asString(sc.val(row, col_seq2) orelse continue);
         const atom2 = cif.asString(sc.val(row, col_atom2) orelse continue);
 
-        const idx1 = lookup.get(.{ .label_asym_id = asym1, .seq_id = seq1, .atom_name = atom1 }) orelse continue;
-        const idx2 = lookup.get(.{ .label_asym_id = asym2, .seq_id = seq2, .atom_name = atom2 }) orelse continue;
+        // For branched entities, label_seq_id is "." (parsed as "" by asString).
+        // Fall back to auth_seq_id to disambiguate residues in the same chain.
+        // Keep label_asym_id — buildAtomLookup indexes by (label_asym_id, auth_seq_id).
+        const eff_seq1 = if (seq1.len == 0 and col_auth_seq1 != null)
+            cif.asString(sc.val(row, col_auth_seq1.?) orelse continue)
+        else
+            seq1;
+        const eff_seq2 = if (seq2.len == 0 and col_auth_seq2 != null)
+            cif.asString(sc.val(row, col_auth_seq2.?) orelse continue)
+        else
+            seq2;
+
+        const idx1 = lookup.get(.{ .label_asym_id = asym1, .seq_id = eff_seq1, .atom_name = atom1 }) orelse continue;
+        const idx2 = lookup.get(.{ .label_asym_id = asym2, .seq_id = eff_seq2, .atom_name = atom2 }) orelse continue;
 
         const order_str = if (col_order) |c| cif.asString(sc.val(row, c) orelse ".") else "";
         const order = bond_mod.BondOrder.fromString(order_str);
