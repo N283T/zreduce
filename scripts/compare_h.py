@@ -23,6 +23,8 @@ from math import sqrt
 
 import gemmi
 
+SKIP_COMP_IDS = {"HOH", "UNK", "UNL"}
+
 # Pairs of equivalent hydrogen names that may be swapped between tools.
 # These are methylene pairs, symmetric amine/guanidinium pairs, etc.
 EQUIV_PAIRS: list[tuple[str, str]] = [
@@ -170,8 +172,8 @@ def extract_h(path: str) -> dict[tuple, list[AtomPos]]:
             x, y, z = float(row[5]), float(row[6]), float(row[7])
         except ValueError:
             continue
-        # Skip water
-        if comp == "HOH":
+        # Skip water and intentionally unsupported unknown residues.
+        if comp in SKIP_COMP_IDS:
             continue
         key = (chain, seq, comp, ins)
         result.setdefault(key, []).append(AtomPos(name=name, x=x, y=y, z=z, altloc=alt))

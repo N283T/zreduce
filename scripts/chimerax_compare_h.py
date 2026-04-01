@@ -30,6 +30,8 @@ from math import sqrt
 import gemmi
 import numpy as np
 
+SKIP_COMP_IDS = {"HOH", "UNK", "UNL"}
+
 
 @dataclass
 class AtomPos:
@@ -78,7 +80,7 @@ def extract_h(path: str) -> dict[tuple, list[AtomPos]]:
             x, y, z = float(row[5]), float(row[6]), float(row[7])
         except ValueError:
             continue
-        if comp == "HOH":
+        if comp in SKIP_COMP_IDS:
             continue
         key = (chain, seq, comp, ins)
         result.setdefault(key, []).append(AtomPos(name=name, x=x, y=y, z=z, altloc=alt))

@@ -29,6 +29,8 @@ from math import sqrt
 
 import gemmi
 
+SKIP_COMP_IDS = {"HOH", "UNK", "UNL"}
+
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RESULT_DIR = os.path.join(PROJECT_ROOT, "examples", "result")
 CHIMERAX_DIR = os.path.join(RESULT_DIR, "chimerax_addh")
@@ -156,7 +158,7 @@ def extract_h(path: str) -> dict[tuple, list[AtomPos]]:
             continue
         name = row[1].strip()
         comp = row[2].strip()
-        if comp == "HOH":
+        if comp in SKIP_COMP_IDS:
             continue
         chain = row[3].strip()
         seq = row[4].strip()
