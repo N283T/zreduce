@@ -66,9 +66,14 @@ zreduce run input.cif -o output.cif --json log.json
 # Force residue protonation states from a control file
 zreduce run input.cif -o output.cif --protonation protonation.txt
 
+# Dump mover IDs / allowed states, then force selected movers
+zreduce run input.cif --dump-movers movers.txt --no-opt
+zreduce run input.cif -o output.cif --fix fix.txt
+
 # Batch processing (parallel)
 zreduce batch input_dir/ -o output_dir/
 zreduce batch input_dir/ -d components.cif --jsonl log.jsonl --protonation protonation.txt
+zreduce batch input_dir/ -d components.cif --fix fix.txt
 zreduce batch input_dir/ -j 4    # limit to 4 threads
 ```
 
@@ -91,6 +96,8 @@ zreduce uses subcommands: `run` for single files, `batch` for directories.
 | `-d, --dict PATH` | Path to components.cif for non-standard residues |
 | `--json PATH` | Write JSON optimization log |
 | `--protonation PATH` | Residue protonation override file |
+| `--fix PATH` | Force mover states from control file |
+| `--dump-movers PATH` | Write available mover IDs/states to file |
 | `--no-opt` | Skip optimization (placement only) |
 | `--no-flip` | Disable Asn/Gln/His flips |
 | `--validate` | Print detailed validation diagnostics |
@@ -109,6 +116,7 @@ zreduce uses subcommands: `run` for single files, `batch` for directories.
 | `-j, --threads N` | Thread count (default: auto-detect CPU count) |
 | `--jsonl PATH` | Aggregated JSONL log file |
 | `--protonation PATH` | Residue protonation override file |
+| `--fix PATH` | Force mover states from control file |
 | `--no-opt` | Skip optimization |
 | `--no-flip` | Disable flips |
 | `--quiet` | Suppress progress output |
@@ -144,6 +152,24 @@ Supported states:
 - `GLU`: `DEPROTONATED`, `OE1`, `OE2`
 - `LYS`: `CHARGED`, `NEUTRAL`
 - `CYS`: `THIOL`, `THIOLATE`
+
+### Fix Override File
+
+One override per line:
+
+```text
+# chain:auth_seq[:ins_code] comp_id target value
+A:57 ASN amide FLIP
+A:88 HIS his HID_FLIP
+B:14 SER OG 6
+```
+
+Targets and values:
+
+- `amide`: `ORIGINAL`, `FLIP`
+- `his`: `HIE`, `HID`, `HIE_FLIP`, `HID_FLIP`
+- rotators: center atom name plus coarse orientation index
+  Example: `SER OG 6`, `ALA CB 2`, `LYS NZ 1`
 
 ## Architecture
 

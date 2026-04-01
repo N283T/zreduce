@@ -114,6 +114,7 @@ pub fn optimize(
     try singleton_indices.ensureTotalCapacity(allocator, movers.len);
 
     for (cliques) |clq| {
+        if (allFixed(movers, clq)) continue;
         if (clq.len == 1) {
             // Defer singletons for parallel dispatch below.
             try singleton_indices.append(allocator, clq[0]);
@@ -248,6 +249,7 @@ fn optimizeSingleton(
     scratch: *std.ArrayListUnmanaged(u32),
 ) void {
     const m = &movers[mover_idx];
+    if (m.is_fixed) return;
     var best_score: f32 = -std.math.inf(f32);
     var best_idx: u16 = 0;
 
@@ -284,6 +286,7 @@ fn fineSearchMover(
     out_best_positions: *?[]math_mod.Vec3(f32),
 ) void {
     const m = &movers[mover_idx];
+    if (m.is_fixed) return;
     const atoms = model.atoms.items;
 
     const fine = rotator_mod.generateFineOrientations(allocator, atoms, m, m.best_orientation) catch |err| {
@@ -341,11 +344,17 @@ fn optimizeBruteForce(
     const indices = try allocator.alloc(u16, n);
     defer allocator.free(indices);
     @memset(indices, 0);
+    for (clq, 0..) |mi, i| {
+        if (movers[mi].is_fixed) indices[i] = movers[mi].best_orientation;
+    }
 
     var best_score: f32 = -std.math.inf(f32);
     const best_indices = try allocator.alloc(u16, n);
     defer allocator.free(best_indices);
     @memset(best_indices, 0);
+    for (clq, 0..) |mi, i| {
+        if (movers[mi].is_fixed) best_indices[i] = movers[mi].best_orientation;
+    }
 
     // Enumerate all combinations
     while (true) {
@@ -380,6 +389,10 @@ fn incrementIndices(indices: []u16, movers: []const Mover, clq: []const u32) boo
     var i: usize = indices.len;
     while (i > 0) {
         i -= 1;
+        if (movers[clq[i]].is_fixed) {
+            indices[i] = movers[clq[i]].best_orientation;
+            continue;
+        }
         indices[i] += 1;
         if (indices[i] < movers[clq[i]].nOrientations()) return true;
         indices[i] = 0;
@@ -392,7 +405,7 @@ fn incrementIndices(indices: []u16, movers: []const Mover, clq: []const u32) boo
 pub fn totalStates(movers: []const Mover, clq: []const u32) u64 {
     var total: u64 = 1;
     for (clq) |mi| {
-        total *|= movers[mi].nOrientations(); // saturating multiply
+        total *|= movers[mi].effectiveOrientations(); // saturating multiply
     }
     return total;
 }
@@ -412,6 +425,7 @@ fn optimizeIterativeGreedy(
     while (iteration < max_iterations) : (iteration += 1) {
         var changed = false;
         for (clq) |mi| {
+            if (movers[mi].is_fixed) continue;
             const old_best = movers[mi].best_orientation;
             optimizeSingleton(movers, mi, model, config, score_ctx, allocator, scratch);
             movers[mi].applyOrientation(model.atoms.items, movers[mi].best_orientation);
@@ -419,6 +433,13 @@ fn optimizeIterativeGreedy(
         }
         if (!changed) break;
     }
+}
+
+fn allFixed(movers: []const Mover, clq: []const u32) bool {
+    for (clq) |mi| {
+        if (!movers[mi].is_fixed) return false;
+    }
+    return true;
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -1016,4 +1037,3 @@ test "optimize() with multiple independent singletons uses parallel path and get
         try testing.expectEqual(@as(u16, 1), m.best_orientation);
     }
 }
-

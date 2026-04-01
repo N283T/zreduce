@@ -17,6 +17,8 @@ pub const ProcessConfig = struct {
     quiet: bool = false, // suppress diagnostic prints (batch mode)
     water: zreduce.place.WaterConfig = .{},
     protonation_path: ?[]const u8 = null,
+    fix_path: ?[]const u8 = null,
+    dump_movers_path: ?[]const u8 = null,
 };
 
 pub const ProcessResult = struct {
@@ -90,6 +92,15 @@ pub fn processFile(allocator: Allocator, config: ProcessConfig) !ProcessResult {
         };
     }
 
+    var fix_overrides: ?zreduce.optimize.fix.FixOverrides = null;
+    defer if (fix_overrides) |*ov| ov.deinit();
+    if (config.fix_path) |path| {
+        fix_overrides = zreduce.optimize.fix.parseFile(allocator, path) catch |err| {
+            std.debug.print("Error: failed to load fix override file '{s}': {s}\n", .{ path, @errorName(err) });
+            return err;
+        };
+    }
+
     // 4. Apply chemistry annotations
     zreduce.place.applyChemistryWithConfig(&mdl, .{
         .protonation = if (protonation_overrides) |*ov| ov else null,
@@ -133,7 +144,7 @@ pub fn processFile(allocator: Allocator, config: ProcessConfig) !ProcessResult {
         .n_skipped_quality_filter = place_result.n_skipped_quality_filter,
     };
 
-    // 6. Optimize (unless --no-opt)
+    // 6. Generate movers, apply fixes, and optimize unless --no-opt
     var movers: []zreduce.optimize.Mover = &.{};
     var movers_owned = false;
     defer {
@@ -141,7 +152,8 @@ pub fn processFile(allocator: Allocator, config: ProcessConfig) !ProcessResult {
         if (movers_owned) allocator.free(movers);
     }
 
-    if (!config.no_opt) {
+    const needs_movers = !config.no_opt or config.fix_path != null or config.dump_movers_path != null;
+    if (needs_movers) {
         // Movers use per-component fallback: inline_dict first, then external CCD dict.
         const gen_result = try zreduce.optimize.generateMovers(
             allocator,
@@ -159,7 +171,24 @@ pub fn processFile(allocator: Allocator, config: ProcessConfig) !ProcessResult {
             std.debug.print("  Mover generation: {d} skipped (missing atoms or incomplete groups)\n", .{gen_result.n_skipped});
         }
 
-        if (movers.len > 0) {
+        if (fix_overrides) |*ov| {
+            try zreduce.optimize.fix.applyFixes(ov, &mdl, movers);
+            for (movers) |*m| {
+                if (m.is_fixed) m.applyOrientation(mdl.atoms.items, m.best_orientation);
+            }
+            if (!config.quiet) ov.warnUnmatched(&mdl, movers);
+        }
+
+        if (config.dump_movers_path) |dump_path| {
+            var dump_buf: [4096]u8 = undefined;
+            const file = try std.fs.cwd().createFile(dump_path, .{});
+            defer file.close();
+            var fw = file.writer(&dump_buf);
+            try zreduce.optimize.fix.dumpMovers(&fw.interface, &mdl, movers);
+            try fw.interface.flush();
+        }
+
+        if (!config.no_opt and movers.len > 0) {
             const opt_config = zreduce.optimize.OptConfig{
                 .n_threads = config.opt_threads,
             };

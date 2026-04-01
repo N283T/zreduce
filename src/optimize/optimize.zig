@@ -9,6 +9,7 @@ pub const MoverKind = mover.MoverKind;
 pub const Orientation = mover.Orientation;
 pub const rotator = @import("rotator.zig");
 pub const flipper = @import("flipper.zig");
+pub const fix = @import("fix.zig");
 pub const clique = @import("clique.zig");
 pub const mover_gen = @import("mover_gen.zig");
 pub const generateMovers = mover_gen.generateMovers;
