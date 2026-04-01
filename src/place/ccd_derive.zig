@@ -284,39 +284,45 @@ fn deriveSinglePlan(
         else => .none,
     };
 
+    // Plan type selection uses fallback: when inter-residue extras inflate
+    // heavy_neighbor_count beyond what findHeavyNeighborNamesFiltered can
+    // satisfy from the CCD template, fall through to a lower-arity plan.
     switch (bond_info.hybridization) {
         .sp3 => {
             if (bond_info.heavy_neighbor_count >= 3) {
                 // HXR3: tetrahedral with 3 heavy neighbors.
-                // executePlan expects connected = {center, n1, n2} where center is
-                // the parent heavy atom. The 3rd neighbor is found geometrically.
-                const refs = findHeavyNeighborNamesFiltered(component, heavy_idx, 2, existing_atom_names) orelse return null;
-                return PlacementPlan{
-                    .h_name = h_atom.name,
-                    .placement_type = .hxr3,
-                    .connected = .{ heavy_atom.name, refs[0], refs[1] },
-                    .n_connected = 3,
-                    .bond_len = bond_len,
-                    .atom_type = atom_type,
-                };
-            } else if (bond_info.heavy_neighbor_count == 2) {
+                if (findHeavyNeighborNamesFiltered(component, heavy_idx, 2, existing_atom_names)) |refs| {
+                    return PlacementPlan{
+                        .h_name = h_atom.name,
+                        .placement_type = .hxr3,
+                        .connected = .{ heavy_atom.name, refs[0], refs[1] },
+                        .n_connected = 3,
+                        .bond_len = bond_len,
+                        .atom_type = atom_type,
+                    };
+                }
+                // Fallback: not enough CCD refs for hxr3, try h2xr2
+            }
+            if (bond_info.heavy_neighbor_count >= 2) {
                 // H2XR2: 2 heavy neighbors, dihedral-controlled
-                const refs = findHeavyNeighborNamesFiltered(component, heavy_idx, 2, existing_atom_names) orelse return null;
-                const dihedral = estimateDihedral(component, h_atom, heavy_idx, refs[0]);
-                return PlacementPlan{
-                    .h_name = h_atom.name,
-                    .placement_type = .h2xr2,
-                    .connected = .{ heavy_atom.name, refs[0], blank },
-                    .n_connected = 2,
-                    .bond_len = bond_len,
-                    .angle = 109.5,
-                    .dihedral = dihedral,
-                    .atom_type = atom_type,
-                };
-            } else if (bond_info.heavy_neighbor_count == 1) {
-                // H3XR: dihedral-controlled (e.g., methyl)
+                if (findHeavyNeighborNamesFiltered(component, heavy_idx, 2, existing_atom_names)) |refs| {
+                    const dihedral = estimateDihedral(component, h_atom, heavy_idx, refs[0]);
+                    return PlacementPlan{
+                        .h_name = h_atom.name,
+                        .placement_type = .h2xr2,
+                        .connected = .{ heavy_atom.name, refs[0], blank },
+                        .n_connected = 2,
+                        .bond_len = bond_len,
+                        .angle = 109.5,
+                        .dihedral = dihedral,
+                        .atom_type = atom_type,
+                    };
+                }
+                // Fallback: not enough CCD refs for h2xr2, try h3xr
+            }
+            if (bond_info.heavy_neighbor_count >= 1) {
+                // H3XR: dihedral-controlled (e.g., methyl, or backbone H with inter-residue bond)
                 const refs = findHeavyNeighborNamesFiltered(component, heavy_idx, 1, existing_atom_names) orelse return null;
-                // Find a second reference for dihedral (neighbor of the heavy neighbor)
                 const second_ref = findSecondReferenceFiltered(component, heavy_idx, refs[0], existing_atom_names) orelse return null;
                 const dihedral = estimateDihedralFromIdeal(component, h_atom, heavy_atom, refs[0]);
                 return PlacementPlan{
@@ -334,18 +340,21 @@ fn deriveSinglePlan(
             return null;
         },
         .sp2 => {
-            // Planar placement
             if (bond_info.heavy_neighbor_count >= 2) {
-                const refs = findHeavyNeighborNamesFiltered(component, heavy_idx, 2, existing_atom_names) orelse return null;
-                return PlacementPlan{
-                    .h_name = h_atom.name,
-                    .placement_type = .hxr2_planar,
-                    .connected = .{ refs[0], refs[1], blank },
-                    .n_connected = 2,
-                    .bond_len = bond_len,
-                    .atom_type = atom_type,
-                };
-            } else if (bond_info.heavy_neighbor_count == 1) {
+                // Planar placement
+                if (findHeavyNeighborNamesFiltered(component, heavy_idx, 2, existing_atom_names)) |refs| {
+                    return PlacementPlan{
+                        .h_name = h_atom.name,
+                        .placement_type = .hxr2_planar,
+                        .connected = .{ refs[0], refs[1], blank },
+                        .n_connected = 2,
+                        .bond_len = bond_len,
+                        .atom_type = atom_type,
+                    };
+                }
+                // Fallback: not enough CCD refs, try dihedral placement
+            }
+            if (bond_info.heavy_neighbor_count >= 1) {
                 // Only one heavy neighbor on sp2 — use dihedral placement
                 const refs = findHeavyNeighborNamesFiltered(component, heavy_idx, 1, existing_atom_names) orelse return null;
                 const second_ref = findSecondReferenceFiltered(component, heavy_idx, refs[0], existing_atom_names) orelse return null;

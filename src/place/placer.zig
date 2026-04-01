@@ -182,11 +182,18 @@ pub fn addHydrogens(
                     result.tally(try executePlan(mdl, res, @intCast(res_idx), &plan, null, ' '));
                 }
 
-                // 3' terminal nucleotide (CCD path): place HO3'.
+                // 3' terminal nucleotide (CCD path): place HO3' only if CCD
+                // plans did not already include it (avoids duplicate placement).
                 if (is_cterm and isNucleotideResidue(mdl, res)) {
-                    const oh = try place3primeOH(mdl, res, @intCast(res_idx), ' ');
-                    result.n_placed += oh.placed;
-                    result.n_skipped_existing += oh.skipped;
+                    const ho3_name = padName("HO3'");
+                    const already_in_plans = for (plans) |plan| {
+                        if (std.mem.eql(u8, &plan.h_name, &ho3_name)) break true;
+                    } else false;
+                    if (!already_in_plans) {
+                        const oh = try place3primeOH(mdl, res, @intCast(res_idx), ' ');
+                        result.n_placed += oh.placed;
+                        result.n_skipped_existing += oh.skipped;
+                    }
                 }
 
                 result.n_residues += 1;
