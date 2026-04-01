@@ -36,10 +36,11 @@ pub const PlacementResult = struct {
     n_skipped_existing: u32 = 0,
     n_skipped_inter_residue: u32 = 0,
     n_skipped_missing_ref: u32 = 0,
+    n_skipped_quality_filter: u32 = 0,
     n_residues: u32 = 0,
 
     pub fn totalSkipped(self: PlacementResult) u32 {
-        return self.n_skipped_existing + self.n_skipped_inter_residue + self.n_skipped_missing_ref;
+        return self.n_skipped_existing + self.n_skipped_inter_residue + self.n_skipped_missing_ref + self.n_skipped_quality_filter;
     }
 
     fn tally(self: *PlacementResult, r: PlaceResult) void {
@@ -50,6 +51,18 @@ pub const PlacementResult = struct {
             .missing_parent, .missing_ref => self.n_skipped_missing_ref += 1,
         }
     }
+};
+
+pub const WaterConfig = struct {
+    enabled: bool = false,
+    phantom: bool = false,
+    occupancy_cutoff: f32 = 0.66,
+    b_factor_cutoff: f32 = 40.0,
+    metal_cutoff: f32 = 3.2,
+};
+
+pub const PlacementConfig = struct {
+    water: WaterConfig = .{},
 };
 
 const AltlocSet = struct { locs: [10]u8, count: usize };
@@ -84,12 +97,33 @@ pub fn addHydrogens(
     ccd_dict: ?*const ComponentDict,
     inline_dict: ?*const ComponentDict,
 ) !PlacementResult {
+    return addHydrogensWithConfig(mdl, ccd_dict, inline_dict, .{});
+}
+
+/// Add hydrogens to the model with placement options.
+pub fn addHydrogensWithConfig(
+    mdl: *Model,
+    ccd_dict: ?*const ComponentDict,
+    inline_dict: ?*const ComponentDict,
+    config: PlacementConfig,
+) !PlacementResult {
     var result = PlacementResult{};
 
     const n_residues = mdl.residues.items.len;
     for (0..n_residues) |res_idx| {
         const res = mdl.residues.items[res_idx];
         const comp_id = res.compIdSlice();
+
+        if (config.water.enabled and isWaterResidue(res, comp_id)) {
+            const water_result = try placeWaterHydrogens(mdl, res, @intCast(res_idx), config.water);
+            result.n_placed += water_result.n_placed;
+            result.n_skipped_existing += water_result.n_skipped_existing;
+            result.n_skipped_inter_residue += water_result.n_skipped_inter_residue;
+            result.n_skipped_missing_ref += water_result.n_skipped_missing_ref;
+            result.n_skipped_quality_filter += water_result.n_skipped_quality_filter;
+            result.n_residues += 1;
+            continue;
+        }
 
         // Detect terminal residues.
         // The first residue in a chain is always a real N-terminus (gets NH3+/NH2+),
@@ -859,6 +893,176 @@ fn hasPhosphorusAtom(mdl: *const Model, res: Residue) bool {
     return false;
 }
 
+fn isWaterResidue(res: Residue, comp_id: []const u8) bool {
+    return res.entity_type == .water or std.mem.eql(u8, comp_id, "HOH") or std.mem.eql(u8, comp_id, "WAT");
+}
+
+fn findWaterOxygen(mdl: *const Model, res: Residue, target_altloc: u8) ?Atom {
+    const atoms = mdl.atoms.items[res.atom_start..res.atom_end];
+    for (atoms) |atom| {
+        if (atom.is_hydrogen) continue;
+        if (atom.element_type != .O) continue;
+        if (target_altloc != ' ' and atom.altloc != ' ' and atom.altloc != target_altloc) continue;
+        return atom;
+    }
+    return null;
+}
+
+fn orthogonalUnit(v: Vec3f32) Vec3f32 {
+    const x_axis = Vec3f32{ .x = 1.0, .y = 0.0, .z = 0.0 };
+    const y_axis = Vec3f32{ .x = 0.0, .y = 1.0, .z = 0.0 };
+    const candidate = if (@abs(v.x) < 0.8) x_axis else y_axis;
+    return v.cross(candidate).normalize();
+}
+
+fn chooseWaterNeighbors(mdl: *const Model, res_idx: u32, oxygen: Atom, target_altloc: u8) [2]?Vec3f32 {
+    var best_dist = [2]f32{ std.math.inf(f32), std.math.inf(f32) };
+    var best_pos = [2]?Vec3f32{ null, null };
+
+    for (mdl.atoms.items) |atom| {
+        if (atom.is_hydrogen) continue;
+        if (atom.residue_idx == res_idx) continue;
+        if (target_altloc != ' ' and atom.altloc != ' ' and atom.altloc != target_altloc) continue;
+
+        const dist = oxygen.pos.distance(atom.pos);
+        if (dist > 3.5 or dist < 0.1) continue;
+
+        if (dist < best_dist[0]) {
+            best_dist[1] = best_dist[0];
+            best_pos[1] = best_pos[0];
+            best_dist[0] = dist;
+            best_pos[0] = atom.pos;
+        } else if (dist < best_dist[1]) {
+            best_dist[1] = dist;
+            best_pos[1] = atom.pos;
+        }
+    }
+
+    return best_pos;
+}
+
+fn nearestMetalDistance(mdl: *const Model, res_idx: u32, oxygen: Atom, target_altloc: u8) ?f32 {
+    var best: f32 = std.math.inf(f32);
+    var found = false;
+    for (mdl.atoms.items) |atom| {
+        if (atom.residue_idx == res_idx) continue;
+        if (target_altloc != ' ' and atom.altloc != ' ' and atom.altloc != target_altloc) continue;
+        if (!atom.element_type.info().flags.metallic and !atom.flags.metallic) continue;
+
+        const dist = oxygen.pos.distance(atom.pos);
+        if (dist < best) {
+            best = dist;
+            found = true;
+        }
+    }
+    return if (found) best else null;
+}
+
+fn awayFromNearbyAtoms(mdl: *const Model, res_idx: u32, oxygen: Atom, target_altloc: u8) ?Vec3f32 {
+    var sum = Vec3f32.zero;
+    var count: u32 = 0;
+    for (mdl.atoms.items) |atom| {
+        if (atom.is_hydrogen) continue;
+        if (atom.residue_idx == res_idx) continue;
+        if (target_altloc != ' ' and atom.altloc != ' ' and atom.altloc != target_altloc) continue;
+
+        const dist = oxygen.pos.distance(atom.pos);
+        if (dist > 4.0 or dist < 0.1) continue;
+        sum = sum.add(atom.pos);
+        count += 1;
+    }
+    if (count == 0) return null;
+    return oxygen.pos.sub(sum.scale(1.0 / @as(f32, @floatFromInt(count)))).normalize();
+}
+
+fn placeWaterHydrogens(mdl: *Model, res: Residue, res_idx: u32, config: WaterConfig) !PlacementResult {
+    var result = PlacementResult{};
+    const altlocs = collectAltlocs(mdl, res);
+    const targets: []const u8 = if (altlocs.count == 0)
+        &[_]u8{' '}
+    else
+        altlocs.locs[0..altlocs.count];
+
+    const h1_name = padName("H1");
+    const h2_name = padName("H2");
+    const bond_len: f32 = 0.97;
+    const half_angle: f32 = 52.25;
+
+    for (targets) |alt| {
+        const oxygen = findWaterOxygen(mdl, res, alt) orelse {
+            result.n_skipped_missing_ref += 1;
+            continue;
+        };
+
+        var meta = ParentMeta.fromAtom(oxygen);
+        if (alt != ' ') meta.altloc = alt;
+
+        if (oxygen.flags.bonded_inter_residue) {
+            result.n_skipped_inter_residue += 1;
+            continue;
+        }
+        if (nearestMetalDistance(mdl, res_idx, oxygen, alt)) |dist| {
+            if (dist <= config.metal_cutoff) {
+                result.n_skipped_inter_residue += 1;
+                continue;
+            }
+        }
+        if (oxygen.occupancy < config.occupancy_cutoff or oxygen.b_factor > config.b_factor_cutoff) {
+            result.n_skipped_quality_filter += 1;
+            continue;
+        }
+        if (existsInResidue(mdl, res, h1_name, meta.altloc) or existsInResidue(mdl, res, h2_name, meta.altloc)) {
+            result.n_skipped_existing += 1;
+            continue;
+        }
+
+        const neighbors = chooseWaterNeighbors(mdl, res_idx, oxygen, alt);
+        const n1 = neighbors[0];
+        const n2 = neighbors[1];
+
+        var away = if (n1) |p1|
+            oxygen.pos.sub(p1).normalize()
+        else if (config.phantom)
+            awayFromNearbyAtoms(mdl, res_idx, oxygen, alt) orelse Vec3f32{ .x = 1.0, .y = 0.0, .z = 0.0 }
+        else {
+            result.n_skipped_missing_ref += 1;
+            continue;
+        };
+        if (n1) |p1| {
+            if (n2) |p2| {
+                away = oxygen.pos.sub(p1).normalize().add(oxygen.pos.sub(p2).normalize()).normalize();
+            }
+        }
+        if (away.length() < 1e-4) {
+            result.n_skipped_missing_ref += 1;
+            continue;
+        }
+
+        const normal = blk: {
+            if (n1) |p1| {
+                if (n2) |p2| break :blk oxygen.pos.sub(p1).cross(oxygen.pos.sub(p2)).normalize();
+            }
+            break :blk orthogonalUnit(away);
+        };
+        const axis = if (normal.length() < 1e-4) orthogonalUnit(away) else normal;
+
+        if (config.phantom and n1 == null) meta.occupancy = 0.0;
+
+        const away64 = away.cast(f64);
+        const axis64 = axis.cast(f64);
+        const oxygen64 = oxygen.pos.cast(f64);
+        const base64 = oxygen64.add(away64.scale(@as(f64, bond_len)));
+        const h1 = math_mod.rotateAroundAxis(f64, base64, oxygen64, axis64, half_angle).cast(f32);
+        const h2 = math_mod.rotateAroundAxis(f64, base64, oxygen64, axis64, -half_angle).cast(f32);
+
+        try appendNtermH(mdl, h1, "H1", res_idx, meta);
+        try appendNtermH(mdl, h2, "H2", res_idx, meta);
+        result.n_placed += 2;
+    }
+
+    return result;
+}
+
 /// Find the raw [4]u8 name of an atom in the model (using nameMatch for lookup).
 /// Returns the actual stored name bytes, which may differ from PDB-padded format.
 fn findAtomName(mdl: *const Model, res: Residue, name: [4]u8, target_altloc: u8) ?[4]u8 {
@@ -1583,6 +1787,335 @@ test "addHydrogens skips H on bonded_inter_residue atom" {
         }
     }
     _ = result;
+}
+
+test "water placement adds two hydrogens when enabled" {
+    const water_cif =
+        \\data_WATER
+        \\#
+        \\loop_
+        \\_entity.id
+        \\_entity.type
+        \\1 polymer
+        \\2 water
+        \\#
+        \\loop_
+        \\_atom_site.group_PDB
+        \\_atom_site.id
+        \\_atom_site.type_symbol
+        \\_atom_site.label_atom_id
+        \\_atom_site.label_comp_id
+        \\_atom_site.label_asym_id
+        \\_atom_site.label_entity_id
+        \\_atom_site.label_seq_id
+        \\_atom_site.Cartn_x
+        \\_atom_site.Cartn_y
+        \\_atom_site.Cartn_z
+        \\_atom_site.occupancy
+        \\_atom_site.B_iso_or_equiv
+        \\_atom_site.label_alt_id
+        \\ATOM   1  N  N   GLY A 1 1  0.000 0.000 0.000 1.00 10.0 .
+        \\ATOM   2  O  O   GLY A 1 1  1.200 1.100 0.000 1.00 10.0 .
+        \\ATOM   3  O  O   HOH B 2 1  2.700 0.200 0.000 1.00 12.0 .
+        \\#
+    ;
+
+    var mdl = try mmcif.parseModel(testing.allocator, water_cif);
+    defer mdl.deinit();
+
+    const result = try addHydrogensWithConfig(&mdl, null, null, .{
+        .water = .{ .enabled = true },
+    });
+
+    try testing.expectEqual(@as(u32, 2), result.n_placed);
+
+    const oxygen_pos = findAtomPos(&mdl, mdl.residues.items[1], padName("O"), ' ') orelse unreachable;
+    var h_positions: [2]Vec3f32 = undefined;
+    var h_count: u32 = 0;
+    for (mdl.atoms.items) |atom| {
+        if (atom.is_added and atom.residue_idx == 1) {
+            try testing.expect(atom.is_hydrogen);
+            try testing.expectApproxEqAbs(@as(f32, 1.0), atom.occupancy, 1e-6);
+            try testing.expectApproxEqAbs(@as(f32, 12.0), atom.b_factor, 1e-6);
+            if (h_count < 2) h_positions[h_count] = atom.pos;
+            h_count += 1;
+        }
+    }
+    try testing.expectEqual(@as(u32, 2), h_count);
+
+    // Verify O-H bond length (~0.97 A)
+    try testing.expectApproxEqAbs(@as(f32, 0.97), oxygen_pos.distance(h_positions[0]), 0.02);
+    try testing.expectApproxEqAbs(@as(f32, 0.97), oxygen_pos.distance(h_positions[1]), 0.02);
+
+    // Verify H-O-H angle (~104.5 degrees)
+    const hoh_angle = math_mod.angle(f32, h_positions[0], oxygen_pos, h_positions[1]);
+    try testing.expectApproxEqAbs(@as(f32, 104.5), hoh_angle, 1.0);
+}
+
+test "water placement respects occupancy cutoff" {
+    const water_cif =
+        \\data_WATER_OCC
+        \\#
+        \\loop_
+        \\_entity.id
+        \\_entity.type
+        \\1 polymer
+        \\2 water
+        \\#
+        \\loop_
+        \\_atom_site.group_PDB
+        \\_atom_site.id
+        \\_atom_site.type_symbol
+        \\_atom_site.label_atom_id
+        \\_atom_site.label_comp_id
+        \\_atom_site.label_asym_id
+        \\_atom_site.label_entity_id
+        \\_atom_site.label_seq_id
+        \\_atom_site.Cartn_x
+        \\_atom_site.Cartn_y
+        \\_atom_site.Cartn_z
+        \\_atom_site.occupancy
+        \\_atom_site.B_iso_or_equiv
+        \\_atom_site.label_alt_id
+        \\ATOM   1  N  N   GLY A 1 1  0.000 0.000 0.000 1.00 10.0 .
+        \\ATOM   2  O  O   GLY A 1 1  1.200 1.100 0.000 1.00 10.0 .
+        \\ATOM   3  O  O   HOH B 2 1  2.700 0.200 0.000 0.50 12.0 .
+        \\#
+    ;
+
+    var mdl = try mmcif.parseModel(testing.allocator, water_cif);
+    defer mdl.deinit();
+
+    const result = try addHydrogensWithConfig(&mdl, null, null, .{
+        .water = .{
+            .enabled = true,
+            .occupancy_cutoff = 0.66,
+        },
+    });
+
+    try testing.expectEqual(@as(u32, 0), result.n_placed);
+    try testing.expectEqual(@as(u32, 1), result.n_skipped_quality_filter);
+}
+
+test "water placement skips coordinated water oxygen" {
+    const water_cif =
+        \\data_WATER_METAL
+        \\#
+        \\loop_
+        \\_entity.id
+        \\_entity.type
+        \\1 polymer
+        \\2 water
+        \\#
+        \\loop_
+        \\_atom_site.group_PDB
+        \\_atom_site.id
+        \\_atom_site.type_symbol
+        \\_atom_site.label_atom_id
+        \\_atom_site.label_comp_id
+        \\_atom_site.label_asym_id
+        \\_atom_site.label_entity_id
+        \\_atom_site.label_seq_id
+        \\_atom_site.Cartn_x
+        \\_atom_site.Cartn_y
+        \\_atom_site.Cartn_z
+        \\_atom_site.occupancy
+        \\_atom_site.B_iso_or_equiv
+        \\_atom_site.label_alt_id
+        \\ATOM   1  N  N   GLY A 1 1  0.000 0.000 0.000 1.00 10.0 .
+        \\ATOM   2  O  O   GLY A 1 1  1.200 1.100 0.000 1.00 10.0 .
+        \\ATOM   3  O  O   HOH B 2 1  2.700 0.200 0.000 1.00 12.0 .
+        \\#
+    ;
+
+    var mdl = try mmcif.parseModel(testing.allocator, water_cif);
+    defer mdl.deinit();
+    mdl.atoms.items[2].flags.bonded_inter_residue = true;
+
+    const result = try addHydrogensWithConfig(&mdl, null, null, .{
+        .water = .{ .enabled = true },
+    });
+
+    try testing.expectEqual(@as(u32, 0), result.n_placed);
+    try testing.expect(result.n_skipped_inter_residue > 0);
+}
+
+test "water phantom mode places zero-occupancy hydrogens for isolated water" {
+    const water_cif =
+        \\data_WATER_PHANTOM
+        \\#
+        \\loop_
+        \\_entity.id
+        \\_entity.type
+        \\1 water
+        \\#
+        \\loop_
+        \\_atom_site.group_PDB
+        \\_atom_site.id
+        \\_atom_site.type_symbol
+        \\_atom_site.label_atom_id
+        \\_atom_site.label_comp_id
+        \\_atom_site.label_asym_id
+        \\_atom_site.label_entity_id
+        \\_atom_site.label_seq_id
+        \\_atom_site.Cartn_x
+        \\_atom_site.Cartn_y
+        \\_atom_site.Cartn_z
+        \\_atom_site.occupancy
+        \\_atom_site.B_iso_or_equiv
+        \\_atom_site.label_alt_id
+        \\HETATM 1  O  O   HOH A 1 1  0.000 0.000 0.000 1.00 12.0 .
+        \\#
+    ;
+
+    var mdl = try mmcif.parseModel(testing.allocator, water_cif);
+    defer mdl.deinit();
+
+    const result = try addHydrogensWithConfig(&mdl, null, null, .{
+        .water = .{
+            .enabled = true,
+            .phantom = true,
+        },
+    });
+
+    try testing.expectEqual(@as(u32, 2), result.n_placed);
+    var zero_occ: u32 = 0;
+    for (mdl.atoms.items) |atom| {
+        if (atom.is_added) {
+            try testing.expectApproxEqAbs(@as(f32, 0.0), atom.occupancy, 1e-6);
+            zero_occ += 1;
+        }
+    }
+    try testing.expectEqual(@as(u32, 2), zero_occ);
+}
+
+test "water placement skips water near metal by distance" {
+    const water_cif =
+        \\data_WATER_METAL_DIST
+        \\#
+        \\loop_
+        \\_entity.id
+        \\_entity.type
+        \\1 water
+        \\2 non-polymer
+        \\#
+        \\loop_
+        \\_atom_site.group_PDB
+        \\_atom_site.id
+        \\_atom_site.type_symbol
+        \\_atom_site.label_atom_id
+        \\_atom_site.label_comp_id
+        \\_atom_site.label_asym_id
+        \\_atom_site.label_entity_id
+        \\_atom_site.label_seq_id
+        \\_atom_site.Cartn_x
+        \\_atom_site.Cartn_y
+        \\_atom_site.Cartn_z
+        \\_atom_site.occupancy
+        \\_atom_site.B_iso_or_equiv
+        \\_atom_site.label_alt_id
+        \\HETATM 1  O  O   HOH A 1 1  0.000 0.000 0.000 1.00 12.0 .
+        \\HETATM 2  ZN ZN   ZN B 2 1  2.500 0.000 0.000 1.00 10.0 .
+        \\#
+    ;
+
+    var mdl = try mmcif.parseModel(testing.allocator, water_cif);
+    defer mdl.deinit();
+
+    const result = try addHydrogensWithConfig(&mdl, null, null, .{
+        .water = .{ .enabled = true },
+    });
+
+    try testing.expectEqual(@as(u32, 0), result.n_placed);
+    try testing.expect(result.n_skipped_inter_residue > 0);
+}
+
+test "water placement respects B-factor cutoff" {
+    const water_cif =
+        \\data_WATER_BFAC
+        \\#
+        \\loop_
+        \\_entity.id
+        \\_entity.type
+        \\1 polymer
+        \\2 water
+        \\#
+        \\loop_
+        \\_atom_site.group_PDB
+        \\_atom_site.id
+        \\_atom_site.type_symbol
+        \\_atom_site.label_atom_id
+        \\_atom_site.label_comp_id
+        \\_atom_site.label_asym_id
+        \\_atom_site.label_entity_id
+        \\_atom_site.label_seq_id
+        \\_atom_site.Cartn_x
+        \\_atom_site.Cartn_y
+        \\_atom_site.Cartn_z
+        \\_atom_site.occupancy
+        \\_atom_site.B_iso_or_equiv
+        \\_atom_site.label_alt_id
+        \\ATOM   1  N  N   GLY A 1 1  0.000 0.000 0.000 1.00 10.0 .
+        \\ATOM   2  O  O   GLY A 1 1  1.200 1.100 0.000 1.00 10.0 .
+        \\ATOM   3  O  O   HOH B 2 1  2.700 0.200 0.000 1.00 50.0 .
+        \\#
+    ;
+
+    var mdl = try mmcif.parseModel(testing.allocator, water_cif);
+    defer mdl.deinit();
+
+    const result = try addHydrogensWithConfig(&mdl, null, null, .{
+        .water = .{
+            .enabled = true,
+            .b_factor_cutoff = 40.0,
+        },
+    });
+
+    try testing.expectEqual(@as(u32, 0), result.n_placed);
+    try testing.expectEqual(@as(u32, 1), result.n_skipped_quality_filter);
+}
+
+test "water placement skips water with existing H atoms" {
+    const water_cif =
+        \\data_WATER_EXIST_H
+        \\#
+        \\loop_
+        \\_entity.id
+        \\_entity.type
+        \\1 polymer
+        \\2 water
+        \\#
+        \\loop_
+        \\_atom_site.group_PDB
+        \\_atom_site.id
+        \\_atom_site.type_symbol
+        \\_atom_site.label_atom_id
+        \\_atom_site.label_comp_id
+        \\_atom_site.label_asym_id
+        \\_atom_site.label_entity_id
+        \\_atom_site.label_seq_id
+        \\_atom_site.Cartn_x
+        \\_atom_site.Cartn_y
+        \\_atom_site.Cartn_z
+        \\_atom_site.occupancy
+        \\_atom_site.B_iso_or_equiv
+        \\_atom_site.label_alt_id
+        \\ATOM   1  N  N   GLY A 1 1  0.000 0.000 0.000 1.00 10.0 .
+        \\ATOM   2  O  O   GLY A 1 1  1.200 1.100 0.000 1.00 10.0 .
+        \\ATOM   3  O  O   HOH B 2 1  2.700 0.200 0.000 1.00 12.0 .
+        \\ATOM   4  H  H1  HOH B 2 1  3.100 0.800 0.500 1.00 12.0 .
+        \\#
+    ;
+
+    var mdl = try mmcif.parseModel(testing.allocator, water_cif);
+    defer mdl.deinit();
+
+    const result = try addHydrogensWithConfig(&mdl, null, null, .{
+        .water = .{ .enabled = true },
+    });
+
+    try testing.expectEqual(@as(u32, 0), result.n_placed);
+    try testing.expectEqual(@as(u32, 1), result.n_skipped_existing);
 }
 
 test "backbone NH placed in peptide plane using C(i-1)" {

@@ -20,6 +20,7 @@ pub const BatchConfig = struct {
     no_flip: bool = false,
     quiet: bool = false,
     json_version: []const u8 = "", // passed from main
+    water: zreduce.place.WaterConfig = .{},
 };
 
 // ---------------------------------------------------------------------------
@@ -142,6 +143,7 @@ fn processFileInBatch(
         .no_flip = config.no_flip,
         .opt_threads = 1,
         .quiet = true, // suppress per-file diagnostics in batch mode
+        .water = config.water,
     };
 
     var timer = try std.time.Timer.start();

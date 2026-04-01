@@ -55,6 +55,11 @@ zreduce run input.cif -o output.cif --no-flip
 # With validation diagnostics
 zreduce run input.cif -o output.cif --validate
 
+# Add water hydrogens with occupancy/B-factor filtering
+zreduce run input.cif -o output.cif --water
+zreduce run input.cif -o output.cif --water-phantom
+zreduce run input.cif -o output.cif --water --water-occ-cutoff 0.5 --water-b-cutoff 30
+
 # Write JSON optimization log
 zreduce run input.cif -o output.cif --json log.json
 
@@ -85,6 +90,10 @@ zreduce uses subcommands: `run` for single files, `batch` for directories.
 | `--no-opt` | Skip optimization (placement only) |
 | `--no-flip` | Disable Asn/Gln/His flips |
 | `--validate` | Print detailed validation diagnostics |
+| `--water` | Add water hydrogens |
+| `--water-phantom` | Allow zero-occupancy phantom water hydrogens |
+| `--water-occ-cutoff N` | Skip waters with occupancy below `N` |
+| `--water-b-cutoff N` | Skip waters with B-factor above `N` |
 
 ### `zreduce batch` — directory
 
@@ -98,6 +107,10 @@ zreduce uses subcommands: `run` for single files, `batch` for directories.
 | `--no-opt` | Skip optimization |
 | `--no-flip` | Disable flips |
 | `--quiet` | Suppress progress output |
+| `--water` | Add water hydrogens |
+| `--water-phantom` | Allow zero-occupancy phantom water hydrogens |
+| `--water-occ-cutoff N` | Skip waters with occupancy below `N` |
+| `--water-b-cutoff N` | Skip waters with B-factor above `N` |
 
 ### Global flags
 

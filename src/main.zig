@@ -12,6 +12,7 @@ const RunConfig = struct {
     no_opt: bool = false,
     no_flip: bool = false,
     validate: bool = false,
+    water: zreduce.place.WaterConfig = .{},
 };
 
 fn parseRunArgs(args: []const []const u8) ?RunConfig {
@@ -52,6 +53,45 @@ fn parseRunArgs(args: []const []const u8) ?RunConfig {
             config.no_flip = true;
         } else if (std.mem.eql(u8, arg, "--validate")) {
             config.validate = true;
+        } else if (std.mem.eql(u8, arg, "--water")) {
+            config.water.enabled = true;
+        } else if (std.mem.eql(u8, arg, "--no-water")) {
+            config.water.enabled = false;
+        } else if (std.mem.eql(u8, arg, "--water-phantom")) {
+            config.water.enabled = true;
+            config.water.phantom = true;
+        } else if (std.mem.eql(u8, arg, "--water-occ-cutoff")) {
+            i += 1;
+            if (i >= args.len) {
+                std.debug.print("Error: --water-occ-cutoff requires a numeric argument\n", .{});
+                std.process.exit(1);
+            }
+            const val = std.fmt.parseFloat(f32, args[i]) catch {
+                std.debug.print("Error: invalid water occupancy cutoff '{s}'\n", .{args[i]});
+                std.process.exit(1);
+            };
+            if (!std.math.isFinite(val) or val < 0.0 or val > 1.0) {
+                std.debug.print("Error: --water-occ-cutoff must be between 0.0 and 1.0\n", .{});
+                std.process.exit(1);
+            }
+            config.water.occupancy_cutoff = val;
+            config.water.enabled = true;
+        } else if (std.mem.eql(u8, arg, "--water-b-cutoff")) {
+            i += 1;
+            if (i >= args.len) {
+                std.debug.print("Error: --water-b-cutoff requires a numeric argument\n", .{});
+                std.process.exit(1);
+            }
+            const val = std.fmt.parseFloat(f32, args[i]) catch {
+                std.debug.print("Error: invalid water B-factor cutoff '{s}'\n", .{args[i]});
+                std.process.exit(1);
+            };
+            if (!std.math.isFinite(val) or val < 0.0) {
+                std.debug.print("Error: --water-b-cutoff must be a non-negative number\n", .{});
+                std.process.exit(1);
+            }
+            config.water.b_factor_cutoff = val;
+            config.water.enabled = true;
         } else if (arg.len > 0 and arg[0] == '-') {
             std.debug.print("Error: unknown option '{s}'\n", .{arg});
             std.process.exit(1);
@@ -107,6 +147,10 @@ fn printRunUsage() void {
         \\    --no-opt           Skip optimization
         \\    --no-flip          Disable Asn/Gln/His flips
         \\    --validate         Print validation diagnostics
+        \\    --water            Add water hydrogens (default: off)
+        \\    --water-phantom    Allow zero-occupancy phantom water H when orientation is underdetermined
+        \\    --water-occ-cutoff N  Skip waters with occupancy below N (default: 0.66)
+        \\    --water-b-cutoff N    Skip waters with B-factor above N (default: 40.0)
         \\
     , .{});
 }
@@ -195,6 +239,45 @@ fn parseBatchArgs(args: []const []const u8) ?zreduce.batch.BatchConfig {
             config.no_flip = true;
         } else if (std.mem.eql(u8, arg, "--quiet")) {
             config.quiet = true;
+        } else if (std.mem.eql(u8, arg, "--water")) {
+            config.water.enabled = true;
+        } else if (std.mem.eql(u8, arg, "--no-water")) {
+            config.water.enabled = false;
+        } else if (std.mem.eql(u8, arg, "--water-phantom")) {
+            config.water.enabled = true;
+            config.water.phantom = true;
+        } else if (std.mem.eql(u8, arg, "--water-occ-cutoff")) {
+            i += 1;
+            if (i >= args.len) {
+                std.debug.print("Error: --water-occ-cutoff requires a numeric argument\n", .{});
+                std.process.exit(1);
+            }
+            const val = std.fmt.parseFloat(f32, args[i]) catch {
+                std.debug.print("Error: invalid water occupancy cutoff '{s}'\n", .{args[i]});
+                std.process.exit(1);
+            };
+            if (!std.math.isFinite(val) or val < 0.0 or val > 1.0) {
+                std.debug.print("Error: --water-occ-cutoff must be between 0.0 and 1.0\n", .{});
+                std.process.exit(1);
+            }
+            config.water.occupancy_cutoff = val;
+            config.water.enabled = true;
+        } else if (std.mem.eql(u8, arg, "--water-b-cutoff")) {
+            i += 1;
+            if (i >= args.len) {
+                std.debug.print("Error: --water-b-cutoff requires a numeric argument\n", .{});
+                std.process.exit(1);
+            }
+            const val = std.fmt.parseFloat(f32, args[i]) catch {
+                std.debug.print("Error: invalid water B-factor cutoff '{s}'\n", .{args[i]});
+                std.process.exit(1);
+            };
+            if (!std.math.isFinite(val) or val < 0.0) {
+                std.debug.print("Error: --water-b-cutoff must be a non-negative number\n", .{});
+                std.process.exit(1);
+            }
+            config.water.b_factor_cutoff = val;
+            config.water.enabled = true;
         } else if (arg.len > 0 and arg[0] == '-') {
             std.debug.print("Error: unknown option '{s}'\n", .{arg});
             std.process.exit(1);
@@ -232,6 +315,10 @@ fn printBatchUsage() void {
         \\    --no-opt           Skip optimization
         \\    --no-flip          Disable flips
         \\    --quiet            Suppress progress output
+        \\    --water            Add water hydrogens (default: off)
+        \\    --water-phantom    Allow zero-occupancy phantom water H when orientation is underdetermined
+        \\    --water-occ-cutoff N  Skip waters with occupancy below N (default: 0.66)
+        \\    --water-b-cutoff N    Skip waters with B-factor above N (default: 40.0)
         \\
     , .{});
 }
@@ -274,6 +361,7 @@ fn runSubcommand(allocator: Allocator, args: []const []const u8) void {
         .no_opt = config.no_opt,
         .no_flip = config.no_flip,
         .validate_flag = config.validate,
+        .water = config.water,
     };
 
     const result = zreduce.run.processFile(allocator, proc_config) catch |err| {
