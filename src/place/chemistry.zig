@@ -5,6 +5,7 @@
 
 const std = @import("std");
 const element = @import("../element.zig");
+const protonation = @import("protonation.zig");
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -25,6 +26,7 @@ const DA = element.AtomFlags{ .donor = true, .acceptor = true };
 const ARA = element.AtomFlags{ .aromatic = true, .acceptor = true };
 const ARD = element.AtomFlags{ .aromatic = true, .donor = true };
 const ARDA = element.AtomFlags{ .aromatic = true, .donor = true, .acceptor = true };
+const ARP = element.AtomFlags{ .aromatic = true, .donor = true, .positive = true };
 const NEG_A = element.AtomFlags{ .negative = true, .acceptor = true };
 const POS_D = element.AtomFlags{ .positive = true, .donor = true };
 const NONE = element.AtomFlags{};
@@ -180,8 +182,8 @@ const his_sc = [_]AnnotEntry{
     a(" CG ", .Car, ARA),
     a("CD2 ", .Car, ARA),
     a("CE1 ", .Car, ARA),
-    a("ND1 ", .Nacc, ARDA),  // donor+acceptor: protonation-dependent
-    a("NE2 ", .Nacc, ARDA),  // donor+acceptor: protonation-dependent
+    a("ND1 ", .Nacc, ARDA), // donor+acceptor: protonation-dependent
+    a("NE2 ", .Nacc, ARDA), // donor+acceptor: protonation-dependent
 };
 
 // ---------------------------------------------------------------------------
@@ -229,7 +231,15 @@ fn isStandardAminoAcid(comp_id: []const u8) bool {
 /// - comp_id is not one of the 20 standard amino acids
 /// - atom_name has no specific annotation (e.g. ALA CB — use generic element type)
 pub fn getAnnotation(comp_id: []const u8, atom_name: [4]u8) ?ChemAnnotation {
+    return getAnnotationWithOverride(comp_id, atom_name, null);
+}
+
+pub fn getAnnotationWithOverride(comp_id: []const u8, atom_name: [4]u8, state: ?protonation.ResidueState) ?ChemAnnotation {
     if (!isStandardAminoAcid(comp_id)) return null;
+
+    if (state) |s| {
+        if (getOverrideAnnotation(comp_id, atom_name, s)) |ann| return ann;
+    }
 
     // Check side-chain annotations first
     if (getSideChainSlice(comp_id)) |sc_entries| {
@@ -238,6 +248,77 @@ pub fn getAnnotation(comp_id: []const u8, atom_name: [4]u8) ?ChemAnnotation {
 
     // Fall back to backbone annotations
     return lookupName(&backbone_annotations, atom_name);
+}
+
+fn getOverrideAnnotation(comp_id: []const u8, atom_name: [4]u8, state: protonation.ResidueState) ?ChemAnnotation {
+    if (std.mem.eql(u8, comp_id, "HIS") and state == .his) {
+        if (nameEql(&atom_name, &n("ND1 "))) {
+            return switch (state.his) {
+                .auto => .{ .atom_type = .Nacc, .flags = ARDA },
+                .hid => .{ .atom_type = .N, .flags = ARD },
+                .hie => .{ .atom_type = .Nacc, .flags = ARA },
+                .hip => .{ .atom_type = .N, .flags = ARP },
+            };
+        }
+        if (nameEql(&atom_name, &n("NE2 "))) {
+            return switch (state.his) {
+                .auto => .{ .atom_type = .Nacc, .flags = ARDA },
+                .hid => .{ .atom_type = .Nacc, .flags = ARA },
+                .hie => .{ .atom_type = .N, .flags = ARD },
+                .hip => .{ .atom_type = .N, .flags = ARP },
+            };
+        }
+    }
+
+    if (std.mem.eql(u8, comp_id, "ASP") and state == .asp) {
+        if (nameEql(&atom_name, &n("OD1 "))) {
+            return switch (state.asp) {
+                .deprotonated => .{ .atom_type = .O, .flags = NEG_A },
+                .atom1 => .{ .atom_type = .O, .flags = D },
+                .atom2 => .{ .atom_type = .O, .flags = A },
+            };
+        }
+        if (nameEql(&atom_name, &n("OD2 "))) {
+            return switch (state.asp) {
+                .deprotonated => .{ .atom_type = .O, .flags = NEG_A },
+                .atom1 => .{ .atom_type = .O, .flags = A },
+                .atom2 => .{ .atom_type = .O, .flags = D },
+            };
+        }
+    }
+
+    if (std.mem.eql(u8, comp_id, "GLU") and state == .glu) {
+        if (nameEql(&atom_name, &n("OE1 "))) {
+            return switch (state.glu) {
+                .deprotonated => .{ .atom_type = .O, .flags = NEG_A },
+                .atom1 => .{ .atom_type = .O, .flags = D },
+                .atom2 => .{ .atom_type = .O, .flags = A },
+            };
+        }
+        if (nameEql(&atom_name, &n("OE2 "))) {
+            return switch (state.glu) {
+                .deprotonated => .{ .atom_type = .O, .flags = NEG_A },
+                .atom1 => .{ .atom_type = .O, .flags = A },
+                .atom2 => .{ .atom_type = .O, .flags = D },
+            };
+        }
+    }
+
+    if (std.mem.eql(u8, comp_id, "LYS") and state == .lys and nameEql(&atom_name, &n(" NZ "))) {
+        return switch (state.lys) {
+            .charged => .{ .atom_type = .N, .flags = POS_D },
+            .neutral => .{ .atom_type = .N, .flags = D },
+        };
+    }
+
+    if (std.mem.eql(u8, comp_id, "CYS") and state == .cys and nameEql(&atom_name, &n(" SG "))) {
+        return switch (state.cys) {
+            .thiol => .{ .atom_type = .S, .flags = A },
+            .thiolate => .{ .atom_type = .S, .flags = NEG_A },
+        };
+    }
+
+    return null;
 }
 
 /// Returns terminal-specific annotation for an atom based on its terminal state.
@@ -310,6 +391,28 @@ test "HIS NE2 is aromatic donor/acceptor nitrogen" {
     try std.testing.expect(ann.?.flags.aromatic == true);
     try std.testing.expect(ann.?.flags.acceptor == true);
     try std.testing.expect(ann.?.flags.donor == true);
+}
+
+test "HIS override maps ND1 and NE2 chemistry" {
+    const hid_nd1 = getAnnotationWithOverride("HIS", n("ND1 "), .{ .his = .hid }).?;
+    try std.testing.expectEqual(element.AtomType.N, hid_nd1.atom_type);
+    try std.testing.expect(hid_nd1.flags.donor);
+    try std.testing.expect(!hid_nd1.flags.acceptor);
+
+    const hid_ne2 = getAnnotationWithOverride("HIS", n("NE2 "), .{ .his = .hid }).?;
+    try std.testing.expectEqual(element.AtomType.Nacc, hid_ne2.atom_type);
+    try std.testing.expect(hid_ne2.flags.acceptor);
+    try std.testing.expect(!hid_ne2.flags.donor);
+}
+
+test "ASP protonated override removes negative flag from protonated oxygen" {
+    const od2 = getAnnotationWithOverride("ASP", n("OD2 "), .{ .asp = .atom2 }).?;
+    try std.testing.expect(od2.flags.donor);
+    try std.testing.expect(!od2.flags.negative);
+
+    const od1 = getAnnotationWithOverride("ASP", n("OD1 "), .{ .asp = .atom2 }).?;
+    try std.testing.expect(od1.flags.acceptor);
+    try std.testing.expect(!od1.flags.negative);
 }
 
 test "ALA CB has no annotation" {
