@@ -84,7 +84,11 @@ fn collectAltlocs(mdl: *const Model, res: Residue) AltlocSet {
                 break;
             }
         }
-        if (!found and result.count < 10) {
+        if (!found) {
+            if (result.count >= result.locs.len) {
+                std.log.warn("residue has more than {d} altlocs, excess ignored", .{result.locs.len});
+                break;
+            }
             result.locs[result.count] = a.altloc;
             result.count += 1;
         }
