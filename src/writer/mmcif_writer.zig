@@ -395,21 +395,12 @@ fn writeCifValue(writer: anytype, val: []const u8) !void {
         }
         try writer.writeByte('"');
     } else {
-        // Both quote types — single-quote and escape the inner single quotes
-        // by splitting: 'can'"'"'t' → valid but ugly. Simpler: use double quote
-        // and accept that the inner double-quotes may break. In practice this
-        // almost never happens in CIF data. Fall back to replacing quotes.
-        try writer.writeByte('"');
-        for (val) |c| {
-            if (c == '\n' or c == '\r') {
-                try writer.writeByte(' ');
-            } else if (c == '"') {
-                try writer.writeByte('\'');
-            } else {
-                try writer.writeByte(c);
-            }
-        }
-        try writer.writeByte('"');
+        // Both quote types — use semicolon text field (the only lossless CIF option).
+        // Semicolon text fields must start on a new line with ';' as the first char.
+        try writer.writeAll("\n;");
+        try writer.writeAll(val);
+        if (val.len > 0 and val[val.len - 1] != '\n') try writer.writeByte('\n');
+        try writer.writeAll(";\n");
     }
 }
 
@@ -589,8 +580,11 @@ fn writeFixedFloat3(writer: anytype, val: f32) !void {
         return writer.print("{d:.3}", .{val});
     }
     if (val < 0) {
+        const abs_val = -val;
+        const scaled: u64 = @intFromFloat(@round(abs_val * 1000.0));
+        if (scaled == 0) return writeFixedFloat3(writer, 0.0);
         try writer.writeByte('-');
-        return writeFixedFloat3(writer, -val);
+        return writeFixedFloat3(writer, abs_val);
     }
     const scaled: u64 = @intFromFloat(@round(val * 1000.0));
     const int_part = scaled / 1000;
@@ -613,8 +607,11 @@ fn writeFixedFloat2(writer: anytype, val: f32) !void {
         return writer.print("{d:.2}", .{val});
     }
     if (val < 0) {
+        const abs_val = -val;
+        const scaled: u64 = @intFromFloat(@round(abs_val * 100.0));
+        if (scaled == 0) return writeFixedFloat2(writer, 0.0);
         try writer.writeByte('-');
-        return writeFixedFloat2(writer, -val);
+        return writeFixedFloat2(writer, abs_val);
     }
     const scaled: u64 = @intFromFloat(@round(val * 100.0));
     const int_part = scaled / 100;
@@ -1058,6 +1055,60 @@ test "writeCifValue quotes special-char-prefixed values" {
         try writeCifValue(buf.writer(testing.allocator), marker);
         try testing.expectEqualStrings(marker, buf.items);
     }
+}
+
+test "writeCifValue uses semicolon field when value has both quote types" {
+    const val = "it's a \"test\"";
+    var buf = std.ArrayList(u8).empty;
+    defer buf.deinit(testing.allocator);
+    try writeCifValue(buf.writer(testing.allocator), val);
+    // Should start with newline+semicolon and end with newline+semicolon+newline
+    try testing.expect(std.mem.startsWith(u8, buf.items, "\n;"));
+    try testing.expect(std.mem.endsWith(u8, buf.items, ";\n"));
+    // The original value must be preserved verbatim
+    try testing.expect(std.mem.indexOf(u8, buf.items, val) != null);
+}
+
+test "writeFixedFloat3 no negative zero" {
+    var buf: [32]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buf);
+    const w = fbs.writer();
+
+    // -0.0004 rounds to 0 → must output "0.000", not "-0.000"
+    fbs.reset();
+    try writeFixedFloat3(w, -0.0004);
+    try testing.expectEqualStrings("0.000", fbs.getWritten());
+
+    // -0.0 → "0.000"
+    fbs.reset();
+    try writeFixedFloat3(w, -0.0);
+    try testing.expectEqualStrings("0.000", fbs.getWritten());
+
+    // A genuine small negative should still carry the minus sign
+    fbs.reset();
+    try writeFixedFloat3(w, -0.001);
+    try testing.expectEqualStrings("-0.001", fbs.getWritten());
+}
+
+test "writeFixedFloat2 no negative zero" {
+    var buf: [32]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buf);
+    const w = fbs.writer();
+
+    // -0.004 rounds to 0 → must output "0.00", not "-0.00"
+    fbs.reset();
+    try writeFixedFloat2(w, -0.004);
+    try testing.expectEqualStrings("0.00", fbs.getWritten());
+
+    // -0.0 → "0.00"
+    fbs.reset();
+    try writeFixedFloat2(w, -0.0);
+    try testing.expectEqualStrings("0.00", fbs.getWritten());
+
+    // A genuine small negative should still carry the minus sign
+    fbs.reset();
+    try writeFixedFloat2(w, -0.01);
+    try testing.expectEqualStrings("-0.01", fbs.getWritten());
 }
 
 test "writeWithDocument preserves bare null alt ids on original rows" {
