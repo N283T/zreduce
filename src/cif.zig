@@ -15,6 +15,7 @@ pub const isNull = value.isNull;
 pub const asFloat = value.asFloat;
 pub const asFloatOr = value.asFloatOr;
 pub const asInt = value.asInt;
+pub const asIntOr = value.asIntOr;
 pub const asString = value.asString;
 
 test {
