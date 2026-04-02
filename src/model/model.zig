@@ -48,6 +48,42 @@ pub const Model = struct {
         return self.atoms.items[res.atom_start..res.atom_end];
     }
 
+    /// Remove all hydrogen atoms from the model and rebuild indices.
+    /// Returns the number of hydrogen atoms removed.
+    pub fn stripHydrogens(self: *Model) u32 {
+        var write: u32 = 0;
+        var removed: u32 = 0;
+        var res_idx: u32 = 0;
+
+        // Compact atoms, skipping hydrogens, and update residue atom_start/atom_end.
+        for (self.residues.items) |*res| {
+            const new_start = write;
+            var read = res.atom_start;
+            while (read < res.atom_end) : (read += 1) {
+                if (self.atoms.items[read].is_hydrogen) {
+                    removed += 1;
+                } else {
+                    if (write != read) {
+                        self.atoms.items[write] = self.atoms.items[read];
+                    }
+                    write += 1;
+                }
+            }
+            res.atom_start = new_start;
+            res.atom_end = write;
+            res_idx += 1;
+        }
+
+        self.atoms.items.len = write;
+
+        // Bonds reference atom indices — remove bonds involving removed atoms.
+        // Since we compacted, we need to rebuild bond indices. For simplicity,
+        // clear all bonds (they will be re-parsed from struct_conn after strip).
+        self.bonds.items.len = 0;
+
+        return removed;
+    }
+
     /// Find the index of an atom by name within a residue. Returns null if not found.
     pub fn findAtomInResidue(self: *const Model, res: Residue, name: []const u8) ?u32 {
         const atoms = self.residueAtoms(res);

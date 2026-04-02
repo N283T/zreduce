@@ -24,6 +24,7 @@ pub const BatchConfig = struct {
     bond_policy: zreduce.place.BondPolicy = .{},
     protonation_path: ?[]const u8 = null,
     fix_path: ?[]const u8 = null,
+    strip_h: bool = false,
 };
 
 // ---------------------------------------------------------------------------
@@ -150,6 +151,7 @@ fn processFileInBatch(
         .bond_policy = config.bond_policy,
         .protonation_path = config.protonation_path,
         .fix_path = config.fix_path,
+        .strip_h = config.strip_h,
     };
 
     var timer = try std.time.Timer.start();

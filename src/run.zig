@@ -20,6 +20,7 @@ pub const ProcessConfig = struct {
     protonation_path: ?[]const u8 = null,
     fix_path: ?[]const u8 = null,
     dump_movers_path: ?[]const u8 = null,
+    strip_h: bool = false,
 };
 
 pub const ProcessResult = struct {
@@ -46,6 +47,32 @@ pub fn readFile(allocator: Allocator, path: []const u8) ![]const u8 {
     const file = try std.fs.cwd().openFile(path, .{});
     defer file.close();
     return try file.readToEndAlloc(allocator, 1024 * 1024 * 1024);
+}
+
+/// Remove hydrogen rows from the CIF document's _atom_site loop.
+/// This keeps the document in sync with the model after stripHydrogens().
+fn stripDocumentHydrogens(block: *zreduce.cif.Block) void {
+    const loop = block.findLoopMut("_atom_site.type_symbol") orelse return;
+    const type_col = loop.findTag("_atom_site.type_symbol") orelse return;
+    const w = loop.width();
+    const n_rows = loop.length();
+
+    var write: usize = 0;
+    var read: usize = 0;
+    while (read < n_rows) : (read += 1) {
+        const type_sym = loop.val(read, type_col) orelse continue;
+        const is_h = std.ascii.eqlIgnoreCase(type_sym, "H") or
+            std.ascii.eqlIgnoreCase(type_sym, "D");
+        if (is_h) continue;
+
+        if (write != read) {
+            for (0..w) |col| {
+                loop.values.items[write * w + col] = loop.values.items[read * w + col];
+            }
+        }
+        write += 1;
+    }
+    loop.values.items.len = write * w;
 }
 
 fn markAbsentHydrogens(mdl: *zreduce.model.Model) void {
@@ -79,8 +106,20 @@ pub fn processFile(allocator: Allocator, config: ProcessConfig) !ProcessResult {
     var mdl = try zreduce.mmcif.parseModel(allocator, source);
     defer mdl.deinit();
 
-    // 3a. Parse inline component dictionary (takes priority over external CCD per component)
+    // 3a. Strip existing hydrogens if requested
+    if (config.strip_h) {
+        const n_stripped = mdl.stripHydrogens();
+        if (!config.quiet and n_stripped > 0) {
+            std.debug.print("  Stripped {d} existing H atoms\n", .{n_stripped});
+        }
+        // Also strip H rows from the CIF document's _atom_site loop so that
+        // the writer's orig_loop row indices stay in sync with the model.
+        stripDocumentHydrogens(&doc.blocks.items[0]);
+    }
+
     const block = &doc.blocks.items[0];
+
+    // 3b. Parse inline component dictionary (takes priority over external CCD per component)
     var inline_dict = try zreduce.mmcif.parseInlineComponents(allocator, block);
     defer if (inline_dict) |*d| d.deinit();
 
