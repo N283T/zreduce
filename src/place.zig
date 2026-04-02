@@ -10,6 +10,10 @@ pub const topology = @import("place/topology.zig");
 pub const ccd_derive = @import("place/ccd_derive.zig");
 pub const protonation = @import("place/protonation.zig");
 pub const placer = @import("place/placer.zig");
+pub const lookup = @import("place/lookup.zig");
+pub const terminal_placement = @import("place/terminal.zig");
+pub const execute = @import("place/execute.zig");
+pub const water = @import("place/water.zig");
 
 // Convenience re-exports
 pub const addHydrogens = placer.addHydrogens;
