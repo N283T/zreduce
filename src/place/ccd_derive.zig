@@ -55,13 +55,16 @@ pub fn derivePlans(
         const heavy_idx = findBondedHeavyAtom(component, @intCast(atom_idx)) orelse continue;
         const heavy_atom = component.atoms[heavy_idx];
 
-        // Skip leaving H atoms whose parent heavy atom is involved in an
-        // inter-residue bond. The leaving_atom_flag marks atoms that *may* leave
-        // during polymerization (e.g. H2 on backbone N for peptide bond, HO1 on
-        // glycosidic O1). We only skip when the parent actually has an inter-residue
-        // bond — otherwise the H should still be placed (e.g. HO2-HO6 on sugars
-        // where the OH is intact).
-        if (atom.leaving and nameExists(heavy_atom.name, inter_residue_atoms)) continue;
+        // Skip leaving H atoms whose parent heavy atom is absent from the model
+        // or involved in an inter-residue bond. The leaving_atom_flag marks atoms
+        // that *may* leave during polymerization (e.g. H2 on backbone N for peptide
+        // bond, HO1 on glycosidic O1, HXT on C-terminal OXT). We skip when:
+        //  - the parent heavy atom is not in the structure (consumed by polymer bond), or
+        //  - the parent has an explicit inter-residue bond.
+        // Non-leaving H and leaving H with intact parent are still placed (e.g.
+        // HO2-HO6 on sugars where the OH is intact).
+        if (atom.leaving and (!nameExists(heavy_atom.name, existing_atom_names) or
+            nameExists(heavy_atom.name, inter_residue_atoms))) continue;
 
         // Count inter-residue bonds on this heavy atom
         var extra: u8 = 0;
