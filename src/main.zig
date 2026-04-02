@@ -539,13 +539,11 @@ fn compileDictSubcommand(allocator: Allocator, args: []const []const u8) void {
     var file_writer = file.writer(&write_buf);
     zreduce.ccd_binary.writeDict(&file_writer.interface, &dict) catch |err| {
         std.debug.print("Error: failed to write binary dictionary: {s}\n", .{@errorName(err)});
-        file.close();
         std.fs.cwd().deleteFile(output_path) catch {};
         std.process.exit(1);
     };
     file_writer.interface.flush() catch |err| {
         std.debug.print("Error: failed to flush output: {s}\n", .{@errorName(err)});
-        file.close();
         std.fs.cwd().deleteFile(output_path) catch {};
         std.process.exit(1);
     };
