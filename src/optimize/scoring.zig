@@ -54,22 +54,11 @@ pub fn buildScoreContext(
     @memset(moved_atoms, false);
     for (movers) |m| {
         for (m.atom_indices) |ai| {
-            moved_atoms[ai] = true;
-        }
-    }
-
-    // Debug-only: verify mover atom indices are disjoint across movers.
-    if (std.debug.runtime_safety) {
-        for (movers, 0..) |m, mi| {
-            for (m.atom_indices) |ai| {
-                for (movers[mi + 1 ..]) |other| {
-                    for (other.atom_indices) |oai| {
-                        if (ai == oai) {
-                            std.debug.panic("mover atom index {d} appears in multiple movers", .{ai});
-                        }
-                    }
-                }
+            // Debug-only: verify mover atom indices are disjoint across movers.
+            if (std.debug.runtime_safety and moved_atoms[ai]) {
+                std.debug.panic("mover atom index {d} appears in multiple movers", .{ai});
             }
+            moved_atoms[ai] = true;
         }
     }
 
