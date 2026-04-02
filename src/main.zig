@@ -20,6 +20,17 @@ const RunConfig = struct {
     strip_h: bool = false,
 };
 
+/// Fields shared between RunConfig and BatchConfig, parsed by parseCommonOption.
+const CommonOptions = struct {
+    no_opt: bool = false,
+    no_flip: bool = false,
+    water: zreduce.place.WaterConfig = .{},
+    bond_policy: zreduce.place.BondPolicy = .{},
+    protonation_path: ?[]const u8 = null,
+    fix_path: ?[]const u8 = null,
+    strip_h: bool = false,
+};
+
 fn parseBondModeValue(s: []const u8) ?zreduce.place.BondLengthMode {
     if (std.ascii.eqlIgnoreCase(s, "neutron")) return .neutron;
     if (std.ascii.eqlIgnoreCase(s, "xray")) return .xray;
@@ -32,8 +43,114 @@ fn parseOutputIsotopeValue(s: []const u8) ?zreduce.place.OutputIsotope {
     return null;
 }
 
+/// Attempts to parse one common option from args[i.*].
+/// Returns true if the argument was consumed (recognized as a common option).
+/// Advances i.* by one extra if the option takes a value argument.
+fn parseCommonOption(args: []const []const u8, i: *usize, common: *CommonOptions) bool {
+    const arg = args[i.*];
+    if (std.mem.eql(u8, arg, "--no-opt")) {
+        common.no_opt = true;
+        return true;
+    } else if (std.mem.eql(u8, arg, "--no-flip")) {
+        common.no_flip = true;
+        return true;
+    } else if (std.mem.eql(u8, arg, "--water")) {
+        common.water.enabled = true;
+        return true;
+    } else if (std.mem.eql(u8, arg, "--no-water")) {
+        common.water.enabled = false;
+        return true;
+    } else if (std.mem.eql(u8, arg, "--water-phantom")) {
+        common.water.enabled = true;
+        common.water.phantom = true;
+        return true;
+    } else if (std.mem.eql(u8, arg, "--water-occ-cutoff")) {
+        i.* += 1;
+        if (i.* >= args.len) {
+            std.debug.print("Error: --water-occ-cutoff requires a numeric argument\n", .{});
+            std.process.exit(1);
+        }
+        const val = std.fmt.parseFloat(f32, args[i.*]) catch {
+            std.debug.print("Error: invalid water occupancy cutoff '{s}'\n", .{args[i.*]});
+            std.process.exit(1);
+        };
+        if (!std.math.isFinite(val) or val < 0.0 or val > 1.0) {
+            std.debug.print("Error: --water-occ-cutoff must be between 0.0 and 1.0\n", .{});
+            std.process.exit(1);
+        }
+        common.water.occupancy_cutoff = val;
+        common.water.enabled = true;
+        return true;
+    } else if (std.mem.eql(u8, arg, "--water-b-cutoff")) {
+        i.* += 1;
+        if (i.* >= args.len) {
+            std.debug.print("Error: --water-b-cutoff requires a numeric argument\n", .{});
+            std.process.exit(1);
+        }
+        const val = std.fmt.parseFloat(f32, args[i.*]) catch {
+            std.debug.print("Error: invalid water B-factor cutoff '{s}'\n", .{args[i.*]});
+            std.process.exit(1);
+        };
+        if (!std.math.isFinite(val) or val < 0.0) {
+            std.debug.print("Error: --water-b-cutoff must be a non-negative number\n", .{});
+            std.process.exit(1);
+        }
+        common.water.b_factor_cutoff = val;
+        common.water.enabled = true;
+        return true;
+    } else if (std.mem.eql(u8, arg, "--bond-mode")) {
+        i.* += 1;
+        if (i.* >= args.len) {
+            std.debug.print("Error: --bond-mode requires 'neutron' or 'xray'\n", .{});
+            std.process.exit(1);
+        }
+        const parsed = parseBondModeValue(args[i.*]) orelse {
+            std.debug.print("Error: invalid --bond-mode '{s}' (expected 'neutron' or 'xray')\n", .{args[i.*]});
+            std.process.exit(1);
+        };
+        common.bond_policy.mode = parsed;
+        return true;
+    } else if (std.mem.eql(u8, arg, "--isotope")) {
+        i.* += 1;
+        if (i.* >= args.len) {
+            std.debug.print("Error: --isotope requires 'hydrogen'/'h' or 'deuterium'/'d'\n", .{});
+            std.process.exit(1);
+        }
+        const parsed = parseOutputIsotopeValue(args[i.*]) orelse {
+            std.debug.print("Error: invalid --isotope '{s}' (expected hydrogen|h|deuterium|d)\n", .{args[i.*]});
+            std.process.exit(1);
+        };
+        common.bond_policy.output_isotope = parsed;
+        return true;
+    } else if (std.mem.eql(u8, arg, "--deuterium")) {
+        common.bond_policy.output_isotope = .deuterium;
+        return true;
+    } else if (std.mem.eql(u8, arg, "--protonation")) {
+        i.* += 1;
+        if (i.* >= args.len) {
+            std.debug.print("Error: --protonation requires a path argument\n", .{});
+            std.process.exit(1);
+        }
+        common.protonation_path = args[i.*];
+        return true;
+    } else if (std.mem.eql(u8, arg, "--fix")) {
+        i.* += 1;
+        if (i.* >= args.len) {
+            std.debug.print("Error: --fix requires a path argument\n", .{});
+            std.process.exit(1);
+        }
+        common.fix_path = args[i.*];
+        return true;
+    } else if (std.mem.eql(u8, arg, "--strip-h")) {
+        common.strip_h = true;
+        return true;
+    }
+    return false;
+}
+
 fn parseRunArgs(args: []const []const u8) ?RunConfig {
     var config = RunConfig{ .input_path = undefined };
+    var common = CommonOptions{};
     var input_set = false;
     var i: usize = 0;
 
@@ -64,20 +181,6 @@ fn parseRunArgs(args: []const []const u8) ?RunConfig {
                 std.process.exit(1);
             }
             config.json_path = args[i];
-        } else if (std.mem.eql(u8, arg, "--protonation")) {
-            i += 1;
-            if (i >= args.len) {
-                std.debug.print("Error: --protonation requires a path argument\n", .{});
-                std.process.exit(1);
-            }
-            config.protonation_path = args[i];
-        } else if (std.mem.eql(u8, arg, "--fix")) {
-            i += 1;
-            if (i >= args.len) {
-                std.debug.print("Error: --fix requires a path argument\n", .{});
-                std.process.exit(1);
-            }
-            config.fix_path = args[i];
         } else if (std.mem.eql(u8, arg, "--dump-movers")) {
             i += 1;
             if (i >= args.len) {
@@ -85,77 +188,10 @@ fn parseRunArgs(args: []const []const u8) ?RunConfig {
                 std.process.exit(1);
             }
             config.dump_movers_path = args[i];
-        } else if (std.mem.eql(u8, arg, "--no-opt")) {
-            config.no_opt = true;
-        } else if (std.mem.eql(u8, arg, "--no-flip")) {
-            config.no_flip = true;
         } else if (std.mem.eql(u8, arg, "--validate")) {
             config.validate = true;
-        } else if (std.mem.eql(u8, arg, "--water")) {
-            config.water.enabled = true;
-        } else if (std.mem.eql(u8, arg, "--no-water")) {
-            config.water.enabled = false;
-        } else if (std.mem.eql(u8, arg, "--water-phantom")) {
-            config.water.enabled = true;
-            config.water.phantom = true;
-        } else if (std.mem.eql(u8, arg, "--water-occ-cutoff")) {
-            i += 1;
-            if (i >= args.len) {
-                std.debug.print("Error: --water-occ-cutoff requires a numeric argument\n", .{});
-                std.process.exit(1);
-            }
-            const val = std.fmt.parseFloat(f32, args[i]) catch {
-                std.debug.print("Error: invalid water occupancy cutoff '{s}'\n", .{args[i]});
-                std.process.exit(1);
-            };
-            if (!std.math.isFinite(val) or val < 0.0 or val > 1.0) {
-                std.debug.print("Error: --water-occ-cutoff must be between 0.0 and 1.0\n", .{});
-                std.process.exit(1);
-            }
-            config.water.occupancy_cutoff = val;
-            config.water.enabled = true;
-        } else if (std.mem.eql(u8, arg, "--water-b-cutoff")) {
-            i += 1;
-            if (i >= args.len) {
-                std.debug.print("Error: --water-b-cutoff requires a numeric argument\n", .{});
-                std.process.exit(1);
-            }
-            const val = std.fmt.parseFloat(f32, args[i]) catch {
-                std.debug.print("Error: invalid water B-factor cutoff '{s}'\n", .{args[i]});
-                std.process.exit(1);
-            };
-            if (!std.math.isFinite(val) or val < 0.0) {
-                std.debug.print("Error: --water-b-cutoff must be a non-negative number\n", .{});
-                std.process.exit(1);
-            }
-            config.water.b_factor_cutoff = val;
-            config.water.enabled = true;
-        } else if (std.mem.eql(u8, arg, "--bond-mode")) {
-            i += 1;
-            if (i >= args.len) {
-                std.debug.print("Error: --bond-mode requires 'neutron' or 'xray'\n", .{});
-                std.process.exit(1);
-            }
-            const parsed = parseBondModeValue(args[i]) orelse {
-                std.debug.print("Error: invalid --bond-mode '{s}' (expected 'neutron' or 'xray')\n", .{args[i]});
-                std.process.exit(1);
-            };
-            config.bond_policy.mode = parsed;
-        } else if (std.mem.eql(u8, arg, "--isotope")) {
-            i += 1;
-            if (i >= args.len) {
-                std.debug.print("Error: --isotope requires 'hydrogen'/'h' or 'deuterium'/'d'\n", .{});
-                std.process.exit(1);
-            }
-            const parsed = parseOutputIsotopeValue(args[i]) orelse {
-                std.debug.print("Error: invalid --isotope '{s}' (expected hydrogen|h|deuterium|d)\n", .{args[i]});
-                std.process.exit(1);
-            };
-            config.bond_policy.output_isotope = parsed;
-        } else if (std.mem.eql(u8, arg, "--deuterium")) {
-            config.bond_policy.output_isotope = .deuterium;
-        } else if (std.mem.eql(u8, arg, "--strip-h")) {
-            config.strip_h = true;
+        } else if (parseCommonOption(args, &i, &common)) {
+            // consumed by parseCommonOption
         } else if (arg.len > 0 and arg[0] == '-') {
             std.debug.print("Error: unknown option '{s}'\n", .{arg});
             std.process.exit(1);
@@ -174,6 +210,14 @@ fn parseRunArgs(args: []const []const u8) ?RunConfig {
         printRunUsage();
         std.process.exit(1);
     }
+
+    config.no_opt = common.no_opt;
+    config.no_flip = common.no_flip;
+    config.water = common.water;
+    config.bond_policy = common.bond_policy;
+    config.protonation_path = common.protonation_path;
+    config.fix_path = common.fix_path;
+    config.strip_h = common.strip_h;
 
     return config;
 }
@@ -268,6 +312,7 @@ pub fn main() !void {
 
 fn parseBatchArgs(args: []const []const u8) ?zreduce.batch.BatchConfig {
     var config = zreduce.batch.BatchConfig{ .input_dir = undefined };
+    var common = CommonOptions{};
     var input_set = false;
     var i: usize = 0;
 
@@ -297,20 +342,6 @@ fn parseBatchArgs(args: []const []const u8) ?zreduce.batch.BatchConfig {
                 std.process.exit(1);
             }
             config.jsonl_path = args[i];
-        } else if (std.mem.eql(u8, arg, "--protonation")) {
-            i += 1;
-            if (i >= args.len) {
-                std.debug.print("Error: --protonation requires a path\n", .{});
-                std.process.exit(1);
-            }
-            config.protonation_path = args[i];
-        } else if (std.mem.eql(u8, arg, "--fix")) {
-            i += 1;
-            if (i >= args.len) {
-                std.debug.print("Error: --fix requires a path\n", .{});
-                std.process.exit(1);
-            }
-            config.fix_path = args[i];
         } else if (std.mem.eql(u8, arg, "-j") or std.mem.eql(u8, arg, "--threads")) {
             i += 1;
             if (i >= args.len) {
@@ -321,77 +352,10 @@ fn parseBatchArgs(args: []const []const u8) ?zreduce.batch.BatchConfig {
                 std.debug.print("Error: invalid thread count '{s}'\n", .{args[i]});
                 std.process.exit(1);
             };
-        } else if (std.mem.eql(u8, arg, "--no-opt")) {
-            config.no_opt = true;
-        } else if (std.mem.eql(u8, arg, "--no-flip")) {
-            config.no_flip = true;
         } else if (std.mem.eql(u8, arg, "--quiet")) {
             config.quiet = true;
-        } else if (std.mem.eql(u8, arg, "--water")) {
-            config.water.enabled = true;
-        } else if (std.mem.eql(u8, arg, "--no-water")) {
-            config.water.enabled = false;
-        } else if (std.mem.eql(u8, arg, "--water-phantom")) {
-            config.water.enabled = true;
-            config.water.phantom = true;
-        } else if (std.mem.eql(u8, arg, "--water-occ-cutoff")) {
-            i += 1;
-            if (i >= args.len) {
-                std.debug.print("Error: --water-occ-cutoff requires a numeric argument\n", .{});
-                std.process.exit(1);
-            }
-            const val = std.fmt.parseFloat(f32, args[i]) catch {
-                std.debug.print("Error: invalid water occupancy cutoff '{s}'\n", .{args[i]});
-                std.process.exit(1);
-            };
-            if (!std.math.isFinite(val) or val < 0.0 or val > 1.0) {
-                std.debug.print("Error: --water-occ-cutoff must be between 0.0 and 1.0\n", .{});
-                std.process.exit(1);
-            }
-            config.water.occupancy_cutoff = val;
-            config.water.enabled = true;
-        } else if (std.mem.eql(u8, arg, "--water-b-cutoff")) {
-            i += 1;
-            if (i >= args.len) {
-                std.debug.print("Error: --water-b-cutoff requires a numeric argument\n", .{});
-                std.process.exit(1);
-            }
-            const val = std.fmt.parseFloat(f32, args[i]) catch {
-                std.debug.print("Error: invalid water B-factor cutoff '{s}'\n", .{args[i]});
-                std.process.exit(1);
-            };
-            if (!std.math.isFinite(val) or val < 0.0) {
-                std.debug.print("Error: --water-b-cutoff must be a non-negative number\n", .{});
-                std.process.exit(1);
-            }
-            config.water.b_factor_cutoff = val;
-            config.water.enabled = true;
-        } else if (std.mem.eql(u8, arg, "--bond-mode")) {
-            i += 1;
-            if (i >= args.len) {
-                std.debug.print("Error: --bond-mode requires 'neutron' or 'xray'\n", .{});
-                std.process.exit(1);
-            }
-            const parsed = parseBondModeValue(args[i]) orelse {
-                std.debug.print("Error: invalid --bond-mode '{s}' (expected 'neutron' or 'xray')\n", .{args[i]});
-                std.process.exit(1);
-            };
-            config.bond_policy.mode = parsed;
-        } else if (std.mem.eql(u8, arg, "--isotope")) {
-            i += 1;
-            if (i >= args.len) {
-                std.debug.print("Error: --isotope requires 'hydrogen'/'h' or 'deuterium'/'d'\n", .{});
-                std.process.exit(1);
-            }
-            const parsed = parseOutputIsotopeValue(args[i]) orelse {
-                std.debug.print("Error: invalid --isotope '{s}' (expected hydrogen|h|deuterium|d)\n", .{args[i]});
-                std.process.exit(1);
-            };
-            config.bond_policy.output_isotope = parsed;
-        } else if (std.mem.eql(u8, arg, "--deuterium")) {
-            config.bond_policy.output_isotope = .deuterium;
-        } else if (std.mem.eql(u8, arg, "--strip-h")) {
-            config.strip_h = true;
+        } else if (parseCommonOption(args, &i, &common)) {
+            // consumed by parseCommonOption
         } else if (arg.len > 0 and arg[0] == '-') {
             std.debug.print("Error: unknown option '{s}'\n", .{arg});
             std.process.exit(1);
@@ -411,6 +375,13 @@ fn parseBatchArgs(args: []const []const u8) ?zreduce.batch.BatchConfig {
         std.process.exit(1);
     }
 
+    config.no_opt = common.no_opt;
+    config.no_flip = common.no_flip;
+    config.water = common.water;
+    config.bond_policy = common.bond_policy;
+    config.protonation_path = common.protonation_path;
+    config.fix_path = common.fix_path;
+    config.strip_h = common.strip_h;
     config.json_version = build_options.version;
     return config;
 }
