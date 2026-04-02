@@ -60,9 +60,9 @@ const blank = n("    ");
 // Shorthand constructors for common patterns
 
 // Bond lengths from CCD ideal coordinates (pdbx_model_Cartn_x/y/z_ideal).
-const c_h_sp3: f32 = 1.09; // C-H tetrahedral (CCD mean: 1.0905)
-const c_h_arom: f32 = 1.08; // C-H aromatic (CCD mean: 1.0793)
-const n_h_backbone: f32 = 1.01; // N-H backbone amide (CCD mean: 1.008)
+pub const c_h_sp3: f32 = 1.09; // C-H tetrahedral (CCD mean: 1.0905)
+pub const c_h_arom: f32 = 1.08; // C-H aromatic (CCD mean: 1.0793)
+pub const n_h_backbone: f32 = 1.01; // N-H backbone amide (CCD mean: 1.008)
 const n_h_sidechain: f32 = 1.00; // N-H sidechain (ASN/GLN NH2, ARG, LYS) (CCD mean: 1.000)
 const n_h_his_ring: f32 = 1.02; // N-H HIS imidazole ring (CCD: 1.016)
 const o_h: f32 = 0.97; // O-H (SER/THR/TYR) (CCD mean: 0.968)

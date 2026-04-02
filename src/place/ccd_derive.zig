@@ -122,11 +122,11 @@ fn maxValence(element_symbol: [2]u8) u8 {
     if (e0 == 'H' and e1 == ' ') return 1;
     if (e0 == 'C' and e1 == ' ') return 4;
     if (e0 == 'C' and e1 == 'l') return 1;
-    if (e0 == 'N' and e1 == ' ') return 3;
+    if (e0 == 'N' and e1 == ' ') return 4;
     if (e0 == 'O' and e1 == ' ') return 2;
-    if (e0 == 'S' and e1 == ' ') return 2;
+    if (e0 == 'S' and e1 == ' ') return 6;
     if (e0 == 'S' and e1 == 'e') return 2;
-    if (e0 == 'P' and e1 == ' ') return 3;
+    if (e0 == 'P' and e1 == ' ') return 5;
     if (e0 == 'F' and e1 == ' ') return 1;
     if (e0 == 'B' and e1 == 'r') return 1;
     if (e0 == 'B' and e1 == ' ') return 3;
@@ -643,7 +643,9 @@ test "analyzeBonds demotes sp to sp2 on valence overflow" {
 
 test "analyzeBonds demotes N sp2 to sp3 on valence overflow" {
     // N has: C (double), C2 (single) → template valence = 3, sp2
-    // With 1 extra bond → valence = 4 > 3 → demote sp2→sp3
+    // maxValence for N is now 4 (covers NH4+/quaternary N), so 1 extra bond
+    // brings valence to 4 which does NOT overflow. 2 extra bonds → valence = 5 > 4
+    // → demote sp2→sp3.
     var atoms = [_]ccd.CompAtom{
         .{ .name = .{ 'N', ' ', ' ', ' ' }, .name_len = 1, .element_symbol = .{ 'N', ' ' } },
         .{ .name = .{ 'C', '1', ' ', ' ' }, .name_len = 2, .element_symbol = .{ 'C', ' ' } },
@@ -663,7 +665,12 @@ test "analyzeBonds demotes N sp2 to sp3 on valence overflow" {
     const info_normal = analyzeBonds(&comp, 0, 0, 0);
     try testing.expectEqual(Hybridization.sp2, info_normal.hybridization);
 
-    const info_overflow = analyzeBonds(&comp, 0, 1, 0);
+    // 1 extra bond: valence = 4, not > maxValence(N)=4, no demotion
+    const info_no_overflow = analyzeBonds(&comp, 0, 1, 0);
+    try testing.expectEqual(Hybridization.sp2, info_no_overflow.hybridization);
+
+    // 2 extra bonds: valence = 5 > maxValence(N)=4, demote sp2→sp3
+    const info_overflow = analyzeBonds(&comp, 0, 2, 0);
     try testing.expectEqual(Hybridization.sp3, info_overflow.hybridization);
 }
 
