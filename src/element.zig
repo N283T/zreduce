@@ -68,6 +68,7 @@ const D = AtomFlags{ .donor = true };
 const A = AtomFlags{ .acceptor = true };
 const AR = AtomFlags{ .aromatic = true };
 const ARA = AtomFlags{ .aromatic = true, .acceptor = true };
+const DAR = AtomFlags{ .donor = true, .aromatic = true };
 const M = AtomFlags{ .metallic = true };
 const HBD = AtomFlags{ .donor = true, .hb_only_dummy = true };
 
@@ -78,7 +79,7 @@ const atom_type_table: [AtomType.count]AtomTypeInfo = build: {
     table[@intFromEnum(AtomType.H)] = .{ .explicit_radius = 1.22, .implicit_radius = 0.00, .covalent_radius = 0.30, .flags = NONE };
     table[@intFromEnum(AtomType.Har)] = .{ .explicit_radius = 1.05, .implicit_radius = 0.00, .covalent_radius = 0.30, .flags = AR };
     table[@intFromEnum(AtomType.Hpol)] = .{ .explicit_radius = 1.05, .implicit_radius = 0.00, .covalent_radius = 0.30, .flags = D };
-    table[@intFromEnum(AtomType.Ha_p)] = .{ .explicit_radius = 1.05, .implicit_radius = 0.00, .covalent_radius = 0.30, .flags = D };
+    table[@intFromEnum(AtomType.Ha_p)] = .{ .explicit_radius = 1.05, .implicit_radius = 0.00, .covalent_radius = 0.30, .flags = DAR };
     table[@intFromEnum(AtomType.HOd)] = .{ .explicit_radius = 1.05, .implicit_radius = 0.00, .covalent_radius = 0.30, .flags = HBD };
 
     // Carbon variants
