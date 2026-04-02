@@ -9,15 +9,7 @@ const PlacementPlan = standard.PlacementPlan;
 const PlacementType = standard.PlacementType;
 const MoverHint = standard.MoverHint;
 
-// Atom name helper (same as standard.zig)
-fn n(comptime s: []const u8) [4]u8 {
-    var buf: [4]u8 = .{ ' ', ' ', ' ', ' ' };
-    for (s, 0..) |c, i| {
-        if (i >= 4) break;
-        buf[i] = c;
-    }
-    return buf;
-}
+const n = @import("lookup.zig").padName;
 
 const blank = n("    ");
 
