@@ -181,14 +181,6 @@ fn tagEq(tag: []const u8, expected: []const u8) bool {
     return std.ascii.eqlIgnoreCase(tag, expected);
 }
 
-fn parseAtomName(s: []const u8) CompAtom {
-    var atom = CompAtom{};
-    const len = @min(s.len, 4);
-    atom.name_len = @intCast(len);
-    @memcpy(atom.name[0..len], s[0..len]);
-    return atom;
-}
-
 fn setElement(atom: *CompAtom, s: []const u8) void {
     const len = @min(s.len, 2);
     atom.element_symbol = .{ ' ', ' ' };
