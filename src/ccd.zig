@@ -69,7 +69,7 @@ pub const ComponentDict = struct {
         var iter = self.components.iterator();
         while (iter.next()) |entry| {
             self.allocator.free(entry.key_ptr.*);
-            self.allocator.free(entry.value_ptr.comp_id);
+            // comp_id shares memory with key — already freed above.
             self.allocator.free(entry.value_ptr.comp_type);
             self.allocator.free(entry.value_ptr.atoms);
             self.allocator.free(entry.value_ptr.bonds);
@@ -140,8 +140,9 @@ const Builder = struct {
         const id = self.comp_id orelse return;
         if (self.atoms.items.len == 0) return;
 
-        const owned_id = try dict.allocator.dupe(u8, id);
-        errdefer dict.allocator.free(owned_id);
+        // Single allocation shared as both HashMap key and Component.comp_id.
+        const key = try dict.allocator.dupe(u8, id);
+        errdefer dict.allocator.free(key);
 
         const owned_type = try dict.allocator.dupe(u8, self.comp_type);
         errdefer dict.allocator.free(owned_type);
@@ -152,11 +153,8 @@ const Builder = struct {
         const owned_bonds = try dict.allocator.dupe(CompBond, self.bonds.items);
         errdefer dict.allocator.free(owned_bonds);
 
-        const key = try dict.allocator.dupe(u8, id);
-        errdefer dict.allocator.free(key);
-
         const comp = Component{
-            .comp_id = owned_id,
+            .comp_id = key,
             .comp_type = owned_type,
             .atoms = owned_atoms,
             .bonds = owned_bonds,
@@ -165,7 +163,7 @@ const Builder = struct {
         // If a duplicate exists, free the old entry first.
         if (dict.components.fetchRemove(key)) |old| {
             dict.allocator.free(old.key);
-            dict.allocator.free(old.value.comp_id);
+            // comp_id shares memory with key — already freed above.
             dict.allocator.free(old.value.comp_type);
             dict.allocator.free(old.value.atoms);
             dict.allocator.free(old.value.bonds);
@@ -250,7 +248,9 @@ pub fn parseComponentDict(allocator: Allocator, source: []const u8) !ComponentDi
                 pending = try parseLoop(&tok, source, &builder);
             },
 
-            .save_begin, .save_end, .invalid, .value => {},
+            .save_begin, .save_end => {},
+            .invalid => return error.InvalidCifToken,
+            .value => return error.UnexpectedValue,
         }
     }
 

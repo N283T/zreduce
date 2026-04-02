@@ -790,17 +790,15 @@ pub fn parseInlineComponents(allocator: Allocator, block: *const cif.Block) !?cc
         const owned_bonds = try allocator.dupe(ccd_mod.CompBond, resolved_bonds.items);
         errdefer allocator.free(owned_bonds);
 
-        const owned_id = try allocator.dupe(u8, comp_id);
-        errdefer allocator.free(owned_id);
+        // Single allocation shared as both HashMap key and Component.comp_id.
+        const key = try allocator.dupe(u8, comp_id);
+        errdefer allocator.free(key);
 
         const owned_type = try allocator.dupe(u8, "");
         errdefer allocator.free(owned_type);
 
-        const key = try allocator.dupe(u8, comp_id);
-        errdefer allocator.free(key);
-
         try dict.components.put(key, ccd_mod.Component{
-            .comp_id = owned_id,
+            .comp_id = key,
             .comp_type = owned_type,
             .atoms = owned_atoms,
             .bonds = owned_bonds,

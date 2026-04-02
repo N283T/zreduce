@@ -37,8 +37,7 @@ pub const Loop = struct {
     pub fn length(self: *const Loop) usize {
         const w = self.width();
         if (w == 0) return 0;
-        std.debug.assert(self.values.items.len % w == 0);
-        return self.values.items.len / w;
+        return @divExact(self.values.items.len, w);
     }
 
     /// Value at (row, col), bounds-checked.

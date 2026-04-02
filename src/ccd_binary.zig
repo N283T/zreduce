@@ -280,12 +280,8 @@ pub fn readDict(allocator: Allocator, reader: anytype) ReadError!ComponentDict {
             bond.* = pb.toCompBond();
         }
 
-        // The key stored in the hash map is a duplicate of comp_id.
-        // ComponentDict.deinit frees both key and comp_id separately.
-        const key = allocator.dupe(u8, comp_id) catch return error.OutOfMemory;
-        errdefer allocator.free(key);
-
-        dict.components.putAssumeCapacity(key, .{
+        // comp_id serves as both HashMap key and Component.comp_id (shared allocation).
+        dict.components.putAssumeCapacity(comp_id, .{
             .comp_id = comp_id,
             .comp_type = comp_type,
             .atoms = atoms,
@@ -359,11 +355,11 @@ test "writeDict + readDict: round-trip" {
         },
     });
 
-    const comp_id = try allocator.dupe(u8, "TST");
-    const comp_type = try allocator.dupe(u8, "NON-POLYMER");
+    // Single allocation shared as both HashMap key and Component.comp_id.
     const key = try allocator.dupe(u8, "TST");
+    const comp_type = try allocator.dupe(u8, "NON-POLYMER");
     try dict.components.put(key, .{
-        .comp_id = comp_id,
+        .comp_id = key,
         .comp_type = comp_type,
         .atoms = atoms,
         .bonds = bonds,
@@ -524,11 +520,11 @@ test "loadDict: binary input round-trip" {
         },
     });
     const bonds = try allocator.dupe(CompBond, &[_]CompBond{});
-    const comp_id = try allocator.dupe(u8, "ATP");
-    const comp_type = try allocator.dupe(u8, "ATP");
+    // Single allocation shared as both HashMap key and Component.comp_id.
     const key = try allocator.dupe(u8, "ATP");
+    const comp_type = try allocator.dupe(u8, "ATP");
     try dict.components.put(key, .{
-        .comp_id = comp_id,
+        .comp_id = key,
         .comp_type = comp_type,
         .atoms = atoms,
         .bonds = bonds,
