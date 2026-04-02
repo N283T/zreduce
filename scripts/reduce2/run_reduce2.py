@@ -57,7 +57,13 @@ def main():
 
     run_program(
         program_class=Program,
-        args=[input_file, f"output.filename={output_file}", "output.overwrite=True"]
+        args=[
+            input_file,
+            f"output.filename={output_file}",
+            "output.overwrite=True",
+            "use_neutron_distances=True",
+            "add_flip_movers=True",
+        ]
         + sys.argv[3:],
         logger=open(os.devnull, "w"),
     )
