@@ -200,6 +200,210 @@ test "isBinaryDict: too short" {
     try testing.expect(!isBinaryDict(&[_]u8{ 'Z', 'R' }));
 }
 
+// ---------------------------------------------------------------------------
+// readDict
+// ---------------------------------------------------------------------------
+
+pub const ReadError = error{
+    InvalidMagic,
+    UnsupportedVersion,
+    UnexpectedEof,
+    OutOfMemory,
+};
+
+/// Deserialize a ComponentDict from reader. Caller owns the returned dict.
+pub fn readDict(allocator: Allocator, reader: anytype) ReadError!ComponentDict {
+    // Read header
+    var magic: [4]u8 = undefined;
+    reader.readNoEof(&magic) catch return error.UnexpectedEof;
+    if (!std.mem.eql(u8, &magic, &MAGIC)) return error.InvalidMagic;
+
+    const version = reader.readByte() catch return error.UnexpectedEof;
+    if (version != FORMAT_VERSION) return error.UnsupportedVersion;
+
+    var reserved: [3]u8 = undefined;
+    reader.readNoEof(&reserved) catch return error.UnexpectedEof;
+
+    const count = reader.readInt(u32, .little) catch return error.UnexpectedEof;
+
+    var dict = ComponentDict{
+        .components = std.StringHashMap(Component).init(allocator),
+        .allocator = allocator,
+    };
+    errdefer dict.deinit();
+
+    try dict.components.ensureTotalCapacity(count);
+
+    var i: u32 = 0;
+    while (i < count) : (i += 1) {
+        // comp_id
+        const id_len = reader.readByte() catch return error.UnexpectedEof;
+        const comp_id = allocator.alloc(u8, id_len) catch return error.OutOfMemory;
+        errdefer allocator.free(comp_id);
+        reader.readNoEof(comp_id) catch return error.UnexpectedEof;
+
+        // comp_type
+        const type_len = reader.readByte() catch return error.UnexpectedEof;
+        const comp_type = allocator.alloc(u8, type_len) catch return error.OutOfMemory;
+        errdefer allocator.free(comp_type);
+        reader.readNoEof(comp_type) catch return error.UnexpectedEof;
+
+        // atoms
+        const atom_count = reader.readInt(u16, .little) catch return error.UnexpectedEof;
+        const atoms = allocator.alloc(CompAtom, atom_count) catch return error.OutOfMemory;
+        errdefer allocator.free(atoms);
+        for (atoms) |*atom| {
+            var pa: PackedAtom = undefined;
+            reader.readNoEof(std.mem.asBytes(&pa)) catch return error.UnexpectedEof;
+            atom.* = pa.toCompAtom();
+        }
+
+        // bonds
+        const bond_count = reader.readInt(u16, .little) catch return error.UnexpectedEof;
+        const bonds = allocator.alloc(CompBond, bond_count) catch return error.OutOfMemory;
+        errdefer allocator.free(bonds);
+        for (bonds) |*bond| {
+            var pb: PackedBond = undefined;
+            reader.readNoEof(std.mem.asBytes(&pb)) catch return error.UnexpectedEof;
+            bond.* = pb.toCompBond();
+        }
+
+        // The key stored in the hash map is a duplicate of comp_id.
+        // ComponentDict.deinit frees both key and comp_id separately.
+        const key = allocator.dupe(u8, comp_id) catch return error.OutOfMemory;
+        errdefer allocator.free(key);
+
+        dict.components.putAssumeCapacity(key, .{
+            .comp_id = comp_id,
+            .comp_type = comp_type,
+            .atoms = atoms,
+            .bonds = bonds,
+        });
+    }
+
+    return dict;
+}
+
+// ---------------------------------------------------------------------------
+// loadDict — auto-detect text vs binary
+// ---------------------------------------------------------------------------
+
+/// Load a ComponentDict from raw bytes. Detects binary vs CIF text automatically.
+pub fn loadDict(allocator: Allocator, data: []const u8) !ComponentDict {
+    if (isBinaryDict(data)) {
+        var fbs = std.io.fixedBufferStream(data);
+        return readDict(allocator, fbs.reader());
+    }
+    return ccd.parseComponentDict(allocator, data);
+}
+
+// ---------------------------------------------------------------------------
+// Tests: writeDict, readDict, loadDict
+// ---------------------------------------------------------------------------
+
+test "writeDict + readDict: round-trip" {
+    const allocator = testing.allocator;
+
+    // Build a dict manually
+    var dict = ComponentDict{
+        .components = std.StringHashMap(Component).init(allocator),
+        .allocator = allocator,
+    };
+    defer dict.deinit();
+
+    // Atoms
+    const atoms = try allocator.dupe(CompAtom, &[_]CompAtom{
+        .{
+            .name = .{ 'C', '1', ' ', ' ' },
+            .name_len = 2,
+            .element_symbol = .{ 'C', ' ' },
+            .charge = 0,
+            .leaving = false,
+            .aromatic = true,
+            .ideal_x = 1.0,
+            .ideal_y = 2.0,
+            .ideal_z = 3.0,
+        },
+        .{
+            .name = .{ 'O', '1', ' ', ' ' },
+            .name_len = 2,
+            .element_symbol = .{ 'O', ' ' },
+            .charge = -1,
+            .leaving = true,
+            .aromatic = false,
+            .ideal_x = 4.5,
+            .ideal_y = 5.5,
+            .ideal_z = 6.5,
+        },
+    });
+
+    // Bonds
+    const bonds = try allocator.dupe(CompBond, &[_]CompBond{
+        .{
+            .atom_idx_1 = 0,
+            .atom_idx_2 = 1,
+            .order = .double,
+            .aromatic = true,
+        },
+    });
+
+    const comp_id = try allocator.dupe(u8, "TST");
+    const comp_type = try allocator.dupe(u8, "NON-POLYMER");
+    const key = try allocator.dupe(u8, "TST");
+    try dict.components.put(key, .{
+        .comp_id = comp_id,
+        .comp_type = comp_type,
+        .atoms = atoms,
+        .bonds = bonds,
+    });
+
+    // Write to buffer
+    var buf: std.ArrayListUnmanaged(u8) = .empty;
+    defer buf.deinit(allocator);
+    try writeDict(buf.writer(allocator), &dict);
+
+    // Read back
+    var fbs = std.io.fixedBufferStream(buf.items);
+    var dict2 = try readDict(allocator, fbs.reader());
+    defer dict2.deinit();
+
+    const comp = dict2.get("TST") orelse return error.TestUnexpectedResult;
+
+    try testing.expectEqualStrings("TST", comp.comp_id);
+    try testing.expectEqualStrings("NON-POLYMER", comp.comp_type);
+    try testing.expectEqual(@as(usize, 2), comp.atoms.len);
+    try testing.expectEqual(@as(usize, 1), comp.bonds.len);
+
+    // Atom 0
+    const a0 = comp.atoms[0];
+    try testing.expectEqualSlices(u8, "C1", a0.nameSlice());
+    try testing.expectEqual(@as([2]u8, .{ 'C', ' ' }), a0.element_symbol);
+    try testing.expectEqual(@as(i8, 0), a0.charge);
+    try testing.expect(!a0.leaving);
+    try testing.expect(a0.aromatic);
+    try testing.expectApproxEqAbs(@as(f32, 1.0), a0.ideal_x, 1e-6);
+    try testing.expectApproxEqAbs(@as(f32, 2.0), a0.ideal_y, 1e-6);
+    try testing.expectApproxEqAbs(@as(f32, 3.0), a0.ideal_z, 1e-6);
+
+    // Atom 1
+    const a1 = comp.atoms[1];
+    try testing.expectEqualSlices(u8, "O1", a1.nameSlice());
+    try testing.expectEqual(@as([2]u8, .{ 'O', ' ' }), a1.element_symbol);
+    try testing.expectEqual(@as(i8, -1), a1.charge);
+    try testing.expect(a1.leaving);
+    try testing.expect(!a1.aromatic);
+    try testing.expectApproxEqAbs(@as(f32, 4.5), a1.ideal_x, 1e-6);
+    try testing.expectApproxEqAbs(@as(f32, 5.5), a1.ideal_y, 1e-6);
+    try testing.expectApproxEqAbs(@as(f32, 6.5), a1.ideal_z, 1e-6);
+
+    // Bond 0
+    const b0 = comp.bonds[0];
+    try testing.expectEqual(@as(u16, 0), b0.atom_idx_1);
+    try testing.expectEqual(@as(u16, 1), b0.atom_idx_2);
+    try testing.expectEqual(ccd.BondOrder.double, b0.order);
+    try testing.expect(b0.aromatic);
+}
+
 test "writeDict: empty dictionary" {
     const allocator = testing.allocator;
 
@@ -217,4 +421,118 @@ test "writeDict: empty dictionary" {
     // Verify component count field is 0
     const count = std.mem.readInt(u32, buf.items[8..12], .little);
     try testing.expectEqual(@as(u32, 0), count);
+}
+
+test "readDict: version mismatch" {
+    var buf: [HEADER_SIZE]u8 = undefined;
+    @memcpy(buf[0..4], &MAGIC);
+    buf[4] = 99; // wrong version
+    @memset(buf[5..8], 0);
+    std.mem.writeInt(u32, buf[8..12], 0, .little);
+
+    var fbs = std.io.fixedBufferStream(&buf);
+    const result = readDict(testing.allocator, fbs.reader());
+    try testing.expectError(error.UnsupportedVersion, result);
+}
+
+test "readDict: invalid magic" {
+    var buf: [HEADER_SIZE]u8 = undefined;
+    @memcpy(buf[0..4], "XXXX");
+    buf[4] = FORMAT_VERSION;
+    @memset(buf[5..8], 0);
+    std.mem.writeInt(u32, buf[8..12], 0, .little);
+
+    var fbs = std.io.fixedBufferStream(&buf);
+    const result = readDict(testing.allocator, fbs.reader());
+    try testing.expectError(error.InvalidMagic, result);
+}
+
+test "readDict: truncated data" {
+    // Header claims 1 component but provides no component data
+    var buf: [HEADER_SIZE]u8 = undefined;
+    @memcpy(buf[0..4], &MAGIC);
+    buf[4] = FORMAT_VERSION;
+    @memset(buf[5..8], 0);
+    std.mem.writeInt(u32, buf[8..12], 1, .little);
+
+    var fbs = std.io.fixedBufferStream(&buf);
+    const result = readDict(testing.allocator, fbs.reader());
+    try testing.expectError(error.UnexpectedEof, result);
+}
+
+test "loadDict: CIF text input" {
+    const allocator = testing.allocator;
+
+    const cif_text =
+        \\data_TST
+        \\_chem_comp.id TST
+        \\_chem_comp.type "NON-POLYMER"
+        \\loop_
+        \\_chem_comp_atom.comp_id
+        \\_chem_comp_atom.atom_id
+        \\_chem_comp_atom.type_symbol
+        \\_chem_comp_atom.charge
+        \\_chem_comp_atom.pdbx_leaving_atom_flag
+        \\_chem_comp_atom.model_Cartn_x_ideal
+        \\_chem_comp_atom.model_Cartn_y_ideal
+        \\_chem_comp_atom.model_Cartn_z_ideal
+        \\TST C1 C 0 N 1.0 2.0 3.0
+        \\
+    ;
+
+    var dict = try loadDict(allocator, cif_text);
+    defer dict.deinit();
+
+    const comp = dict.get("TST") orelse return error.TestUnexpectedResult;
+    try testing.expectEqualStrings("TST", comp.comp_id);
+    try testing.expectEqual(@as(usize, 1), comp.atoms.len);
+}
+
+test "loadDict: binary input round-trip" {
+    const allocator = testing.allocator;
+
+    // Build a minimal dict
+    var dict = ComponentDict{
+        .components = std.StringHashMap(Component).init(allocator),
+        .allocator = allocator,
+    };
+    defer dict.deinit();
+
+    const atoms = try allocator.dupe(CompAtom, &[_]CompAtom{
+        .{
+            .name = .{ 'N', ' ', ' ', ' ' },
+            .name_len = 1,
+            .element_symbol = .{ 'N', ' ' },
+            .charge = 0,
+            .leaving = false,
+            .aromatic = false,
+            .ideal_x = 0.0,
+            .ideal_y = 0.0,
+            .ideal_z = 0.0,
+        },
+    });
+    const bonds = try allocator.dupe(CompBond, &[_]CompBond{});
+    const comp_id = try allocator.dupe(u8, "ATP");
+    const comp_type = try allocator.dupe(u8, "ATP");
+    const key = try allocator.dupe(u8, "ATP");
+    try dict.components.put(key, .{
+        .comp_id = comp_id,
+        .comp_type = comp_type,
+        .atoms = atoms,
+        .bonds = bonds,
+    });
+
+    // Write binary
+    var buf: std.ArrayListUnmanaged(u8) = .empty;
+    defer buf.deinit(allocator);
+    try writeDict(buf.writer(allocator), &dict);
+
+    // loadDict should detect binary and parse it
+    var dict2 = try loadDict(allocator, buf.items);
+    defer dict2.deinit();
+
+    const comp = dict2.get("ATP") orelse return error.TestUnexpectedResult;
+    try testing.expectEqualStrings("ATP", comp.comp_id);
+    try testing.expectEqual(@as(usize, 1), comp.atoms.len);
+    try testing.expectEqual(@as(usize, 0), comp.bonds.len);
 }
