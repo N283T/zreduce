@@ -31,15 +31,22 @@ pub fn createSingleHRotator(
     const h_pos = atoms[h_idx].pos;
 
     const orientations = try allocator.alloc(Orientation, 12);
+    var allocated: usize = 0;
+    errdefer {
+        for (orientations[0..allocated]) |o| allocator.free(o.positions);
+        allocator.free(orientations);
+    }
     for (0..12) |i| {
         const angle: f32 = @as(f32, @floatFromInt(i)) * 30.0;
         const rotated = math_mod.rotateAroundAxis(f32, h_pos, center, axis_dir, angle);
         const positions = try allocator.alloc(Vec3(f32), 1);
         positions[0] = rotated;
         orientations[i] = .{ .positions = positions, .penalty = 0.0 };
+        allocated += 1;
     }
 
     const atom_indices = try allocator.alloc(u32, 1);
+    errdefer allocator.free(atom_indices);
     atom_indices[0] = h_idx;
 
     return Mover{
@@ -75,6 +82,11 @@ pub fn createNH3Rotator(
     const penalties = [3]f32{ 0.0, 0.05, 0.05 };
 
     const orientations = try allocator.alloc(Orientation, 3);
+    var allocated: usize = 0;
+    errdefer {
+        for (orientations[0..allocated]) |o| allocator.free(o.positions);
+        allocator.free(orientations);
+    }
     for (0..3) |i| {
         const positions = try allocator.alloc(Vec3(f32), 3);
         for (0..3) |j| {
@@ -82,9 +94,11 @@ pub fn createNH3Rotator(
             positions[j] = math_mod.rotateAroundAxis(f32, h_pos, center, axis_dir, angle_offsets[i]);
         }
         orientations[i] = .{ .positions = positions, .penalty = penalties[i] };
+        allocated += 1;
     }
 
     const atom_indices = try allocator.alloc(u32, 3);
+    errdefer allocator.free(atom_indices);
     for (0..3) |i| {
         atom_indices[i] = h_indices[i];
     }
@@ -120,6 +134,11 @@ pub fn createMethylRotator(
     const angle_offsets = [3]f32{ 0.0, 60.0, -60.0 };
 
     const orientations = try allocator.alloc(Orientation, 3);
+    var allocated: usize = 0;
+    errdefer {
+        for (orientations[0..allocated]) |o| allocator.free(o.positions);
+        allocator.free(orientations);
+    }
     for (0..3) |i| {
         const positions = try allocator.alloc(Vec3(f32), 3);
         for (0..3) |j| {
@@ -127,9 +146,11 @@ pub fn createMethylRotator(
             positions[j] = math_mod.rotateAroundAxis(f32, h_pos, center, axis_dir, angle_offsets[i]);
         }
         orientations[i] = .{ .positions = positions, .penalty = 0.0 };
+        allocated += 1;
     }
 
     const atom_indices = try allocator.alloc(u32, 3);
+    errdefer allocator.free(atom_indices);
     for (0..3) |i| {
         atom_indices[i] = h_indices[i];
     }
