@@ -234,6 +234,7 @@ pub fn createHisFlipper(
     }
     for (specs, 0..) |spec, i| {
         const positions = try allocator.alloc(Vec3(f32), 6);
+        errdefer allocator.free(positions);
         positions[0] = spec.nd1_p;
         positions[1] = spec.cd2_p;
         positions[2] = spec.ce1_p;
