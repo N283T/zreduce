@@ -20,6 +20,10 @@ pub const Model = struct {
     bonds: std.ArrayListUnmanaged(Bond),
     allocator: Allocator,
     n_unobs_atoms: u32 = 0,
+    /// Number of atoms present before hydrogen placement. Atoms at indices
+    /// [0, original_atom_count) are original; atoms at [original_atom_count, len)
+    /// are added hydrogens that carry a `residue_idx` back-pointer.
+    original_atom_count: u32 = 0,
 
     pub fn init(allocator: Allocator) Model {
         return .{

@@ -317,6 +317,9 @@ pub fn parseModel(allocator: Allocator, source: []const u8) MmcifError!Model {
         mdl.residues.items[res_idx].atom_end = atom_end;
     }
 
+    // Record the number of original atoms before any hydrogen placement.
+    mdl.original_atom_count = @intCast(mdl.atoms.items.len);
+
     // Close final chain
     if (in_chain) {
         const res_end: u32 = @intCast(mdl.residues.items.len);
