@@ -303,7 +303,6 @@ fn deriveSinglePlan(
                         .h_name = h_atom.name,
                         .placement_type = .hxr3,
                         .connected = .{ heavy_atom.name, refs[0], refs[1] },
-                        .n_connected = 3,
                         .bond_len = bond_len,
                         .atom_type = atom_type,
                     };
@@ -318,7 +317,6 @@ fn deriveSinglePlan(
                         .h_name = h_atom.name,
                         .placement_type = .h2xr2,
                         .connected = .{ heavy_atom.name, refs[0], blank },
-                        .n_connected = 2,
                         .bond_len = bond_len,
                         .angle = 109.5,
                         .dihedral = dihedral,
@@ -336,7 +334,6 @@ fn deriveSinglePlan(
                     .h_name = h_atom.name,
                     .placement_type = .h3xr,
                     .connected = .{ heavy_atom.name, refs[0], second_ref },
-                    .n_connected = 3,
                     .bond_len = bond_len,
                     .angle = 109.5,
                     .dihedral = dihedral,
@@ -354,7 +351,6 @@ fn deriveSinglePlan(
                         .h_name = h_atom.name,
                         .placement_type = .hxr2_planar,
                         .connected = .{ refs[0], refs[1], blank },
-                        .n_connected = 2,
                         .bond_len = bond_len,
                         .atom_type = atom_type,
                     };
@@ -370,7 +366,6 @@ fn deriveSinglePlan(
                     .h_name = h_atom.name,
                     .placement_type = .h3xr,
                     .connected = .{ heavy_atom.name, refs[0], second_ref },
-                    .n_connected = 3,
                     .bond_len = bond_len,
                     .angle = 120.0,
                     .dihedral = dihedral,
@@ -387,7 +382,6 @@ fn deriveSinglePlan(
                     .h_name = h_atom.name,
                     .placement_type = .hxy,
                     .connected = .{ heavy_atom.name, refs[0], blank },
-                    .n_connected = 1,
                     .bond_len = bond_len,
                     .atom_type = atom_type,
                 };
@@ -399,11 +393,6 @@ fn deriveSinglePlan(
 }
 
 const blank: [4]u8 = .{ ' ', ' ', ' ', ' ' };
-
-/// Find up to N heavy-atom neighbor names for the given atom.
-fn findHeavyNeighborNames(component: *const ccd.Component, atom_idx: u16, comptime max: u8) ?[max][4]u8 {
-    return findHeavyNeighborNamesFiltered(component, atom_idx, max, null);
-}
 
 /// Find heavy neighbor names, optionally filtering to only atoms present in model.
 fn findHeavyNeighborNamesFiltered(component: *const ccd.Component, atom_idx: u16, comptime max: u8, existing_atom_names: ?[]const [4]u8) ?[max][4]u8 {
@@ -435,11 +424,6 @@ fn findHeavyNeighborNamesFiltered(component: *const ccd.Component, atom_idx: u16
 
     if (count >= max) return result;
     return null;
-}
-
-/// Find a reference atom bonded to the neighbor of the heavy atom (for dihedral reference).
-fn findSecondReference(component: *const ccd.Component, heavy_idx: u16, first_ref_name: [4]u8) ?[4]u8 {
-    return findSecondReferenceFiltered(component, heavy_idx, first_ref_name, null);
 }
 
 /// Find a dihedral reference atom (neighbor of first_ref that isn't the heavy atom).

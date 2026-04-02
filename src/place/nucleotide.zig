@@ -37,7 +37,6 @@ fn sugar_hxr3(comptime h: []const u8, comptime center: []const u8, comptime a: [
         .h_name = n(h),
         .placement_type = .hxr3,
         .connected = .{ n(center), n(a), n(b) },
-        .n_connected = 3,
         .bond_len = 1.09,
         .atom_type = .H,
     };
@@ -49,7 +48,6 @@ fn sugar_h2xr2(comptime h: []const u8, comptime center: []const u8, comptime a: 
         .h_name = n(h),
         .placement_type = .h2xr2,
         .connected = .{ n(center), n(a), n(b) },
-        .n_connected = 2,
         .bond_len = 1.09,
         .angle = 109.5,
         .dihedral = dihedral,
@@ -63,7 +61,6 @@ fn oh_rotator(comptime h: []const u8, comptime o: []const u8, comptime c: []cons
         .h_name = n(h),
         .placement_type = .h3xr,
         .connected = .{ n(o), n(c), n(c2) },
-        .n_connected = 2,
         .bond_len = 0.97, // O-H (CCD ideal mean: 0.967)
         .angle = 109.5,
         .dihedral = 180.0,
@@ -85,7 +82,6 @@ fn aromatic_ch(comptime h: []const u8, comptime nb1: []const u8, comptime nb2: [
         .h_name = n(h),
         .placement_type = .hxr2_planar,
         .connected = .{ n(nb1), n(nb2), .{ ' ', ' ', ' ', ' ' } },
-        .n_connected = 2,
         .bond_len = c_h_arom,
         .atom_type = .Har,
     };
@@ -98,7 +94,6 @@ fn ring_nh(comptime h: []const u8, comptime nb1: []const u8, comptime nb2: []con
         .h_name = n(h),
         .placement_type = .hxr2_planar,
         .connected = .{ n(nb1), n(nb2), .{ ' ', ' ', ' ', ' ' } },
-        .n_connected = 2,
         .bond_len = n_h_ring,
         .atom_type = .Hpol,
     };
@@ -112,7 +107,6 @@ fn amino_h(comptime h: []const u8, comptime nn: []const u8, comptime c: []const 
         .h_name = n(h),
         .placement_type = .h3xr,
         .connected = .{ n(nn), n(c), n(c2) },
-        .n_connected = 2,
         .bond_len = 1.02,
         .angle = 120.0,
         .dihedral = dihedral,
@@ -126,7 +120,6 @@ fn thymine_methyl(comptime h: []const u8, dihedral: f32) PlacementPlan {
         .h_name = n(h),
         .placement_type = .h3xr,
         .connected = .{ n(" C7 "), n(" C5 "), n(" C4 ") },
-        .n_connected = 2,
         .bond_len = 1.09,
         .angle = 109.5,
         .dihedral = dihedral,
