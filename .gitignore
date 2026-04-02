@@ -4,6 +4,9 @@ zig-cache/
 *.o
 *.swp
 
+# Python
+__pycache__/
+
 # pixi environments
 .pixi/
 pixi.lock
