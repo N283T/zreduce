@@ -27,7 +27,8 @@ pub const Tokenizer = struct {
     source: []const u8,
     pos: u32,
 
-    pub fn init(source: []const u8) Tokenizer {
+    pub fn init(source: []const u8) error{SourceTooLarge}!Tokenizer {
+        if (source.len > std.math.maxInt(u32)) return error.SourceTooLarge;
         return .{ .source = source, .pos = 0 };
     }
 
@@ -182,7 +183,7 @@ const std = @import("std");
 
 test "tokenize data block" {
     const source = "data_TEST\n_tag value\n";
-    var tok = Tokenizer.init(source);
+    var tok = try Tokenizer.init(source);
     const first = tok.next();
     try std.testing.expectEqual(TokenType.data, first.type);
     try std.testing.expectEqualStrings("data_TEST", first.text(source));
@@ -190,7 +191,7 @@ test "tokenize data block" {
 
 test "tokenize loop" {
     const source = "loop_\n_col1\n_col2\nA B\n";
-    var tok = Tokenizer.init(source);
+    var tok = try Tokenizer.init(source);
 
     const t0 = tok.next();
     try std.testing.expectEqual(TokenType.loop, t0.type);
@@ -213,7 +214,7 @@ test "tokenize loop" {
 
 test "tokenize quoted strings" {
     const source = "'hello world' \"another string\"";
-    var tok = Tokenizer.init(source);
+    var tok = try Tokenizer.init(source);
 
     const t0 = tok.next();
     try std.testing.expectEqual(TokenType.value, t0.type);
@@ -229,7 +230,7 @@ test "tokenize quoted strings" {
 
 test "tokenize semicolon text field" {
     const source = ";\nmulti\nline\nvalue\n;\n";
-    var tok = Tokenizer.init(source);
+    var tok = try Tokenizer.init(source);
 
     const t0 = tok.next();
     try std.testing.expectEqual(TokenType.value, t0.type);
@@ -241,7 +242,7 @@ test "tokenize semicolon text field" {
 
 test "skip comments" {
     const source = "# comment\ndata_X\n# another\n_tag val";
-    var tok = Tokenizer.init(source);
+    var tok = try Tokenizer.init(source);
 
     const t0 = tok.next();
     try std.testing.expectEqual(TokenType.data, t0.type);
@@ -261,7 +262,7 @@ test "skip comments" {
 
 test "tokenize save frame" {
     const source = "save_myframe\n_tag val\nsave_\n";
-    var tok = Tokenizer.init(source);
+    var tok = try Tokenizer.init(source);
 
     const t0 = tok.next();
     try std.testing.expectEqual(TokenType.save_begin, t0.type);
@@ -277,7 +278,7 @@ test "tokenize save frame" {
 
 test "unterminated quoted string returns invalid" {
     const source = "'hello world";
-    var tok = Tokenizer.init(source);
+    var tok = try Tokenizer.init(source);
 
     const t0 = tok.next();
     try std.testing.expectEqual(TokenType.invalid, t0.type);
@@ -285,7 +286,7 @@ test "unterminated quoted string returns invalid" {
 
 test "unterminated text field returns invalid" {
     const source = ";\nsome text without closing\n";
-    var tok = Tokenizer.init(source);
+    var tok = try Tokenizer.init(source);
 
     const t0 = tok.next();
     try std.testing.expectEqual(TokenType.invalid, t0.type);
