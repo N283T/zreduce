@@ -61,6 +61,8 @@ fn detectChainBreaks(
     const nrows = pss.length();
     var prev_asym: []const u8 = "";
     var gap_pending = false;
+    // Cached chain index for the current asym_id; null = not yet found.
+    var cached_chain_idx: ?usize = null;
 
     for (0..nrows) |row| {
         const asym = cif.asString(pss.val(row, col_asym) orelse continue);
@@ -71,6 +73,14 @@ fn detectChainBreaks(
         if (!std.mem.eql(u8, asym, prev_asym)) {
             gap_pending = false;
             prev_asym = asym;
+            // Find and cache the chain index for this asym_id.
+            cached_chain_idx = null;
+            for (mdl.chains.items, 0..) |chain, ci| {
+                if (chainAsymMatches(chain, asym)) {
+                    cached_chain_idx = ci;
+                    break;
+                }
+            }
         }
 
         // Unobserved residue (asString converts '?' and '.' to empty)
@@ -79,14 +89,16 @@ fn detectChainBreaks(
             continue;
         }
 
-        // Observed residue after gap -> find and mark
+        // Observed residue after gap -> find and mark within the matching chain only.
         if (gap_pending) {
             const seq_id = cif.value.asIntOr(i32, seq_str, 0);
-            for (mdl.residues.items) |*res| {
-                const chain = mdl.chains.items[res.chain_idx];
-                if (chainAsymMatches(chain, asym) and res.seq_id == seq_id) {
-                    res.is_chain_break_before = true;
-                    break;
+            if (cached_chain_idx) |ci| {
+                const chain = mdl.chains.items[ci];
+                for (mdl.residues.items[chain.residue_start..chain.residue_end]) |*res| {
+                    if (res.seq_id == seq_id) {
+                        res.is_chain_break_before = true;
+                        break;
+                    }
                 }
             }
             gap_pending = false;
