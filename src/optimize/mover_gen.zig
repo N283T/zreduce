@@ -49,17 +49,41 @@ fn findPlanForH(comp_id: []const u8, h_name: []const u8) ?*const standard.Placem
     return null;
 }
 
-/// Find atom index by scanning entire atoms array (handles added H atoms
-/// that live beyond res.atom_end).
+/// Find atom index for a given atom name and altloc within a residue.
+///
+/// Performs two bounded scans instead of a full O(N) scan over all atoms:
+///   - Pass 1: atoms[res.atom_start..res.atom_end] for original atoms (no
+///             residue_idx check needed since the range is per-residue).
+///   - Pass 2: atoms[original_atom_count..] for added H atoms, filtered by
+///             residue_idx (added atoms live after all original atoms and carry
+///             a residue_idx back-pointer).
+///
 /// Prefers an exact altloc match and falls back to blank altloc for shared atoms.
-fn findAtomIdx(atoms: []const Atom, residue_idx: u32, name: []const u8, target_altloc: u8) ?u32 {
+fn findAtomIdx(
+    atoms: []const Atom,
+    res: Residue,
+    residue_idx: u32,
+    name: []const u8,
+    target_altloc: u8,
+    original_atom_count: u32,
+) ?u32 {
     var blank_match: ?u32 = null;
-    for (atoms, 0..) |*a, i| {
+
+    // Pass 1: original atoms for this residue (tight range, no residue_idx filter needed)
+    for (atoms[res.atom_start..res.atom_end], res.atom_start..) |*a, i| {
+        if (!std.mem.eql(u8, a.nameSlice(), name)) continue;
+        if (a.altloc == target_altloc) return @intCast(i);
+        if (a.altloc == ' ' and blank_match == null) blank_match = @intCast(i);
+    }
+
+    // Pass 2: added H atoms appended after all original atoms
+    for (atoms[original_atom_count..], original_atom_count..) |*a, i| {
         if (a.residue_idx != residue_idx) continue;
         if (!std.mem.eql(u8, a.nameSlice(), name)) continue;
         if (a.altloc == target_altloc) return @intCast(i);
         if (a.altloc == ' ' and blank_match == null) blank_match = @intCast(i);
     }
+
     return blank_match;
 }
 
@@ -198,12 +222,12 @@ pub fn generateMovers(
                     n_skipped += 1;
                     continue;
                 }
-                const center_idx = findAtomIdx(atoms, residue_idx, center_name, target_altloc) orelse {
+                const center_idx = findAtomIdx(atoms, res, residue_idx, center_name, target_altloc, mdl.original_atom_count) orelse {
                     log.warn("center atom '{s}' not found for H '{s}' in {s} (res {d}), skipping", .{ center_name, h_name, comp_id, residue_idx });
                     n_skipped += 1;
                     continue;
                 };
-                const axis_idx = findAtomIdx(atoms, residue_idx, axis_name, target_altloc) orelse {
+                const axis_idx = findAtomIdx(atoms, res, residue_idx, axis_name, target_altloc, mdl.original_atom_count) orelse {
                     log.warn("axis atom '{s}' not found for H '{s}' in {s} (res {d}), skipping", .{ axis_name, h_name, comp_id, residue_idx });
                     n_skipped += 1;
                     continue;
@@ -249,12 +273,12 @@ pub fn generateMovers(
                 const gop = try seen_groups.getOrPut(allocator, group_key);
                 if (gop.found_existing) continue;
 
-                const center_idx = findAtomIdx(atoms, residue_idx, center_name, target_altloc) orelse {
+                const center_idx = findAtomIdx(atoms, res, residue_idx, center_name, target_altloc, mdl.original_atom_count) orelse {
                     log.warn("center atom '{s}' not found for group in {s} (res {d}), skipping", .{ center_name, comp_id, residue_idx });
                     n_skipped += 1;
                     continue;
                 };
-                const axis_idx = findAtomIdx(atoms, residue_idx, axis_name, target_altloc) orelse {
+                const axis_idx = findAtomIdx(atoms, res, residue_idx, axis_name, target_altloc, mdl.original_atom_count) orelse {
                     log.warn("axis atom '{s}' not found for group in {s} (res {d}), skipping", .{ axis_name, comp_id, residue_idx });
                     n_skipped += 1;
                     continue;
@@ -330,17 +354,17 @@ pub fn generateMovers(
                 // O atom: OD1 for ASN, OE1 for GLN
                 const o_name: []const u8 = if (std.mem.eql(u8, comp_id, "ASN")) "OD1" else "OE1";
 
-                const n_at_idx = findAtomIdx(atoms, residue_idx, n_name, target_altloc) orelse {
+                const n_at_idx = findAtomIdx(atoms, res, residue_idx, n_name, target_altloc, mdl.original_atom_count) orelse {
                     log.warn("N atom '{s}' not found for amide flip in {s} (res {d})", .{ n_name, comp_id, residue_idx });
                     n_skipped += 1;
                     continue;
                 };
-                const o_at_idx = findAtomIdx(atoms, residue_idx, o_name, target_altloc) orelse {
+                const o_at_idx = findAtomIdx(atoms, res, residue_idx, o_name, target_altloc, mdl.original_atom_count) orelse {
                     log.warn("O atom '{s}' not found for amide flip in {s} (res {d})", .{ o_name, comp_id, residue_idx });
                     n_skipped += 1;
                     continue;
                 };
-                const c_at_idx = findAtomIdx(atoms, residue_idx, c_name, target_altloc) orelse {
+                const c_at_idx = findAtomIdx(atoms, res, residue_idx, c_name, target_altloc, mdl.original_atom_count) orelse {
                     log.warn("C atom '{s}' not found for amide flip in {s} (res {d})", .{ c_name, comp_id, residue_idx });
                     n_skipped += 1;
                     continue;
@@ -353,7 +377,7 @@ pub fn generateMovers(
                 for (all_plans) |*p| {
                     if (p.mover_hint != .flip_amide) continue;
                     const p_h_name = trimName(&p.h_name);
-                    if (findAtomIdx(atoms, residue_idx, p_h_name, target_altloc)) |hi| {
+                    if (findAtomIdx(atoms, res, residue_idx, p_h_name, target_altloc, mdl.original_atom_count)) |hi| {
                         if (h_count < 2) {
                             h_indices[h_count] = hi;
                             h_count += 1;
@@ -391,30 +415,30 @@ pub fn generateMovers(
                 if (gop.found_existing) continue;
 
                 // Find ring heavy atoms by name
-                const nd1_idx = findAtomIdx(atoms, residue_idx, "ND1", target_altloc) orelse {
+                const nd1_idx = findAtomIdx(atoms, res, residue_idx, "ND1", target_altloc, mdl.original_atom_count) orelse {
                     log.warn("ND1 not found for His flip (res {d})", .{residue_idx});
                     n_skipped += 1;
                     continue;
                 };
-                const cd2_idx = findAtomIdx(atoms, residue_idx, "CD2", target_altloc) orelse {
+                const cd2_idx = findAtomIdx(atoms, res, residue_idx, "CD2", target_altloc, mdl.original_atom_count) orelse {
                     log.warn("CD2 not found for His flip (res {d})", .{residue_idx});
                     n_skipped += 1;
                     continue;
                 };
-                const ce1_idx = findAtomIdx(atoms, residue_idx, "CE1", target_altloc) orelse {
+                const ce1_idx = findAtomIdx(atoms, res, residue_idx, "CE1", target_altloc, mdl.original_atom_count) orelse {
                     log.warn("CE1 not found for His flip (res {d})", .{residue_idx});
                     n_skipped += 1;
                     continue;
                 };
-                const ne2_idx = findAtomIdx(atoms, residue_idx, "NE2", target_altloc) orelse {
+                const ne2_idx = findAtomIdx(atoms, res, residue_idx, "NE2", target_altloc, mdl.original_atom_count) orelse {
                     log.warn("NE2 not found for His flip (res {d})", .{residue_idx});
                     n_skipped += 1;
                     continue;
                 };
 
                 // H atoms are optional
-                const hd1_idx = findAtomIdx(atoms, residue_idx, "HD1", target_altloc);
-                const he2_idx = findAtomIdx(atoms, residue_idx, "HE2", target_altloc);
+                const hd1_idx = findAtomIdx(atoms, res, residue_idx, "HD1", target_altloc, mdl.original_atom_count);
+                const he2_idx = findAtomIdx(atoms, res, residue_idx, "HE2", target_altloc, mdl.original_atom_count);
 
                 const m = try flipper.createHisFlipper(
                     allocator,
@@ -499,10 +523,13 @@ test "findAtomIdx prefers exact altloc and falls back to blank" {
     var mdl = try mmcif.parseModel(testing.allocator, source);
     defer mdl.deinit();
 
-    try testing.expectEqual(findAtomIdx(mdl.atoms.items, 0, "CA", 'A').?, 1);
-    try testing.expectEqual(findAtomIdx(mdl.atoms.items, 0, "CA", 'B').?, 2);
-    try testing.expectEqual(findAtomIdx(mdl.atoms.items, 0, "N", 'A').?, 0);
-    try testing.expectEqual(findAtomIdx(mdl.atoms.items, 0, "N", 'B').?, 0);
+    const res0 = mdl.residues.items[0];
+    const orig = mdl.original_atom_count;
+
+    try testing.expectEqual(findAtomIdx(mdl.atoms.items, res0, 0, "CA", 'A', orig).?, 1);
+    try testing.expectEqual(findAtomIdx(mdl.atoms.items, res0, 0, "CA", 'B', orig).?, 2);
+    try testing.expectEqual(findAtomIdx(mdl.atoms.items, res0, 0, "N", 'A', orig).?, 0);
+    try testing.expectEqual(findAtomIdx(mdl.atoms.items, res0, 0, "N", 'B', orig).?, 0);
 }
 
 test "generateMovers creates methyl rotator for ALA" {
