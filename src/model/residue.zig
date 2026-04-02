@@ -5,7 +5,7 @@ const std = @import("std");
 pub const EntityType = enum { polymer, non_polymer, branched, water, unknown };
 
 pub const Residue = struct {
-    comp_id: [3]u8 = .{ ' ', ' ', ' ' },
+    comp_id: [5]u8 = .{ ' ', ' ', ' ', ' ', ' ' },
     comp_id_len: u3 = 0,
     chain_idx: u16 = 0,
     seq_id: i32 = 0,
@@ -17,12 +17,12 @@ pub const Residue = struct {
     is_chain_break_before: bool = false,
 
     pub fn compIdSlice(self: *const Residue) []const u8 {
-        return self.comp_id[0..@min(@as(usize, self.comp_id_len), 3)];
+        return self.comp_id[0..@min(@as(usize, self.comp_id_len), 5)];
     }
 
     pub fn setCompId(self: *Residue, id: []const u8) void {
-        const len: u3 = @intCast(@min(id.len, 3));
-        self.comp_id = .{ ' ', ' ', ' ' };
+        const len: u3 = @intCast(@min(id.len, 5));
+        self.comp_id = .{ ' ', ' ', ' ', ' ', ' ' };
         for (0..len) |i| self.comp_id[i] = id[i];
         self.comp_id_len = len;
     }
@@ -39,6 +39,14 @@ test "Residue setCompId and compIdSlice" {
     r.setCompId("ALA");
     try std.testing.expectEqualStrings("ALA", r.compIdSlice());
     try std.testing.expectEqual(@as(u3, 3), r.comp_id_len);
+    r.setCompId("ATP");
+    try std.testing.expectEqualStrings("ATP", r.compIdSlice());
+    r.setCompId("BGLA");
+    try std.testing.expectEqualStrings("BGLA", r.compIdSlice());
+    try std.testing.expectEqual(@as(u3, 4), r.comp_id_len);
+    r.setCompId("BGLAN");
+    try std.testing.expectEqualStrings("BGLAN", r.compIdSlice());
+    try std.testing.expectEqual(@as(u3, 5), r.comp_id_len);
 }
 
 test "Residue atomCount" {

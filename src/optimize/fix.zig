@@ -23,8 +23,8 @@ pub const Selector = struct {
 
 pub const Entry = struct {
     selector: Selector,
-    comp_id: [3]u8,
-    comp_id_len: u2,
+    comp_id: [5]u8,
+    comp_id_len: u3,
     target: []const u8,
     value: Value,
 
@@ -123,7 +123,7 @@ pub fn parseString(allocator: std.mem.Allocator, source: []const u8) !FixOverrid
             std.debug.print("Error: fix override line {d}: unexpected extra tokens\n", .{line_num});
             return error.InvalidFixOverride;
         }
-        if (comp_tok.len == 0 or comp_tok.len > 3) {
+        if (comp_tok.len == 0 or comp_tok.len > 5) {
             std.debug.print("Error: fix override line {d}: invalid comp_id '{s}'\n", .{ line_num, comp_tok });
             return error.InvalidFixOverride;
         }
@@ -140,8 +140,8 @@ pub fn parseString(allocator: std.mem.Allocator, source: []const u8) !FixOverrid
         errdefer allocator.free(selector.chain_id);
         const target = try allocator.dupe(u8, target_tok);
 
-        var comp_id: [3]u8 = .{ ' ', ' ', ' ' };
-        const comp_id_len: u2 = @intCast(comp_tok.len);
+        var comp_id: [5]u8 = .{ ' ', ' ', ' ', ' ', ' ' };
+        const comp_id_len: u3 = @intCast(comp_tok.len);
         for (0..comp_id_len) |i| comp_id[i] = std.ascii.toUpper(comp_tok[i]);
 
         try entries.append(allocator, .{
@@ -299,8 +299,8 @@ test "parser rejects invalid input" {
     try testing.expectError(error.InvalidFixOverride, parseString(testing.allocator, "A:1 ASN amide"));
     // Extra tokens
     try testing.expectError(error.InvalidFixOverride, parseString(testing.allocator, "A:1 ASN amide FLIP extra"));
-    // Invalid comp_id (too long)
-    try testing.expectError(error.InvalidFixOverride, parseString(testing.allocator, "A:1 ASNX amide FLIP"));
+    // Invalid comp_id (too long - more than 5 chars)
+    try testing.expectError(error.InvalidFixOverride, parseString(testing.allocator, "A:1 ASNXYZ amide FLIP"));
     // Invalid selector
     try testing.expectError(error.InvalidFixOverride, parseString(testing.allocator, "A ASN amide FLIP"));
     // Invalid value for target
