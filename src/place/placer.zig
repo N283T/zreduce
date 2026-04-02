@@ -23,6 +23,8 @@ const Vec3f32 = math_mod.Vec3(f32);
 const topology = @import("topology.zig");
 const chemistry = @import("chemistry.zig");
 const protonation = @import("protonation.zig");
+const neighbor_mod = @import("../model/neighbor.zig");
+const CellList = neighbor_mod.CellList;
 
 /// Result of a single executePlan call — why a hydrogen was or wasn't placed.
 pub const PlaceResult = enum {
@@ -117,6 +119,47 @@ pub fn addHydrogensWithConfig(
 ) !PlacementResult {
     var result = PlacementResult{};
 
+    // Build a CellList over all non-hydrogen atoms so that water neighbor
+    // queries (max radius 4.0 Å) can run in O(1) instead of O(N).
+    // We collect positions and a mapping from CellList index → atom index.
+    var water_cell_ctx: ?WaterCellCtx = null;
+    defer if (water_cell_ctx) |*ctx| {
+        ctx.cell_list.deinit();
+        mdl.allocator.free(ctx.positions);
+        mdl.allocator.free(ctx.atom_indices);
+    };
+
+    if (config.water.enabled) blk: {
+        var positions = std.ArrayListUnmanaged(Vec3f32){};
+        var atom_idx_map = std.ArrayListUnmanaged(u32){};
+        errdefer positions.deinit(mdl.allocator);
+        errdefer atom_idx_map.deinit(mdl.allocator);
+
+        for (mdl.atoms.items, 0..) |atom, i| {
+            if (atom.is_hydrogen) continue;
+            try positions.append(mdl.allocator, atom.pos);
+            try atom_idx_map.append(mdl.allocator, @intCast(i));
+        }
+
+        const pos_slice = try positions.toOwnedSlice(mdl.allocator);
+        const idx_slice = try atom_idx_map.toOwnedSlice(mdl.allocator);
+
+        const cl = CellList.init(mdl.allocator, pos_slice, 5.0) catch |err| switch (err) {
+            error.GridTooLarge => {
+                // Fall back to linear scan: free arrays and leave water_cell_ctx null.
+                mdl.allocator.free(pos_slice);
+                mdl.allocator.free(idx_slice);
+                break :blk;
+            },
+            else => return err,
+        };
+        water_cell_ctx = WaterCellCtx{
+            .cell_list = cl,
+            .positions = pos_slice,
+            .atom_indices = idx_slice,
+        };
+    }
+
     const n_residues = mdl.residues.items.len;
     for (0..n_residues) |res_idx| {
         const res = mdl.residues.items[res_idx];
@@ -124,7 +167,7 @@ pub fn addHydrogensWithConfig(
         const protonation_state = if (config.protonation) |overrides| overrides.find(mdl, res_idx) else null;
 
         if (config.water.enabled and isWaterResidue(res, comp_id)) {
-            const water_result = try placeWaterHydrogens(mdl, res, @intCast(res_idx), config.water, config.bond_policy.mode);
+            const water_result = try placeWaterHydrogens(mdl, res, @intCast(res_idx), config.water, config.bond_policy.mode, water_cell_ctx);
             result.n_placed += water_result.n_placed;
             result.n_skipped_existing += water_result.n_skipped_existing;
             result.n_skipped_inter_residue += water_result.n_skipped_inter_residue;
@@ -1007,18 +1050,64 @@ fn orthogonalUnit(v: Vec3f32) Vec3f32 {
     return v.cross(candidate).normalize();
 }
 
-fn chooseWaterNeighbors(mdl: *const Model, res_idx: u32, oxygen: Atom, target_altloc: u8) [2]?Vec3f32 {
+/// Context built once before the residue loop to accelerate water neighbor queries.
+const WaterCellCtx = struct {
+    cell_list: CellList,
+    /// Positions of heavy atoms (parallel to atom_indices).
+    positions: []Vec3f32,
+    /// Maps CellList position index → mdl.atoms index.
+    atom_indices: []u32,
+};
+
+fn chooseWaterNeighbors(
+    mdl: *const Model,
+    res_idx: u32,
+    oxygen: Atom,
+    target_altloc: u8,
+    ctx: ?WaterCellCtx,
+    tmp: *std.ArrayListUnmanaged(u32),
+) [2]?Vec3f32 {
     var best_dist = [2]f32{ std.math.inf(f32), std.math.inf(f32) };
     var best_pos = [2]?Vec3f32{ null, null };
 
+    if (ctx) |c| {
+        // Fast path: query CellList for heavy atoms within 3.5 Å.
+        tmp.clearRetainingCapacity();
+        c.cell_list.neighborsInRadius(oxygen.pos, 3.5, tmp, mdl.allocator, c.positions) catch {
+            // On OOM fall through to the linear scan below.
+            return chooseWaterNeighborsLinear(mdl, res_idx, oxygen, target_altloc);
+        };
+        for (tmp.items) |cl_idx| {
+            const atom_idx = c.atom_indices[cl_idx];
+            const atom = mdl.atoms.items[atom_idx];
+            if (atom.residue_idx == res_idx) continue;
+            if (target_altloc != ' ' and atom.altloc != ' ' and atom.altloc != target_altloc) continue;
+            const dist = oxygen.pos.distance(atom.pos);
+            if (dist < 0.1) continue;
+            if (dist < best_dist[0]) {
+                best_dist[1] = best_dist[0];
+                best_pos[1] = best_pos[0];
+                best_dist[0] = dist;
+                best_pos[0] = atom.pos;
+            } else if (dist < best_dist[1]) {
+                best_dist[1] = dist;
+                best_pos[1] = atom.pos;
+            }
+        }
+        return best_pos;
+    }
+    return chooseWaterNeighborsLinear(mdl, res_idx, oxygen, target_altloc);
+}
+
+fn chooseWaterNeighborsLinear(mdl: *const Model, res_idx: u32, oxygen: Atom, target_altloc: u8) [2]?Vec3f32 {
+    var best_dist = [2]f32{ std.math.inf(f32), std.math.inf(f32) };
+    var best_pos = [2]?Vec3f32{ null, null };
     for (mdl.atoms.items) |atom| {
         if (atom.is_hydrogen) continue;
         if (atom.residue_idx == res_idx) continue;
         if (target_altloc != ' ' and atom.altloc != ' ' and atom.altloc != target_altloc) continue;
-
         const dist = oxygen.pos.distance(atom.pos);
         if (dist > 3.5 or dist < 0.1) continue;
-
         if (dist < best_dist[0]) {
             best_dist[1] = best_dist[0];
             best_pos[1] = best_pos[0];
@@ -1029,18 +1118,49 @@ fn chooseWaterNeighbors(mdl: *const Model, res_idx: u32, oxygen: Atom, target_al
             best_pos[1] = atom.pos;
         }
     }
-
     return best_pos;
 }
 
-fn nearestMetalDistance(mdl: *const Model, res_idx: u32, oxygen: Atom, target_altloc: u8) ?f32 {
+fn nearestMetalDistance(
+    mdl: *const Model,
+    res_idx: u32,
+    oxygen: Atom,
+    target_altloc: u8,
+    ctx: ?WaterCellCtx,
+    tmp: *std.ArrayListUnmanaged(u32),
+) ?f32 {
+    if (ctx) |c| {
+        // Query within 5.0 Å — metals closer than metal_cutoff (~3.2 Å) are the concern.
+        tmp.clearRetainingCapacity();
+        c.cell_list.neighborsInRadius(oxygen.pos, 5.0, tmp, mdl.allocator, c.positions) catch {
+            return nearestMetalDistanceLinear(mdl, res_idx, oxygen, target_altloc);
+        };
+        var best: f32 = std.math.inf(f32);
+        var found = false;
+        for (tmp.items) |cl_idx| {
+            const atom_idx = c.atom_indices[cl_idx];
+            const atom = mdl.atoms.items[atom_idx];
+            if (atom.residue_idx == res_idx) continue;
+            if (target_altloc != ' ' and atom.altloc != ' ' and atom.altloc != target_altloc) continue;
+            if (!atom.element_type.info().flags.metallic and !atom.flags.metallic) continue;
+            const dist = oxygen.pos.distance(atom.pos);
+            if (dist < best) {
+                best = dist;
+                found = true;
+            }
+        }
+        return if (found) best else null;
+    }
+    return nearestMetalDistanceLinear(mdl, res_idx, oxygen, target_altloc);
+}
+
+fn nearestMetalDistanceLinear(mdl: *const Model, res_idx: u32, oxygen: Atom, target_altloc: u8) ?f32 {
     var best: f32 = std.math.inf(f32);
     var found = false;
     for (mdl.atoms.items) |atom| {
         if (atom.residue_idx == res_idx) continue;
         if (target_altloc != ' ' and atom.altloc != ' ' and atom.altloc != target_altloc) continue;
         if (!atom.element_type.info().flags.metallic and !atom.flags.metallic) continue;
-
         const dist = oxygen.pos.distance(atom.pos);
         if (dist < best) {
             best = dist;
@@ -1050,14 +1170,44 @@ fn nearestMetalDistance(mdl: *const Model, res_idx: u32, oxygen: Atom, target_al
     return if (found) best else null;
 }
 
-fn awayFromNearbyAtoms(mdl: *const Model, res_idx: u32, oxygen: Atom, target_altloc: u8) ?Vec3f32 {
+fn awayFromNearbyAtoms(
+    mdl: *const Model,
+    res_idx: u32,
+    oxygen: Atom,
+    target_altloc: u8,
+    ctx: ?WaterCellCtx,
+    tmp: *std.ArrayListUnmanaged(u32),
+) ?Vec3f32 {
+    if (ctx) |c| {
+        tmp.clearRetainingCapacity();
+        c.cell_list.neighborsInRadius(oxygen.pos, 4.0, tmp, mdl.allocator, c.positions) catch {
+            return awayFromNearbyAtomsLinear(mdl, res_idx, oxygen, target_altloc);
+        };
+        var sum = Vec3f32.zero;
+        var count: u32 = 0;
+        for (tmp.items) |cl_idx| {
+            const atom_idx = c.atom_indices[cl_idx];
+            const atom = mdl.atoms.items[atom_idx];
+            if (atom.residue_idx == res_idx) continue;
+            if (target_altloc != ' ' and atom.altloc != ' ' and atom.altloc != target_altloc) continue;
+            const dist = oxygen.pos.distance(atom.pos);
+            if (dist < 0.1) continue;
+            sum = sum.add(atom.pos);
+            count += 1;
+        }
+        if (count == 0) return null;
+        return oxygen.pos.sub(sum.scale(1.0 / @as(f32, @floatFromInt(count)))).normalize();
+    }
+    return awayFromNearbyAtomsLinear(mdl, res_idx, oxygen, target_altloc);
+}
+
+fn awayFromNearbyAtomsLinear(mdl: *const Model, res_idx: u32, oxygen: Atom, target_altloc: u8) ?Vec3f32 {
     var sum = Vec3f32.zero;
     var count: u32 = 0;
     for (mdl.atoms.items) |atom| {
         if (atom.is_hydrogen) continue;
         if (atom.residue_idx == res_idx) continue;
         if (target_altloc != ' ' and atom.altloc != ' ' and atom.altloc != target_altloc) continue;
-
         const dist = oxygen.pos.distance(atom.pos);
         if (dist > 4.0 or dist < 0.1) continue;
         sum = sum.add(atom.pos);
@@ -1067,7 +1217,7 @@ fn awayFromNearbyAtoms(mdl: *const Model, res_idx: u32, oxygen: Atom, target_alt
     return oxygen.pos.sub(sum.scale(1.0 / @as(f32, @floatFromInt(count)))).normalize();
 }
 
-fn placeWaterHydrogens(mdl: *Model, res: Residue, res_idx: u32, config: WaterConfig, mode: bond_policy.BondLengthMode) !PlacementResult {
+fn placeWaterHydrogens(mdl: *Model, res: Residue, res_idx: u32, config: WaterConfig, mode: bond_policy.BondLengthMode, cell_ctx: ?WaterCellCtx) !PlacementResult {
     var result = PlacementResult{};
     const altlocs = collectAltlocs(mdl, res);
     const targets: []const u8 = if (altlocs.count == 0)
@@ -1078,6 +1228,10 @@ fn placeWaterHydrogens(mdl: *Model, res: Residue, res_idx: u32, config: WaterCon
     const h1_name = padName("H1");
     const h2_name = padName("H2");
     const half_angle: f32 = 52.25;
+
+    // Scratch buffer reused across altlocs and helper calls to avoid repeated allocs.
+    var tmp = std.ArrayListUnmanaged(u32){};
+    defer tmp.deinit(mdl.allocator);
 
     for (targets) |alt| {
         const oxygen = findWaterOxygen(mdl, res, alt) orelse {
@@ -1093,7 +1247,7 @@ fn placeWaterHydrogens(mdl: *Model, res: Residue, res_idx: u32, config: WaterCon
             result.n_skipped_inter_residue += 1;
             continue;
         }
-        if (nearestMetalDistance(mdl, res_idx, oxygen, alt)) |dist| {
+        if (nearestMetalDistance(mdl, res_idx, oxygen, alt, cell_ctx, &tmp)) |dist| {
             if (dist <= config.metal_cutoff) {
                 result.n_skipped_inter_residue += 1;
                 continue;
@@ -1108,14 +1262,14 @@ fn placeWaterHydrogens(mdl: *Model, res: Residue, res_idx: u32, config: WaterCon
             continue;
         }
 
-        const neighbors = chooseWaterNeighbors(mdl, res_idx, oxygen, alt);
+        const neighbors = chooseWaterNeighbors(mdl, res_idx, oxygen, alt, cell_ctx, &tmp);
         const n1 = neighbors[0];
         const n2 = neighbors[1];
 
         var away = if (n1) |p1|
             oxygen.pos.sub(p1).normalize()
         else if (config.phantom)
-            awayFromNearbyAtoms(mdl, res_idx, oxygen, alt) orelse Vec3f32{ .x = 1.0, .y = 0.0, .z = 0.0 }
+            awayFromNearbyAtoms(mdl, res_idx, oxygen, alt, cell_ctx, &tmp) orelse Vec3f32{ .x = 1.0, .y = 0.0, .z = 0.0 }
         else {
             result.n_skipped_missing_ref += 1;
             continue;
