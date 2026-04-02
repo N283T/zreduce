@@ -9,8 +9,8 @@
 //!     atom_count(u16 LE) + PackedAtom * atom_count
 //!     bond_count(u16 LE) + PackedBond * bond_count
 //!
-//! PackedAtom/PackedBond are written as raw bytes in native byte order.
-//! This format is little-endian only.
+//! PackedAtom/PackedBond are written as raw struct bytes assuming little-endian
+//! layout. A comptime assertion rejects big-endian targets.
 
 const std = @import("std");
 const builtin = @import("builtin");
