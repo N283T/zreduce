@@ -60,7 +60,16 @@ fn stripDocumentHydrogens(block: *zreduce.cif.Block) void {
     var write: usize = 0;
     var read: usize = 0;
     while (read < n_rows) : (read += 1) {
-        const type_sym = loop.val(read, type_col) orelse continue;
+        const type_sym = loop.val(read, type_col) orelse {
+            // Missing type_symbol — not hydrogen, keep the row
+            if (write != read) {
+                for (0..w) |col| {
+                    loop.values.items[write * w + col] = loop.values.items[read * w + col];
+                }
+            }
+            write += 1;
+            continue;
+        };
         const is_h = std.ascii.eqlIgnoreCase(type_sym, "H") or
             std.ascii.eqlIgnoreCase(type_sym, "D");
         if (is_h) continue;
