@@ -186,8 +186,9 @@ fn printUsage(program_name: []const u8) void {
         \\    {s} <command> [OPTIONS] <args>
         \\
         \\COMMANDS:
-        \\    run      Process a single mmCIF file
-        \\    batch    Process all mmCIF files in a directory
+        \\    run           Process a single mmCIF file
+        \\    batch         Process all mmCIF files in a directory
+        \\    compile-dict  Pre-compile CCD dictionary to binary format
         \\
         \\GLOBAL OPTIONS:
         \\    -h, --help       Show this help message
@@ -256,6 +257,8 @@ pub fn main() !void {
         runSubcommand(allocator, args[2..]);
     } else if (std.mem.eql(u8, subcmd, "batch")) {
         batchSubcommand(allocator, args[2..]);
+    } else if (std.mem.eql(u8, subcmd, "compile-dict")) {
+        compileDictSubcommand(allocator, args[2..]);
     } else {
         std.debug.print("Error: unknown subcommand '{s}'\n", .{subcmd});
         printUsage(args[0]);
@@ -438,6 +441,112 @@ fn printBatchUsage() void {
         \\    --strip-h          Remove existing H atoms before placement
         \\
     , .{});
+}
+
+const CompileDictConfig = struct {
+    input_path: []const u8,
+    output_path: ?[]const u8 = null,
+};
+
+fn parseCompileDictArgs(args: []const []const u8) ?CompileDictConfig {
+    var config = CompileDictConfig{ .input_path = undefined };
+    var input_set = false;
+    var i: usize = 0;
+
+    while (i < args.len) : (i += 1) {
+        const arg = args[i];
+        if (std.mem.eql(u8, arg, "-h") or std.mem.eql(u8, arg, "--help")) {
+            printCompileDictUsage();
+            return null;
+        } else if (std.mem.eql(u8, arg, "-o") or std.mem.eql(u8, arg, "--output")) {
+            i += 1;
+            if (i >= args.len) {
+                std.debug.print("Error: {s} requires a path argument\n", .{arg});
+                std.process.exit(1);
+            }
+            config.output_path = args[i];
+        } else if (arg.len > 0 and arg[0] == '-') {
+            std.debug.print("Error: unknown option '{s}'\n", .{arg});
+            std.process.exit(1);
+        } else {
+            if (input_set) {
+                std.debug.print("Error: unexpected argument '{s}'\n", .{arg});
+                std.process.exit(1);
+            }
+            config.input_path = arg;
+            input_set = true;
+        }
+    }
+
+    if (!input_set) {
+        std.debug.print("Error: missing input CIF path\n", .{});
+        printCompileDictUsage();
+        std.process.exit(1);
+    }
+
+    if (config.output_path == null) {
+        std.debug.print("Error: -o/--output is required\n", .{});
+        std.process.exit(1);
+    }
+
+    return config;
+}
+
+fn printCompileDictUsage() void {
+    std.debug.print(
+        \\USAGE:
+        \\    zreduce compile-dict [OPTIONS] <input.cif>
+        \\
+        \\OPTIONS:
+        \\    -h, --help         Show this help message
+        \\    -o, --output PATH  Output binary dictionary file (required)
+        \\
+    , .{});
+}
+
+fn compileDictSubcommand(allocator: Allocator, args: []const []const u8) void {
+    const config = parseCompileDictArgs(args) orelse return;
+
+    // Read input
+    const source = zreduce.run.readFile(allocator, config.input_path) catch |err| {
+        std.debug.print("Error: cannot read '{s}': {s}\n", .{ config.input_path, @errorName(err) });
+        std.process.exit(1);
+    };
+    defer allocator.free(source);
+
+    // Reject if already binary
+    if (zreduce.ccd_binary.isBinaryDict(source)) {
+        std.debug.print("Error: input is already a compiled dictionary\n", .{});
+        std.process.exit(1);
+    }
+
+    // Parse CIF
+    var dict = zreduce.ccd.parseComponentDict(allocator, source) catch |err| {
+        std.debug.print("Error: failed to parse CCD dictionary: {s}\n", .{@errorName(err)});
+        std.process.exit(1);
+    };
+    defer dict.deinit();
+
+    // Write binary
+    const output_path = config.output_path.?;
+    const file = std.fs.cwd().createFile(output_path, .{}) catch |err| {
+        std.debug.print("Error: cannot create '{s}': {s}\n", .{ output_path, @errorName(err) });
+        std.process.exit(1);
+    };
+    defer file.close();
+
+    var write_buf: [65536]u8 = undefined;
+    var file_writer = file.writer(&write_buf);
+    zreduce.ccd_binary.writeDict(&file_writer.interface, &dict) catch |err| {
+        std.debug.print("Error: failed to write binary dictionary: {s}\n", .{@errorName(err)});
+        std.process.exit(1);
+    };
+    file_writer.interface.flush() catch |err| {
+        std.debug.print("Error: failed to flush output: {s}\n", .{@errorName(err)});
+        std.process.exit(1);
+    };
+
+    std.debug.print("Compiled {d} components to '{s}'\n", .{ dict.components.count(), output_path });
 }
 
 fn batchSubcommand(allocator: Allocator, args: []const []const u8) void {
