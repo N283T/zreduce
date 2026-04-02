@@ -142,7 +142,9 @@ pub fn addHydrogensWithConfig(
         }
 
         const pos_slice = try positions.toOwnedSlice(mdl.allocator);
+        errdefer mdl.allocator.free(pos_slice);
         const idx_slice = try atom_idx_map.toOwnedSlice(mdl.allocator);
+        errdefer mdl.allocator.free(idx_slice);
 
         const cl = CellList.init(mdl.allocator, pos_slice, 5.0) catch |err| switch (err) {
             error.GridTooLarge => {
