@@ -508,7 +508,7 @@ pub fn run(allocator: Allocator, config: BatchConfig) !void {
     if (config.dict_path) |dict_path| {
         const dict_source = try run_mod.readFile(allocator, dict_path);
         defer allocator.free(dict_source);
-        ccd_dict = try zreduce.ccd.parseComponentDict(allocator, dict_source);
+        ccd_dict = try zreduce.ccd_binary.loadDict(allocator, dict_source);
     }
     defer if (ccd_dict) |*d| d.deinit();
 

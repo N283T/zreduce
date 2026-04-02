@@ -462,8 +462,8 @@ fn runSubcommand(allocator: Allocator, args: []const []const u8) void {
             std.process.exit(1);
         };
         defer allocator.free(dict_source);
-        ccd_dict = zreduce.ccd.parseComponentDict(allocator, dict_source) catch |err| {
-            std.debug.print("Error: failed to parse CCD dictionary: {s}\n", .{@errorName(err)});
+        ccd_dict = zreduce.ccd_binary.loadDict(allocator, dict_source) catch |err| {
+            std.debug.print("Error: failed to load CCD dictionary: {s}\n", .{@errorName(err)});
             std.process.exit(1);
         };
     }
