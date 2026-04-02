@@ -33,8 +33,8 @@ pub const ResidueSelector = struct {
 
 pub const Entry = struct {
     selector: ResidueSelector,
-    comp_id: [3]u8,
-    comp_id_len: u2,
+    comp_id: [5]u8,
+    comp_id_len: u3,
     state: ResidueState,
 
     pub fn compIdSlice(self: *const Entry) []const u8 {
@@ -137,8 +137,8 @@ pub fn parseString(allocator: std.mem.Allocator, source: []const u8) !Protonatio
             std.debug.print("Error: protonation override line {d}: unexpected extra tokens\n", .{line_num});
             return error.InvalidProtonationOverride;
         }
-        if (comp_tok.len > 3) {
-            std.debug.print("Error: protonation override line {d}: comp_id '{s}' exceeds 3 characters\n", .{ line_num, comp_tok });
+        if (comp_tok.len > 5) {
+            std.debug.print("Error: protonation override line {d}: comp_id '{s}' exceeds 5 characters\n", .{ line_num, comp_tok });
             return error.InvalidProtonationOverride;
         }
 
@@ -152,8 +152,8 @@ pub fn parseString(allocator: std.mem.Allocator, source: []const u8) !Protonatio
             return error.InvalidProtonationOverride;
         };
 
-        var comp_id: [3]u8 = .{ ' ', ' ', ' ' };
-        const comp_id_len: u2 = @intCast(comp_tok.len);
+        var comp_id: [5]u8 = .{ ' ', ' ', ' ', ' ', ' ' };
+        const comp_id_len: u3 = @intCast(comp_tok.len);
         for (0..comp_id_len) |i| comp_id[i] = std.ascii.toUpper(comp_tok[i]);
 
         entries.append(allocator, .{
@@ -297,6 +297,6 @@ test "parser rejects invalid input" {
     try testing.expectError(error.InvalidProtonationOverride, parseString(testing.allocator, "A HIS HIE"));
     // Non-numeric seq_id
     try testing.expectError(error.InvalidProtonationOverride, parseString(testing.allocator, "A:XYZ HIS HIE"));
-    // comp_id > 3 characters
-    try testing.expectError(error.InvalidProtonationOverride, parseString(testing.allocator, "A:1 HIST HIE"));
+    // comp_id > 5 characters
+    try testing.expectError(error.InvalidProtonationOverride, parseString(testing.allocator, "A:1 HISTXY HIE"));
 }
