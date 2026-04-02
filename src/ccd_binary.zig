@@ -8,8 +8,17 @@
 //!     comp_type_len(u8) + comp_type(bytes)
 //!     atom_count(u16 LE) + PackedAtom * atom_count
 //!     bond_count(u16 LE) + PackedBond * bond_count
+//!
+//! PackedAtom/PackedBond are written as raw bytes in native byte order.
+//! This format is little-endian only.
 
 const std = @import("std");
+const builtin = @import("builtin");
+
+comptime {
+    // Binary format uses native byte order for packed structs; only LE is supported.
+    std.debug.assert(builtin.cpu.arch.endian() == .little);
+}
 const Allocator = std.mem.Allocator;
 const ccd = @import("ccd.zig");
 
