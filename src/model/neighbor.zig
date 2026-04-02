@@ -20,6 +20,7 @@ pub const CellList = struct {
     allocator: Allocator,
 
     pub fn init(allocator: Allocator, positions: []const Vec3(f32), cell_size: f32) !CellList {
+        std.debug.assert(cell_size > 0);
         if (positions.len == 0) {
             return CellList{
                 .atom_indices = try allocator.alloc(u32, 0),
@@ -125,6 +126,7 @@ pub const CellList = struct {
         allocator: Allocator,
         positions: []const Vec3(f32),
     ) !void {
+        std.debug.assert(!std.math.isNan(query.x) and !std.math.isNan(query.y) and !std.math.isNan(query.z));
         if (self.nx == 0) return;
 
         const r2 = radius * radius;
