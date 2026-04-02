@@ -17,6 +17,7 @@ const Chain = model_mod.Chain;
 pub const MmcifError = error{
     NoAtomSiteLoop,
     MissingCoordinateField,
+    MissingRequiredField,
     InvalidCoordinateValue,
     CifParseError,
     OutOfMemory,
@@ -362,9 +363,9 @@ pub const AtomLookup = std.HashMap(AtomLookupKey, u32, AtomLookupContext, 80);
 pub fn buildAtomLookup(allocator: Allocator, block: *const cif.Block) !AtomLookup {
     const loop = block.findLoop("_atom_site.Cartn_x") orelse return MmcifError.NoAtomSiteLoop;
 
-    const col_asym = loop.findTag("_atom_site.label_asym_id") orelse return MmcifError.MissingCoordinateField;
-    const col_seq = loop.findTag("_atom_site.label_seq_id") orelse return MmcifError.MissingCoordinateField;
-    const col_atom = loop.findTag("_atom_site.label_atom_id") orelse return MmcifError.MissingCoordinateField;
+    const col_asym = loop.findTag("_atom_site.label_asym_id") orelse return MmcifError.MissingRequiredField;
+    const col_seq = loop.findTag("_atom_site.label_seq_id") orelse return MmcifError.MissingRequiredField;
+    const col_atom = loop.findTag("_atom_site.label_atom_id") orelse return MmcifError.MissingRequiredField;
     const col_auth_seq = loop.findTag("_atom_site.auth_seq_id");
 
     var lookup = AtomLookup.initContext(allocator, AtomLookupContext{});
@@ -439,13 +440,13 @@ pub fn isCovalentConnType(conn_type: []const u8) bool {
 pub fn parseStructConn(mdl: *Model, block: *const cif.Block, lookup: *const AtomLookup) !void {
     const sc = block.findLoop("_struct_conn.conn_type_id") orelse return;
 
-    const col_type = sc.findTag("_struct_conn.conn_type_id") orelse return error.MissingCoordinateField;
-    const col_asym1 = sc.findTag("_struct_conn.ptnr1_label_asym_id") orelse return error.MissingCoordinateField;
-    const col_seq1 = sc.findTag("_struct_conn.ptnr1_label_seq_id") orelse return error.MissingCoordinateField;
-    const col_atom1 = sc.findTag("_struct_conn.ptnr1_label_atom_id") orelse return error.MissingCoordinateField;
-    const col_asym2 = sc.findTag("_struct_conn.ptnr2_label_asym_id") orelse return error.MissingCoordinateField;
-    const col_seq2 = sc.findTag("_struct_conn.ptnr2_label_seq_id") orelse return error.MissingCoordinateField;
-    const col_atom2 = sc.findTag("_struct_conn.ptnr2_label_atom_id") orelse return error.MissingCoordinateField;
+    const col_type = sc.findTag("_struct_conn.conn_type_id") orelse return error.MissingRequiredField;
+    const col_asym1 = sc.findTag("_struct_conn.ptnr1_label_asym_id") orelse return error.MissingRequiredField;
+    const col_seq1 = sc.findTag("_struct_conn.ptnr1_label_seq_id") orelse return error.MissingRequiredField;
+    const col_atom1 = sc.findTag("_struct_conn.ptnr1_label_atom_id") orelse return error.MissingRequiredField;
+    const col_asym2 = sc.findTag("_struct_conn.ptnr2_label_asym_id") orelse return error.MissingRequiredField;
+    const col_seq2 = sc.findTag("_struct_conn.ptnr2_label_seq_id") orelse return error.MissingRequiredField;
+    const col_atom2 = sc.findTag("_struct_conn.ptnr2_label_atom_id") orelse return error.MissingRequiredField;
     const col_sym1 = sc.findTag("_struct_conn.ptnr1_symmetry");
     const col_sym2 = sc.findTag("_struct_conn.ptnr2_symmetry");
     const col_order = sc.findTag("_struct_conn.pdbx_value_order");
@@ -511,13 +512,13 @@ pub fn parseStructConn(mdl: *Model, block: *const cif.Block, lookup: *const Atom
 pub fn parseBranchLinks(allocator: Allocator, mdl: *Model, block: *const cif.Block, lookup: *const AtomLookup) !void {
     const loop = block.findLoop("_pdbx_entity_branch_link.link_id") orelse return;
 
-    const col_entity = loop.findTag("_pdbx_entity_branch_link.entity_id") orelse return error.MissingCoordinateField;
-    const col_num1 = loop.findTag("_pdbx_entity_branch_link.entity_branch_list_num_1") orelse return error.MissingCoordinateField;
-    const col_num2 = loop.findTag("_pdbx_entity_branch_link.entity_branch_list_num_2") orelse return error.MissingCoordinateField;
-    const col_atom1 = loop.findTag("_pdbx_entity_branch_link.atom_id_1") orelse return error.MissingCoordinateField;
-    const col_atom2 = loop.findTag("_pdbx_entity_branch_link.atom_id_2") orelse return error.MissingCoordinateField;
-    const col_leaving1 = loop.findTag("_pdbx_entity_branch_link.leaving_atom_id_1") orelse return error.MissingCoordinateField;
-    const col_leaving2 = loop.findTag("_pdbx_entity_branch_link.leaving_atom_id_2") orelse return error.MissingCoordinateField;
+    const col_entity = loop.findTag("_pdbx_entity_branch_link.entity_id") orelse return error.MissingRequiredField;
+    const col_num1 = loop.findTag("_pdbx_entity_branch_link.entity_branch_list_num_1") orelse return error.MissingRequiredField;
+    const col_num2 = loop.findTag("_pdbx_entity_branch_link.entity_branch_list_num_2") orelse return error.MissingRequiredField;
+    const col_atom1 = loop.findTag("_pdbx_entity_branch_link.atom_id_1") orelse return error.MissingRequiredField;
+    const col_atom2 = loop.findTag("_pdbx_entity_branch_link.atom_id_2") orelse return error.MissingRequiredField;
+    const col_leaving1 = loop.findTag("_pdbx_entity_branch_link.leaving_atom_id_1") orelse return error.MissingRequiredField;
+    const col_leaving2 = loop.findTag("_pdbx_entity_branch_link.leaving_atom_id_2") orelse return error.MissingRequiredField;
 
     // Build entity_id -> [asym_id] mapping from mdl.chains
     var entity_to_asyms = std.StringHashMap(std.ArrayListUnmanaged([]const u8)).init(allocator);
