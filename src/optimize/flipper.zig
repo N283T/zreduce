@@ -63,6 +63,7 @@ pub fn createAmideFlipper(
 
     // Orientation 0: original positions (O, N, H1, H2)
     const pos0 = try allocator.alloc(Vec3(f32), 4);
+    errdefer allocator.free(pos0);
     pos0[0] = o_pos;
     pos0[1] = n_pos;
     pos0[2] = h1_pos;
@@ -75,16 +76,19 @@ pub fn createAmideFlipper(
     const new_hs = computeAmideNH2(new_n_pos, c_pos, new_o_pos, mode);
 
     const pos1 = try allocator.alloc(Vec3(f32), 4);
+    errdefer allocator.free(pos1);
     pos1[0] = new_o_pos;
     pos1[1] = new_n_pos;
     pos1[2] = new_hs[0];
     pos1[3] = new_hs[1];
 
     const orientations = try allocator.alloc(Orientation, 2);
+    errdefer allocator.free(orientations);
     orientations[0] = .{ .positions = pos0, .penalty = 0.0 };
     orientations[1] = .{ .positions = pos1, .penalty = 0.5 };
 
     const atom_indices = try allocator.alloc(u32, 4);
+    errdefer allocator.free(atom_indices);
     atom_indices[0] = o_idx;
     atom_indices[1] = n_idx;
     atom_indices[2] = h1_idx;
@@ -220,6 +224,14 @@ pub fn createHisFlipper(
     };
 
     const orientations = try allocator.alloc(Orientation, 4);
+    var allocated: usize = 0;
+    errdefer {
+        for (orientations[0..allocated]) |o| {
+            allocator.free(o.positions);
+            if (o.flags) |f| allocator.free(f);
+        }
+        allocator.free(orientations);
+    }
     for (specs, 0..) |spec, i| {
         const positions = try allocator.alloc(Vec3(f32), 6);
         positions[0] = spec.nd1_p;
@@ -233,6 +245,7 @@ pub fn createHisFlipper(
         @memcpy(flags, &orient_flags[i]);
 
         orientations[i] = .{ .positions = positions, .flags = flags, .penalty = penalties[i] };
+        allocated += 1;
     }
 
     // atom_indices: [ND1, CD2, CE1, NE2, HD1_or_placeholder, HE2_or_placeholder]
@@ -240,6 +253,7 @@ pub fn createHisFlipper(
     const actual_he2_idx = he2_idx orelse nd1_idx;
 
     const atom_indices = try allocator.alloc(u32, 6);
+    errdefer allocator.free(atom_indices);
     atom_indices[0] = nd1_idx;
     atom_indices[1] = cd2_idx;
     atom_indices[2] = ce1_idx;
