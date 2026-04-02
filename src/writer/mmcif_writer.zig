@@ -194,6 +194,41 @@ fn writeAtomSitePreserving(writer: anytype, model: *const Model, orig_loop: *con
     // Track serial for renumbering
     var serial: u32 = 1;
 
+    // Pre-index added H atoms by residue_idx to avoid O(N*R) inner scan.
+    // Build a counting-sort index: added_indices[added_offsets[r]..added_offsets[r+1]]
+    // gives the atom indices for residue r, in original order.
+    const n_residues = model.residues.items.len;
+    const allocator = model.allocator;
+
+    // Phase 1: count added atoms per residue.
+    const added_counts = try allocator.alloc(u32, n_residues + 1);
+    defer allocator.free(added_counts);
+    @memset(added_counts, 0);
+    for (model.atoms.items) |atom| {
+        if (!atom.is_added) continue;
+        added_counts[atom.residue_idx] += 1;
+    }
+
+    // Phase 2: build prefix-sum offsets (length n_residues + 1).
+    const added_offsets = try allocator.alloc(u32, n_residues + 1);
+    defer allocator.free(added_offsets);
+    added_offsets[0] = 0;
+    for (0..n_residues) |r| {
+        added_offsets[r + 1] = added_offsets[r] + added_counts[r];
+    }
+    const total_added = added_offsets[n_residues];
+
+    // Phase 3: fill sorted atom indices (reuse added_counts as cursor).
+    const added_indices = try allocator.alloc(u32, total_added);
+    defer allocator.free(added_indices);
+    @memset(added_counts, 0); // reset to use as write cursor
+    for (model.atoms.items, 0..) |atom, atom_idx| {
+        if (!atom.is_added) continue;
+        const r = atom.residue_idx;
+        added_indices[added_offsets[r] + added_counts[r]] = @intCast(atom_idx);
+        added_counts[r] += 1;
+    }
+
     // Write rows grouped by residue: original heavy atoms then added H
     for (model.residues.items, 0..) |res, res_idx| {
         const chain = model.chains.items[res.chain_idx];
@@ -224,10 +259,11 @@ fn writeAtomSitePreserving(writer: anytype, model: *const Model, orig_loop: *con
             serial += 1;
         }
 
-        // Added H atoms for this residue
-        for (model.atoms.items) |atom| {
-            if (!atom.is_added) continue;
-            if (atom.residue_idx != res_idx) continue;
+        // Added H atoms for this residue — look up via pre-built index.
+        const h_start = added_offsets[res_idx];
+        const h_end = added_offsets[res_idx + 1];
+        for (added_indices[h_start..h_end]) |atom_idx| {
+            const atom = model.atoms.items[atom_idx];
             // Skip absent H atoms (flipper sentinel)
             if (mover_mod.isAbsentH(atom)) continue;
 
