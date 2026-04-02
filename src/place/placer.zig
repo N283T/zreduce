@@ -1312,6 +1312,42 @@ test "place hydrogens on ALA" {
     try testing.expect(found_ha);
 }
 
+test "xray mode produces shorter C-H bond than neutron" {
+    const source = @embedFile("../test_data/tiny.cif");
+
+    // Place in neutron mode (default)
+    var mdl_n = try mmcif.parseModel(testing.allocator, source);
+    defer mdl_n.deinit();
+    _ = try addHydrogensWithConfig(&mdl_n, null, null, .{ .bond_policy = .{ .mode = .neutron } });
+
+    // Place in xray mode
+    var mdl_x = try mmcif.parseModel(testing.allocator, source);
+    defer mdl_x.deinit();
+    _ = try addHydrogensWithConfig(&mdl_x, null, null, .{ .bond_policy = .{ .mode = .xray } });
+
+    // Find HA in both and compare distance to CA
+    const ca_pos_n = mdl_n.atoms.items[1].pos;
+    const ca_pos_x = mdl_x.atoms.items[1].pos;
+    var dist_n: f32 = 0;
+    var dist_x: f32 = 0;
+    for (mdl_n.atoms.items) |atom| {
+        if (std.mem.eql(u8, atom.nameSlice(), "HA")) {
+            dist_n = atom.pos.distance(ca_pos_n);
+            break;
+        }
+    }
+    for (mdl_x.atoms.items) |atom| {
+        if (std.mem.eql(u8, atom.nameSlice(), "HA")) {
+            dist_x = atom.pos.distance(ca_pos_x);
+            break;
+        }
+    }
+    // Neutron C-H ~1.10, xray C-H ~0.98
+    try testing.expect(dist_n > 1.0);
+    try testing.expectApproxEqAbs(@as(f32, 0.98), dist_x, 0.02);
+    try testing.expect(dist_x < dist_n);
+}
+
 test "protonation override fixes HIS tautomer during placement" {
     const source = @embedFile("../test_data/his.cif");
     var mdl = try mmcif.parseModel(testing.allocator, source);

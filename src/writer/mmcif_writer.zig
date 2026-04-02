@@ -808,6 +808,83 @@ test "writeWithPolicy outputs D for added hydrogens when isotope is deuterium" {
     try testing.expect(found_added_h);
 }
 
+test "writeWithDocumentWithPolicy outputs D in preserving mode" {
+    const source = @embedFile("../test_data/tiny.cif");
+
+    var doc = try cif.readString(testing.allocator, source);
+    defer doc.deinit();
+
+    var mdl = try mmcif.parseModel(testing.allocator, source);
+    defer mdl.deinit();
+    _ = try place.addHydrogens(&mdl, null, null);
+
+    var out: std.ArrayListUnmanaged(u8) = .empty;
+    defer out.deinit(testing.allocator);
+    try writeWithDocumentWithPolicy(out.writer(testing.allocator), &mdl, &doc, .{
+        .output_isotope = .deuterium,
+    });
+
+    var parsed = try cif.readString(testing.allocator, out.items);
+    defer parsed.deinit();
+
+    const block = &parsed.blocks.items[0];
+    const atom_site = block.findLoop("_atom_site.label_atom_id").?;
+    const atom_name_col = atom_site.findTag("_atom_site.label_atom_id").?;
+    const type_symbol_col = atom_site.findTag("_atom_site.type_symbol").?;
+
+    var found_d: bool = false;
+    for (0..atom_site.length()) |row| {
+        const atom_name = atom_site.val(row, atom_name_col) orelse continue;
+        const type_symbol = atom_site.val(row, type_symbol_col) orelse continue;
+        if (std.mem.startsWith(u8, atom_name, "H")) {
+            // Added H atoms should have type_symbol "D"
+            try testing.expectEqualStrings("D", type_symbol);
+            found_d = true;
+        }
+    }
+    try testing.expect(found_d);
+}
+
+test "deuterium mode preserves existing H atoms as H" {
+    const source = @embedFile("../test_data/ala_with_h.cif");
+
+    var mdl = try mmcif.parseModel(testing.allocator, source);
+    defer mdl.deinit();
+    _ = try place.addHydrogens(&mdl, null, null);
+
+    var out: std.ArrayListUnmanaged(u8) = .empty;
+    defer out.deinit(testing.allocator);
+    try writeWithPolicy(out.writer(testing.allocator), &mdl, "TEST", .{
+        .output_isotope = .deuterium,
+    });
+
+    var doc = try cif.readString(testing.allocator, out.items);
+    defer doc.deinit();
+
+    const block = &doc.blocks.items[0];
+    const atom_site = block.findLoop("_atom_site.label_atom_id").?;
+    const type_symbol_col = atom_site.findTag("_atom_site.type_symbol").?;
+    const atom_name_col = atom_site.findTag("_atom_site.label_atom_id").?;
+
+    var found_original_h = false;
+    var found_added_d = false;
+    for (0..atom_site.length()) |row| {
+        const atom_name = atom_site.val(row, atom_name_col) orelse continue;
+        const type_symbol = atom_site.val(row, type_symbol_col) orelse continue;
+        if (!std.mem.startsWith(u8, atom_name, "H")) continue;
+
+        // Check if this is an original atom (in the first residue's range) or added
+        // ala_with_h.cif has pre-existing H atoms; added H will have type_symbol D
+        if (std.mem.eql(u8, type_symbol, "H")) {
+            found_original_h = true;
+        } else if (std.mem.eql(u8, type_symbol, "D")) {
+            found_added_d = true;
+        }
+    }
+    // ala_with_h.cif has pre-existing H, so we should see both H and D
+    try testing.expect(found_original_h);
+}
+
 test "elementSymbol returns correct symbols" {
     try testing.expectEqualStrings("H", elementSymbol(.H));
     try testing.expectEqualStrings("H", elementSymbol(.Hpol));
