@@ -21,6 +21,11 @@ fn n(comptime s: []const u8) [4]u8 {
 
 const blank = n("    ");
 
+// Bond length constants from standard.zig (canonical CCD-derived values)
+const c_h_sp3 = standard.c_h_sp3;
+const c_h_arom = standard.c_h_arom;
+const n_h_backbone = standard.n_h_backbone;
+
 // Reuse standard.zig helper patterns inline
 
 fn hxr3(comptime h: []const u8, comptime a: []const u8, comptime b: []const u8, comptime c: []const u8) PlacementPlan {
@@ -29,7 +34,7 @@ fn hxr3(comptime h: []const u8, comptime a: []const u8, comptime b: []const u8, 
         .placement_type = .hxr3,
         .connected = .{ n(a), n(b), n(c) },
         .n_connected = 3,
-        .bond_len = 1.10,
+        .bond_len = c_h_sp3,
         .atom_type = .H,
     };
 }
@@ -40,7 +45,7 @@ fn h2xr2(comptime h: []const u8, comptime a: []const u8, comptime b: []const u8,
         .placement_type = .h2xr2,
         .connected = .{ n(a), n(b), blank },
         .n_connected = 2,
-        .bond_len = 1.10,
+        .bond_len = c_h_sp3,
         .angle = 109.5,
         .dihedral = dihedral,
         .atom_type = .H,
@@ -53,7 +58,7 @@ fn methyl(comptime h: []const u8, comptime center: []const u8, comptime bonded: 
         .placement_type = .h3xr,
         .connected = .{ n(center), n(bonded), blank },
         .n_connected = 3,
-        .bond_len = 1.10,
+        .bond_len = c_h_sp3,
         .angle = 109.5,
         .dihedral = dihedral,
         .atom_type = .H,
@@ -67,7 +72,7 @@ fn planarH(comptime h: []const u8, comptime a: []const u8, comptime b: []const u
         .placement_type = .hxr2_planar,
         .connected = .{ n(a), n(b), blank },
         .n_connected = 2,
-        .bond_len = 1.10,
+        .bond_len = c_h_arom,
         .atom_type = .Har,
     };
 }
@@ -77,7 +82,7 @@ const backbone_h = PlacementPlan{
     .placement_type = .h3xr,
     .connected = .{ n(" N  "), n(" CA "), n(" C  ") },
     .n_connected = 3,
-    .bond_len = 1.02,
+    .bond_len = n_h_backbone,
     .angle = 119.0,
     .dihedral = 180.0,
     .atom_type = .Hpol,
