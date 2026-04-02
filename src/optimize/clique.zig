@@ -9,6 +9,7 @@ const model_mod = @import("../model.zig");
 const Atom = model_mod.Atom;
 const mover_mod = @import("mover.zig");
 const Mover = mover_mod.Mover;
+const CellList = @import("../model/neighbor.zig").CellList;
 
 pub const InteractionGraph = struct {
     /// Adjacency list: adj[i] = list of mover indices that interact with mover i
@@ -41,15 +42,26 @@ pub fn buildInteractionGraph(
         allocator.free(adj_lists);
     }
 
-    // For each pair of movers, check if any atoms are within cutoff
-    for (0..n) |i| {
-        for (i + 1..n) |j| {
-            if (moversInteract(movers[i], movers[j], atoms, cutoff)) {
-                try adj_lists[i].append(allocator, @intCast(j));
-                try adj_lists[j].append(allocator, @intCast(i));
+    // Use CellList spatial index to avoid checking all O(M^2) mover pairs.
+    // Compute a centroid for each mover and find the max distance from any
+    // centroid to its atoms (max_radius). Then build a CellList over centroids
+    // with cell_size = cutoff + 2*max_radius so that querying within that radius
+    // gives exactly the candidate pairs that could possibly interact.
+    // Fall back to brute force if the grid would be too large.
+    buildWithCellList(allocator, movers, atoms, cutoff, adj_lists) catch |err| switch (err) {
+        error.GridTooLarge => {
+            // Brute-force fallback
+            for (0..n) |i| {
+                for (i + 1..n) |j| {
+                    if (moversInteract(movers[i], movers[j], atoms, cutoff)) {
+                        try adj_lists[i].append(allocator, @intCast(j));
+                        try adj_lists[j].append(allocator, @intCast(i));
+                    }
+                }
             }
-        }
-    }
+        },
+        else => return err,
+    };
 
     // Convert to owned slices
     const adjacency = try allocator.alloc([]u32, n);
@@ -63,6 +75,74 @@ pub fn buildInteractionGraph(
         .n_movers = @intCast(n),
         .allocator = allocator,
     };
+}
+
+/// CellList-accelerated inner loop for buildInteractionGraph.
+/// Returns error.GridTooLarge when CellList.init fails with that error, so the
+/// caller can fall back to brute force. Other errors are propagated normally.
+fn buildWithCellList(
+    allocator: Allocator,
+    movers: []const Mover,
+    atoms: []const Atom,
+    cutoff: f32,
+    adj_lists: []std.ArrayListUnmanaged(u32),
+) !void {
+    const n = movers.len;
+    if (n == 0) return;
+
+    // 1. Compute centroid for each mover.
+    const centroids = try allocator.alloc(Vec3(f32), n);
+    defer allocator.free(centroids);
+
+    for (movers, 0..) |mover, i| {
+        var sum = Vec3(f32){ .x = 0, .y = 0, .z = 0 };
+        for (mover.atom_indices) |ai| {
+            sum = sum.add(atoms[ai].pos);
+        }
+        const count: f32 = @floatFromInt(mover.atom_indices.len);
+        centroids[i] = Vec3(f32){
+            .x = sum.x / count,
+            .y = sum.y / count,
+            .z = sum.z / count,
+        };
+    }
+
+    // 2. Compute max_radius: the furthest any atom is from its mover's centroid.
+    var max_radius: f32 = 0.0;
+    for (movers, 0..) |mover, i| {
+        for (mover.atom_indices) |ai| {
+            const diff = atoms[ai].pos.sub(centroids[i]);
+            const d = @sqrt(diff.dot(diff));
+            if (d > max_radius) max_radius = d;
+        }
+    }
+
+    // 3. Build CellList over mover centroids.
+    //    Query radius = cutoff + 2*max_radius covers all pairs that might interact.
+    const query_radius = cutoff + 2.0 * max_radius;
+    const cell_size = @max(query_radius, 1.0); // one cell spans the whole query radius
+
+    var cell_list = try CellList.init(allocator, centroids, cell_size);
+    defer cell_list.deinit();
+
+    // 4. For each mover i, query nearby centroids and run the detailed check.
+    var candidates = std.ArrayListUnmanaged(u32).empty;
+    defer candidates.deinit(allocator);
+
+    for (0..n) |i| {
+        candidates.clearRetainingCapacity();
+        try cell_list.neighborsInRadius(centroids[i], query_radius, &candidates, allocator, centroids);
+
+        for (candidates.items) |j_u32| {
+            const j: usize = j_u32;
+            // Only check each pair once (i < j).
+            if (j <= i) continue;
+            if (moversInteract(movers[i], movers[j], atoms, cutoff)) {
+                try adj_lists[i].append(allocator, @intCast(j));
+                try adj_lists[j].append(allocator, @intCast(i));
+            }
+        }
+    }
 }
 
 fn moversInteract(a: Mover, b: Mover, atoms: []const Atom, cutoff: f32) bool {
