@@ -1,48 +1,39 @@
 //! Chain struct representing a single chain in the molecular model.
 
 const std = @import("std");
+const fixed_string = @import("fixed_string.zig");
+
+const FixedString = fixed_string.FixedString;
 
 pub const Chain = struct {
-    label_asym_id: [4]u8 = .{ ' ', ' ', ' ', ' ' },
-    label_asym_id_len: u4 = 0,
-    auth_asym_id: [4]u8 = .{ ' ', ' ', ' ', ' ' },
-    auth_asym_id_len: u4 = 0,
-    entity_id: [4]u8 = .{ ' ', ' ', ' ', ' ' },
-    entity_id_len: u4 = 0,
+    label_asym_id: FixedString(4) = .{},
+    auth_asym_id: FixedString(4) = .{},
+    entity_id: FixedString(4) = .{},
     residue_start: u32 = 0,
     residue_end: u32 = 0,
 
     pub fn labelSlice(self: *const Chain) []const u8 {
-        return self.label_asym_id[0..@min(@as(usize, self.label_asym_id_len), 4)];
+        return self.label_asym_id.slice();
     }
 
     pub fn setLabelAsymId(self: *Chain, id: []const u8) void {
-        const len: u4 = @intCast(@min(id.len, 4));
-        self.label_asym_id = .{ ' ', ' ', ' ', ' ' };
-        for (0..len) |i| self.label_asym_id[i] = id[i];
-        self.label_asym_id_len = len;
+        self.label_asym_id.set(id);
     }
 
     pub fn authSlice(self: *const Chain) []const u8 {
-        return self.auth_asym_id[0..@min(@as(usize, self.auth_asym_id_len), 4)];
+        return self.auth_asym_id.slice();
     }
 
     pub fn setAuthAsymId(self: *Chain, id: []const u8) void {
-        const len: u4 = @intCast(@min(id.len, 4));
-        self.auth_asym_id = .{ ' ', ' ', ' ', ' ' };
-        for (0..len) |i| self.auth_asym_id[i] = id[i];
-        self.auth_asym_id_len = len;
+        self.auth_asym_id.set(id);
     }
 
     pub fn entityIdSlice(self: *const Chain) []const u8 {
-        return self.entity_id[0..@min(@as(usize, self.entity_id_len), 4)];
+        return self.entity_id.slice();
     }
 
     pub fn setEntityId(self: *Chain, id: []const u8) void {
-        const len: u4 = @intCast(@min(id.len, 4));
-        self.entity_id = .{ ' ', ' ', ' ', ' ' };
-        for (0..len) |i| self.entity_id[i] = id[i];
-        self.entity_id_len = len;
+        self.entity_id.set(id);
     }
 
     pub fn residueCount(self: *const Chain) u32 {

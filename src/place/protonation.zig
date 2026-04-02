@@ -1,5 +1,8 @@
 const std = @import("std");
 const model_mod = @import("../model.zig");
+const fixed_string = @import("../model/fixed_string.zig");
+
+const FixedString = fixed_string.FixedString;
 
 const Model = model_mod.Model;
 
@@ -33,12 +36,11 @@ pub const ResidueSelector = struct {
 
 pub const Entry = struct {
     selector: ResidueSelector,
-    comp_id: [5]u8,
-    comp_id_len: u3,
+    comp_id: FixedString(5) = .{},
     state: ResidueState,
 
     pub fn compIdSlice(self: *const Entry) []const u8 {
-        return self.comp_id[0..self.comp_id_len];
+        return self.comp_id.slice();
     }
 };
 
@@ -152,14 +154,14 @@ pub fn parseString(allocator: std.mem.Allocator, source: []const u8) !Protonatio
             return error.InvalidProtonationOverride;
         };
 
-        var comp_id: [5]u8 = .{ ' ', ' ', ' ', ' ', ' ' };
+        var comp_id: FixedString(5) = .{};
         const comp_id_len: u3 = @intCast(comp_tok.len);
-        for (0..comp_id_len) |i| comp_id[i] = std.ascii.toUpper(comp_tok[i]);
+        comp_id.len = comp_id_len;
+        for (0..comp_id_len) |i| comp_id.buf[i] = std.ascii.toUpper(comp_tok[i]);
 
         entries.append(allocator, .{
             .selector = selector,
             .comp_id = comp_id,
-            .comp_id_len = comp_id_len,
             .state = state,
         }) catch |err| {
             allocator.free(selector.chain_id);

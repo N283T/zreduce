@@ -1,12 +1,14 @@
 //! Residue struct representing a single residue in the molecular model.
 
 const std = @import("std");
+const fixed_string = @import("fixed_string.zig");
+
+const FixedString = fixed_string.FixedString;
 
 pub const EntityType = enum { polymer, non_polymer, branched, water, unknown };
 
 pub const Residue = struct {
-    comp_id: [5]u8 = .{ ' ', ' ', ' ', ' ', ' ' },
-    comp_id_len: u3 = 0,
+    comp_id: FixedString(5) = .{},
     chain_idx: u32 = 0,
     seq_id: i32 = 0,
     auth_seq_id: i32 = 0,
@@ -17,14 +19,11 @@ pub const Residue = struct {
     is_chain_break_before: bool = false,
 
     pub fn compIdSlice(self: *const Residue) []const u8 {
-        return self.comp_id[0..@min(@as(usize, self.comp_id_len), 5)];
+        return self.comp_id.slice();
     }
 
     pub fn setCompId(self: *Residue, id: []const u8) void {
-        const len: u3 = @intCast(@min(id.len, 5));
-        self.comp_id = .{ ' ', ' ', ' ', ' ', ' ' };
-        for (0..len) |i| self.comp_id[i] = id[i];
-        self.comp_id_len = len;
+        self.comp_id.set(id);
     }
 
     pub fn atomCount(self: *const Residue) u32 {
@@ -38,15 +37,15 @@ test "Residue setCompId and compIdSlice" {
     var r = Residue{};
     r.setCompId("ALA");
     try std.testing.expectEqualStrings("ALA", r.compIdSlice());
-    try std.testing.expectEqual(@as(u3, 3), r.comp_id_len);
+    try std.testing.expectEqual(@as(u3, 3), r.comp_id.len);
     r.setCompId("ATP");
     try std.testing.expectEqualStrings("ATP", r.compIdSlice());
     r.setCompId("BGLA");
     try std.testing.expectEqualStrings("BGLA", r.compIdSlice());
-    try std.testing.expectEqual(@as(u3, 4), r.comp_id_len);
+    try std.testing.expectEqual(@as(u3, 4), r.comp_id.len);
     r.setCompId("BGLAN");
     try std.testing.expectEqualStrings("BGLAN", r.compIdSlice());
-    try std.testing.expectEqual(@as(u3, 5), r.comp_id_len);
+    try std.testing.expectEqual(@as(u3, 5), r.comp_id.len);
 }
 
 test "Residue atomCount" {
