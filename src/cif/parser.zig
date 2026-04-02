@@ -22,7 +22,7 @@ pub fn readString(allocator: Allocator, source: []const u8) !Document {
     var doc = Document.init(allocator);
     errdefer doc.deinit();
 
-    var tok = Tokenizer.init(source);
+    var tok = try Tokenizer.init(source);
 
     // Pending token: a token consumed during loop value reading that was not
     // a value and needs to be re-processed in the main loop.

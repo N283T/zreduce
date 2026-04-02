@@ -211,7 +211,7 @@ pub fn parseComponentDict(allocator: Allocator, source: []const u8) !ComponentDi
     var builder = Builder{ .allocator = allocator };
     defer builder.deinit();
 
-    var tok = Tokenizer.init(source);
+    var tok = try Tokenizer.init(source);
     var pending: ?Token = null;
 
     while (true) {
