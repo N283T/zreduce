@@ -7,6 +7,7 @@ pub const model = @import("model.zig");
 pub const mmcif = @import("mmcif.zig");
 pub const place = @import("place.zig");
 pub const ccd = @import("ccd.zig");
+pub const ccd_binary = @import("ccd_binary.zig");
 pub const optimize = @import("optimize/optimize.zig");
 pub const writer = @import("writer.zig");
 pub const validate = @import("validate.zig");
