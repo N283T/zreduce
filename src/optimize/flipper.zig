@@ -325,7 +325,7 @@ test "amide flipper swaps O and N positions" {
     try testing.expectApproxEqAbs(orient0.positions[1].z, orient1.positions[0].z, 1e-6);
 }
 
-test "his flipper has 6 orientations" {
+test "his flipper has 4 orientations" {
     const allocator = testing.allocator;
 
     // Simple imidazole ring geometry
