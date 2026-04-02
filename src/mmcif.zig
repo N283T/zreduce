@@ -109,18 +109,27 @@ fn applyEntityTypes(mdl: *Model, block: *const cif.Block) void {
     const col_id = ent.findTag("_entity.id") orelse return;
     const col_type = ent.findTag("_entity.type") orelse return;
 
-    for (mdl.residues.items) |*res| {
-        const chain = mdl.chains.items[res.chain_idx];
+    // Iterate chains (C << R) — all residues in a chain share the same entity_id.
+    for (mdl.chains.items) |chain| {
         const entity_id = chain.entityIdSlice();
         if (entity_id.len == 0) continue;
 
+        // Find entity type for this chain's entity_id (E is typically 3-5 rows).
+        var etype: EntityType = .unknown;
         for (0..ent.length()) |row| {
             const eid = cif.asString(ent.val(row, col_id) orelse continue);
             if (std.mem.eql(u8, eid, entity_id)) {
-                const etype = cif.asString(ent.val(row, col_type) orelse continue);
-                res.entity_type = entityTypeFromString(etype);
+                const etype_str = cif.asString(ent.val(row, col_type) orelse continue);
+                etype = entityTypeFromString(etype_str);
                 break;
             }
+        }
+        if (etype == .unknown) continue;
+
+        // Apply to all residues in this chain.
+        const res_slice = mdl.residues.items[chain.residue_start..chain.residue_end];
+        for (res_slice) |*res| {
+            res.entity_type = etype;
         }
     }
 }
