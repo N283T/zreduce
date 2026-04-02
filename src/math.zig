@@ -115,9 +115,12 @@ pub fn dihedralAngle(comptime T: type, a: Vec3(T), b: Vec3(T), c: Vec3(T), d: Ve
     const b2 = c.sub(b);
     const b3 = d.sub(c);
 
+    const b2_len = b2.length();
+    if (b2_len < 1e-10) return 0.0;
+
     const n1 = b1.cross(b2);
     const n2 = b2.cross(b3);
-    const m1 = n1.cross(b2.normalize());
+    const m1 = n1.cross(b2.scale(1.0 / b2_len));
 
     const y = m1.dot(n2);
     const x = n1.dot(n2);
