@@ -119,7 +119,10 @@ pub const PackedBond = extern struct {
         return .{
             .atom_idx_1 = self.atom_idx_1,
             .atom_idx_2 = self.atom_idx_2,
-            .order = @enumFromInt(self.order),
+            .order = if (self.order <= @intFromEnum(ccd.BondOrder.unknown))
+                @enumFromInt(self.order)
+            else
+                .unknown,
             .aromatic = (self.flags & 0x01) != 0,
         };
     }
