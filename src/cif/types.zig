@@ -106,6 +106,19 @@ pub const Block = struct {
         return null;
     }
 
+    /// Find the first loop that contains the given tag (mutable).
+    pub fn findLoopMut(self: *Block, tag: []const u8) ?*Loop {
+        for (self.items.items) |*item| {
+            switch (item.*) {
+                .loop => |*l| {
+                    if (l.findTag(tag) != null) return l;
+                },
+                .pair => {},
+            }
+        }
+        return null;
+    }
+
     /// Find value of the first pair with the given tag (case-insensitive).
     pub fn findValue(self: *const Block, tag: []const u8) ?[]const u8 {
         for (self.items.items) |*item| {

@@ -147,6 +147,7 @@ fn normalizeSymbol(symbol: []const u8) [2]u8 {
 
 const symbol_map = std.StaticStringMap(AtomType).initComptime(.{
     .{ "H ", .H },
+    .{ "D ", .H },
     .{ "C ", .C },
     .{ "N ", .N },
     .{ "O ", .O },

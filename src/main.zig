@@ -17,6 +17,7 @@ const RunConfig = struct {
     protonation_path: ?[]const u8 = null,
     fix_path: ?[]const u8 = null,
     dump_movers_path: ?[]const u8 = null,
+    strip_h: bool = false,
 };
 
 fn parseBondModeValue(s: []const u8) ?zreduce.place.BondLengthMode {
@@ -153,6 +154,8 @@ fn parseRunArgs(args: []const []const u8) ?RunConfig {
             config.bond_policy.output_isotope = parsed;
         } else if (std.mem.eql(u8, arg, "--deuterium")) {
             config.bond_policy.output_isotope = .deuterium;
+        } else if (std.mem.eql(u8, arg, "--strip-h")) {
+            config.strip_h = true;
         } else if (arg.len > 0 and arg[0] == '-') {
             std.debug.print("Error: unknown option '{s}'\n", .{arg});
             std.process.exit(1);
@@ -218,6 +221,7 @@ fn printRunUsage() void {
         \\    --bond-mode MODE   Bond-length mode: neutron|xray (default: neutron)
         \\    --isotope NAME     Output isotope for added H: hydrogen|h|deuterium|d (default: hydrogen)
         \\    --deuterium        Shortcut for --isotope deuterium
+        \\    --strip-h          Remove existing H atoms before placement
         \\
     , .{});
 }
@@ -383,6 +387,8 @@ fn parseBatchArgs(args: []const []const u8) ?zreduce.batch.BatchConfig {
             config.bond_policy.output_isotope = parsed;
         } else if (std.mem.eql(u8, arg, "--deuterium")) {
             config.bond_policy.output_isotope = .deuterium;
+        } else if (std.mem.eql(u8, arg, "--strip-h")) {
+            config.strip_h = true;
         } else if (arg.len > 0 and arg[0] == '-') {
             std.debug.print("Error: unknown option '{s}'\n", .{arg});
             std.process.exit(1);
@@ -429,6 +435,7 @@ fn printBatchUsage() void {
         \\    --bond-mode MODE   Bond-length mode: neutron|xray (default: neutron)
         \\    --isotope NAME     Output isotope for added H: hydrogen|h|deuterium|d (default: hydrogen)
         \\    --deuterium        Shortcut for --isotope deuterium
+        \\    --strip-h          Remove existing H atoms before placement
         \\
     , .{});
 }
@@ -476,6 +483,7 @@ fn runSubcommand(allocator: Allocator, args: []const []const u8) void {
         .protonation_path = config.protonation_path,
         .fix_path = config.fix_path,
         .dump_movers_path = config.dump_movers_path,
+        .strip_h = config.strip_h,
     };
 
     const result = zreduce.run.processFile(allocator, proc_config) catch |err| {
