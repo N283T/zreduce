@@ -326,7 +326,7 @@ fn writeAtomSitePreserving(writer: anytype, model: *const Model, orig_loop: *con
                 } else if (cm.auth_atom_id != null and col == cm.auth_atom_id.?) {
                     try writePaddedCell(writer, atom.nameSlice(), cw);
                 } else if (cm.pdb_model_num != null and col == cm.pdb_model_num.?) {
-                    try writePaddedCell(writer, "1", cw);
+                    try writePaddedInt(writer, model.model_num, cw);
                 } else {
                     const first_orig = res.atom_start;
                     if (first_orig < orig_loop.length()) {
@@ -441,6 +441,7 @@ fn writeAtomSite(writer: anytype, model: *const Model, output_isotope: place.Out
         \\_atom_site.occupancy
         \\_atom_site.B_iso_or_equiv
         \\_atom_site.label_alt_id
+        \\_atom_site.pdbx_PDB_model_num
         \\
     );
 
@@ -524,6 +525,7 @@ fn writeAtomRow(writer: anytype, model: *const Model, atom: Atom, res: Residue, 
     try writeFixedFloat2(writer, atom.b_factor);
     try writer.writeByte(' ');
     try writeAltId(writer, atom.altloc);
+    try writer.print(" {d}", .{model.model_num});
     try writer.writeByte('\n');
 }
 
