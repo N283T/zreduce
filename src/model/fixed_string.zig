@@ -26,11 +26,6 @@ pub fn FixedString(comptime N: comptime_int) type {
             return self.buf[0..self.len];
         }
 
-        /// Return a pointer to the full fixed-size buffer (including padding).
-        pub fn rawBuf(self: *const Self) *const [N]u8 {
-            return &self.buf;
-        }
-
         /// Copy `value` into the buffer, truncating to N characters.
         pub fn set(self: *Self, value: []const u8) void {
             const n: LenInt = @intCast(@min(value.len, N));

@@ -27,7 +27,7 @@ pub const Atom = struct {
         return self.name.slice();
     }
 
-    /// Return the raw 4-byte name buffer (including space padding).
+    /// Return a copy of the 4-byte name array (including space padding).
     pub fn nameRaw(self: *const Atom) [4]u8 {
         return self.name.buf;
     }
