@@ -174,6 +174,7 @@ pub fn findCliques(allocator: Allocator, graph: *const InteractionGraph) ![][]u3
         if (visited[i]) continue;
         // BFS from i
         var component = std.ArrayListUnmanaged(u32).empty;
+        errdefer component.deinit(allocator);
         var queue = std.ArrayListUnmanaged(u32).empty;
         defer queue.deinit(allocator);
 
@@ -193,7 +194,9 @@ pub fn findCliques(allocator: Allocator, graph: *const InteractionGraph) ![][]u3
             }
         }
 
-        try cliques.append(allocator, try component.toOwnedSlice(allocator));
+        const slice = try component.toOwnedSlice(allocator);
+        errdefer allocator.free(slice);
+        try cliques.append(allocator, slice);
     }
 
     return try cliques.toOwnedSlice(allocator);
