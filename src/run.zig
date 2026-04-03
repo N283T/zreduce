@@ -219,6 +219,11 @@ fn processFileMmcif(allocator: Allocator, config: ProcessConfig, source: []const
         .n_skipped_missing_ref = 0,
     };
 
+    // Accumulate mover snapshots for JSON log (movers are freed per model)
+    const MoverSnapshot = zreduce.writer.json_writer.MoverSnapshot;
+    var mover_snapshots = std.ArrayListUnmanaged(MoverSnapshot){};
+    defer mover_snapshots.deinit(allocator);
+
     for (entries.items) |*entry| {
         const mdl = &entry.model;
 
@@ -296,6 +301,16 @@ fn processFileMmcif(allocator: Allocator, config: ProcessConfig, source: []const
                 result.n_brute_force += opt_result.n_brute_force;
                 result.n_vertex_cut += opt_result.n_vertex_cut;
             }
+
+            // Capture mover snapshots for JSON log before movers are freed
+            if (config.json_path != null) {
+                try mover_snapshots.ensureUnusedCapacity(allocator, movers.len);
+                for (movers) |m| {
+                    mover_snapshots.appendAssumeCapacity(
+                        MoverSnapshot.capture(m, mdl.residues.items, mdl.chains.items, entry.model_num),
+                    );
+                }
+            }
         }
 
         // 7. Mark absent H atoms
@@ -346,7 +361,7 @@ fn processFileMmcif(allocator: Allocator, config: ProcessConfig, source: []const
         try sw.interface.flush();
     }
 
-    // 10. Write JSON log (optional, uses first model for summary)
+    // 10. Write JSON log (optional, all models)
     if (config.json_path) |json_path| {
         var json_buf: [4096]u8 = undefined;
         const file = try std.fs.cwd().createFile(json_path, .{});
@@ -354,15 +369,13 @@ fn processFileMmcif(allocator: Allocator, config: ProcessConfig, source: []const
         var jw = file.writer(&json_buf);
         var total_added: u32 = 0;
         for (entries.items) |entry| total_added += countAddedHydrogens(&entry.model);
-        try zreduce.writer.json_writer.writeLog(
+        try zreduce.writer.json_writer.writeMultiModelLog(
             &jw.interface,
             config.json_version,
             config.input_path,
             total_added,
             config.bond_policy,
-            &.{}, // movers not available here (freed per model)
-            entries.items[0].model.residues.items,
-            entries.items[0].model.chains.items,
+            mover_snapshots.items,
         );
         try jw.interface.flush();
     }
@@ -412,6 +425,10 @@ fn processFilePdb(allocator: Allocator, config: ProcessConfig, source: []const u
         .n_skipped_inter_residue = 0,
         .n_skipped_missing_ref = 0,
     };
+
+    const MoverSnapshot = zreduce.writer.json_writer.MoverSnapshot;
+    var mover_snapshots = std.ArrayListUnmanaged(MoverSnapshot){};
+    defer mover_snapshots.deinit(allocator);
 
     for (pdb_result.entries.items) |*entry| {
         const mdl = &entry.model;
@@ -495,6 +512,16 @@ fn processFilePdb(allocator: Allocator, config: ProcessConfig, source: []const u
                 result.n_brute_force += opt_result.n_brute_force;
                 result.n_vertex_cut += opt_result.n_vertex_cut;
             }
+
+            // Capture mover snapshots for JSON log before movers are freed
+            if (config.json_path != null) {
+                try mover_snapshots.ensureUnusedCapacity(allocator, movers.len);
+                for (movers) |m| {
+                    mover_snapshots.appendAssumeCapacity(
+                        MoverSnapshot.capture(m, mdl.residues.items, mdl.chains.items, entry.model_num),
+                    );
+                }
+            }
         }
 
         markAbsentHydrogens(mdl);
@@ -546,15 +573,13 @@ fn processFilePdb(allocator: Allocator, config: ProcessConfig, source: []const u
         var jw = file.writer(&json_buf);
         var total_added: u32 = 0;
         for (pdb_result.entries.items) |entry| total_added += countAddedHydrogens(&entry.model);
-        try zreduce.writer.json_writer.writeLog(
+        try zreduce.writer.json_writer.writeMultiModelLog(
             &jw.interface,
             config.json_version,
             config.input_path,
             total_added,
             config.bond_policy,
-            &.{},
-            pdb_result.entries.items[0].model.residues.items,
-            pdb_result.entries.items[0].model.chains.items,
+            mover_snapshots.items,
         );
         try jw.interface.flush();
     }
