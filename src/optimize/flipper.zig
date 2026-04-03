@@ -55,19 +55,14 @@ pub fn createAmideFlipper(
     residue_idx: u32,
     mode: bond_policy.BondLengthMode,
 ) !Mover {
+    const n_orientations = 2;
+    const n_atoms_per = 4;
+
     const o_pos = atoms[o_idx].pos;
     const n_pos = atoms[n_idx].pos;
     const h1_pos = atoms[h1_idx].pos;
     const h2_pos = atoms[h2_idx].pos;
     const c_pos = atoms[c_idx].pos;
-
-    // Orientation 0: original positions (O, N, H1, H2)
-    const pos0 = try allocator.alloc(Vec3(f32), 4);
-    errdefer allocator.free(pos0);
-    pos0[0] = o_pos;
-    pos0[1] = n_pos;
-    pos0[2] = h1_pos;
-    pos0[3] = h2_pos;
 
     // Orientation 1: swapped O<->N, recompute H positions
     // After swap: new N is at old O position, new O is at old N position
@@ -75,16 +70,27 @@ pub fn createAmideFlipper(
     const new_o_pos = n_pos; // O moves to where N was
     const new_hs = computeAmideNH2(new_n_pos, c_pos, new_o_pos, mode);
 
-    const pos1 = try allocator.alloc(Vec3(f32), 4);
-    errdefer allocator.free(pos1);
+    // Allocate one contiguous block for all orientation positions.
+    const all_positions = try allocator.alloc(Vec3(f32), n_orientations * n_atoms_per);
+    errdefer allocator.free(all_positions);
+
+    const orientations = try allocator.alloc(Orientation, n_orientations);
+    errdefer allocator.free(orientations);
+
+    // Orientation 0: original positions (O, N, H1, H2)
+    const pos0 = all_positions[0..n_atoms_per];
+    pos0[0] = o_pos;
+    pos0[1] = n_pos;
+    pos0[2] = h1_pos;
+    pos0[3] = h2_pos;
+    orientations[0] = .{ .positions = pos0, .penalty = 0.0 };
+
+    // Orientation 1: swapped positions
+    const pos1 = all_positions[n_atoms_per .. 2 * n_atoms_per];
     pos1[0] = new_o_pos;
     pos1[1] = new_n_pos;
     pos1[2] = new_hs[0];
     pos1[3] = new_hs[1];
-
-    const orientations = try allocator.alloc(Orientation, 2);
-    errdefer allocator.free(orientations);
-    orientations[0] = .{ .positions = pos0, .penalty = 0.0 };
     orientations[1] = .{ .positions = pos1, .penalty = 0.5 };
 
     const atom_indices = try allocator.alloc(u32, 4);
@@ -100,6 +106,7 @@ pub fn createAmideFlipper(
         .atom_indices = atom_indices,
         .orientations = orientations,
         .allocator = allocator,
+        .positions_backing = all_positions,
     };
 }
 
@@ -136,6 +143,9 @@ pub fn createHisFlipper(
     residue_idx: u32,
     mode: bond_policy.BondLengthMode,
 ) !Mover {
+    const n_orientations = 4;
+    const n_atoms_per = 6;
+
     // --- Original ring positions ---
     const nd1 = atoms[nd1_idx].pos;
     const cd2 = atoms[cd2_idx].pos;
@@ -223,18 +233,20 @@ pub fn createHisFlipper(
         .{ ar_don, ar_acc, ar_acc, ar_acc_n, h_don, h_absent },
     };
 
-    const orientations = try allocator.alloc(Orientation, 4);
+    // Allocate one contiguous block for all orientation positions.
+    const all_positions = try allocator.alloc(Vec3(f32), n_orientations * n_atoms_per);
+    errdefer allocator.free(all_positions);
+
+    const orientations = try allocator.alloc(Orientation, n_orientations);
     var allocated: usize = 0;
     errdefer {
         for (orientations[0..allocated]) |o| {
-            allocator.free(o.positions);
             if (o.flags) |f| allocator.free(f);
         }
         allocator.free(orientations);
     }
     for (specs, 0..) |spec, i| {
-        const positions = try allocator.alloc(Vec3(f32), 6);
-        errdefer allocator.free(positions);
+        const positions = all_positions[i * n_atoms_per .. (i + 1) * n_atoms_per];
         positions[0] = spec.nd1_p;
         positions[1] = spec.cd2_p;
         positions[2] = spec.ce1_p;
@@ -268,6 +280,7 @@ pub fn createHisFlipper(
         .atom_indices = atom_indices,
         .orientations = orientations,
         .allocator = allocator,
+        .positions_backing = all_positions,
     };
 }
 

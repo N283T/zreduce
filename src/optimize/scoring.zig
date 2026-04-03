@@ -27,6 +27,11 @@ pub const ScoreContext = struct {
     mover_centroids: []math_mod.Vec3(f32),
     /// Bounding radius of each mover: max distance from centroid to any orientation position.
     mover_radii: []f32,
+    /// VDW radii for mover-controlled atoms, indexed directly by atom index.
+    /// Only entries for atoms belonging to movers are populated; others are undefined.
+    /// Length equals the total number of atoms in the model.
+    /// VDW radii are immutable after placement, so this cache is always valid.
+    mover_atom_radii: []f32,
 
     pub fn deinit(self: *ScoreContext, allocator: Allocator) void {
         if (self.cell_list) |*cl| cl.deinit();
@@ -36,6 +41,7 @@ pub const ScoreContext = struct {
         allocator.free(self.static_flags);
         allocator.free(self.mover_centroids);
         allocator.free(self.mover_radii);
+        allocator.free(self.mover_atom_radii);
     }
 };
 
@@ -84,6 +90,19 @@ pub fn buildScoreContext(
         static_radii[out_i] = a.vdw_radius;
         static_flags[out_i] = a.flags;
         out_i += 1;
+    }
+
+    // Build SoA VDW radii cache for mover-controlled atoms.
+    // Positions are not cached here because they change as orientations are applied.
+    // Flags are not cached because flip movers (His) update them per orientation.
+    // VDW radii are immutable after placement, so this cache is always valid and
+    // reduces cache pressure in the mover-vs-mover scoring loop.
+    const mover_atom_radii = try allocator.alloc(f32, atoms.len);
+    errdefer allocator.free(mover_atom_radii);
+    for (movers) |m| {
+        for (m.atom_indices) |ai| {
+            mover_atom_radii[ai] = atoms[ai].vdw_radius;
+        }
     }
 
     // CellList may fail with GridTooLarge for very spread-out structures;
@@ -140,6 +159,7 @@ pub fn buildScoreContext(
         .static_flags = static_flags,
         .mover_centroids = mover_centroids,
         .mover_radii = mover_radii,
+        .mover_atom_radii = mover_atom_radii,
     };
 }
 
@@ -252,8 +272,10 @@ pub fn scoreMoverWithPositions(
 
     for (m.atom_indices, 0..) |ai, j| {
         // Use the override position for this mover's atom instead of atoms[ai].pos.
+        // Read radius from the SoA cache (immutable). Read flags from atoms[ai] because
+        // applyOrientation may have updated them (e.g. His flip changes donor/acceptor state).
         const a_pos = positions_override[j];
-        const a_radius = atoms[ai].vdw_radius;
+        const a_radius = score_ctx.mover_atom_radii[ai];
         const a_flags = atoms[ai].flags;
 
         // Static atoms: use spatial index when available, else brute-force scan.
@@ -291,6 +313,8 @@ pub fn scoreMoverWithPositions(
         // Mover-controlled atoms: score directly with current coordinates.
         // Centroid early-exit: skip other movers whose bounding spheres cannot
         // overlap with this mover's scoring range.
+        // Radii come from the SoA cache (immutable). Positions and flags are read
+        // from model.atoms because flip movers (His) may update flags per orientation.
         for (movers, 0..) |other_m, other_idx| {
             if (other_idx == mover_idx) continue;
             const other_radius = score_ctx.mover_radii[other_idx];
@@ -302,7 +326,9 @@ pub fn scoreMoverWithPositions(
                 if (isMoverAtom(m, oi)) continue;
                 total += scorePairSoA(
                     a_pos, a_radius, a_flags,
-                    atoms[oi].pos, atoms[oi].vdw_radius, atoms[oi].flags,
+                    atoms[oi].pos,
+                    score_ctx.mover_atom_radii[oi],
+                    atoms[oi].flags,
                     scoring_params,
                     gap_scale,
                 );
