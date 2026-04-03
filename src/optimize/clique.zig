@@ -194,7 +194,9 @@ pub fn findCliques(allocator: Allocator, graph: *const InteractionGraph) ![][]u3
             }
         }
 
-        try cliques.append(allocator, try component.toOwnedSlice(allocator));
+        const slice = try component.toOwnedSlice(allocator);
+        errdefer allocator.free(slice);
+        try cliques.append(allocator, slice);
     }
 
     return try cliques.toOwnedSlice(allocator);
