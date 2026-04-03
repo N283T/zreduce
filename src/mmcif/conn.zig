@@ -97,6 +97,61 @@ pub fn buildAtomLookup(allocator: Allocator, block: *const cif.Block) !AtomLooku
     return lookup;
 }
 
+/// Build an AtomLookup for a specific row range within the _atom_site loop.
+/// Values stored are local indices: (row - row_start), so they map to the
+/// corresponding Model's atom array. Used for multi-model support.
+pub fn buildAtomLookupForRange(allocator: Allocator, block: *const cif.Block, row_start: u32, row_end: u32) !AtomLookup {
+    const loop = block.findLoop("_atom_site.Cartn_x") orelse return error.NoAtomSiteLoop;
+
+    const col_asym = loop.findTag("_atom_site.label_asym_id") orelse return error.MissingRequiredField;
+    const col_seq = loop.findTag("_atom_site.label_seq_id") orelse return error.MissingRequiredField;
+    const col_atom = loop.findTag("_atom_site.label_atom_id") orelse return error.MissingRequiredField;
+    const col_auth_seq = loop.findTag("_atom_site.auth_seq_id");
+
+    var lookup = AtomLookup.initContext(allocator, AtomLookupContext{});
+    errdefer lookup.deinit();
+
+    const n = row_end - row_start;
+    try lookup.ensureTotalCapacity(@intCast(n));
+
+    for (row_start..row_end) |row| {
+        const asym = cif.asString(loop.val(row, col_asym) orelse continue);
+        const seq = cif.asString(loop.val(row, col_seq) orelse continue);
+        const atom_name = cif.asString(loop.val(row, col_atom) orelse continue);
+
+        const idx: u32 = @intCast(row - row_start);
+
+        const key = AtomLookupKey{
+            .label_asym_id = asym,
+            .seq_id = seq,
+            .atom_name = atom_name,
+        };
+        const gop = try lookup.getOrPut(key);
+        if (!gop.found_existing) {
+            gop.value_ptr.* = idx;
+        }
+
+        if (seq.len == 0) {
+            if (col_auth_seq) |c| {
+                const auth_seq = cif.asString(loop.val(row, c) orelse ".");
+                if (auth_seq.len > 0) {
+                    const auth_key = AtomLookupKey{
+                        .label_asym_id = asym,
+                        .seq_id = auth_seq,
+                        .atom_name = atom_name,
+                    };
+                    const auth_gop = try lookup.getOrPut(auth_key);
+                    if (!auth_gop.found_existing) {
+                        auth_gop.value_ptr.* = idx;
+                    }
+                }
+            }
+        }
+    }
+
+    return lookup;
+}
+
 /// Returns true if the connection type should be treated as a structural bond
 /// for hydrogen placement purposes: covale*, disulf, or metalc.
 /// metalc (metal coordination) bonds are included so that coordinating atoms

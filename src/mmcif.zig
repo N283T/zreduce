@@ -501,6 +501,7 @@ pub const AtomLookupKey = conn_mod.AtomLookupKey;
 pub const AtomLookupContext = conn_mod.AtomLookupContext;
 pub const AtomLookup = conn_mod.AtomLookup;
 pub const buildAtomLookup = conn_mod.buildAtomLookup;
+pub const buildAtomLookupForRange = conn_mod.buildAtomLookupForRange;
 pub const isCovalentConnType = conn_mod.isCovalentConnType;
 pub const parseStructConn = conn_mod.parseStructConn;
 pub const parseBranchLinks = conn_mod.parseBranchLinks;
