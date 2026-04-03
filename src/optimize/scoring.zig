@@ -90,8 +90,8 @@ pub fn buildScoreContext(
     // fall back to null (pairwise scoring only) rather than aborting.
     var cell_list: ?CellList = CellList.init(allocator, static_positions, 5.0) catch |err| blk: {
         switch (err) {
-            error.GridTooLarge => {
-                std.log.warn("CellList grid too large for static atoms; falling back to pairwise scoring", .{});
+            error.GridTooLarge, error.NonFiniteCoordinate => {
+                std.log.warn("CellList init failed ({s}) for static atoms; falling back to pairwise scoring", .{@errorName(err)});
                 break :blk null;
             },
             error.OutOfMemory => return err,

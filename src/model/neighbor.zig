@@ -22,9 +22,12 @@ pub const CellList = struct {
     pub fn init(allocator: Allocator, positions: []const Vec3(f32), cell_size: f32) !CellList {
         std.debug.assert(cell_size > 0);
         if (positions.len == 0) {
+            const empty_indices = try allocator.alloc(u32, 0);
+            errdefer allocator.free(empty_indices);
+            const empty_offsets = try allocator.alloc(u32, 1);
             return CellList{
-                .atom_indices = try allocator.alloc(u32, 0),
-                .cell_offsets = try allocator.alloc(u32, 1),
+                .atom_indices = empty_indices,
+                .cell_offsets = empty_offsets,
                 .nx = 0,
                 .ny = 0,
                 .nz = 0,
@@ -34,6 +37,13 @@ pub const CellList = struct {
                 .z_min = 0,
                 .allocator = allocator,
             };
+        }
+
+        // Reject non-finite coordinates before building the grid.
+        for (positions) |p| {
+            if (!std.math.isFinite(p.x) or !std.math.isFinite(p.y) or !std.math.isFinite(p.z)) {
+                return error.NonFiniteCoordinate;
+            }
         }
 
         // Compute bounding box.
@@ -62,9 +72,14 @@ pub const CellList = struct {
         y_max += margin;
         z_max += margin;
 
-        const nx: u32 = @max(1, @as(u32, @intFromFloat(@ceil((x_max - x_min) / cell_size))));
-        const ny: u32 = @max(1, @as(u32, @intFromFloat(@ceil((y_max - y_min) / cell_size))));
-        const nz: u32 = @max(1, @as(u32, @intFromFloat(@ceil((z_max - z_min) / cell_size))));
+        const nx_f = @ceil((x_max - x_min) / cell_size);
+        const ny_f = @ceil((y_max - y_min) / cell_size);
+        const nz_f = @ceil((z_max - z_min) / cell_size);
+        const max_dim: f32 = @floatFromInt(std.math.maxInt(u32));
+        if (nx_f > max_dim or ny_f > max_dim or nz_f > max_dim) return error.GridTooLarge;
+        const nx: u32 = @max(1, @as(u32, @intFromFloat(nx_f)));
+        const ny: u32 = @max(1, @as(u32, @intFromFloat(ny_f)));
+        const nz: u32 = @max(1, @as(u32, @intFromFloat(nz_f)));
 
         const total_cells = std.math.mul(u32, nx, ny) catch return error.GridTooLarge;
         const total_cells_3d = std.math.mul(u32, total_cells, nz) catch return error.GridTooLarge;
@@ -81,6 +96,7 @@ pub const CellList = struct {
 
         // Build prefix sum (offsets array has total_cells_3d+1 entries).
         const cell_offsets = try allocator.alloc(u32, total_cells_3d + 1);
+        errdefer allocator.free(cell_offsets);
         cell_offsets[0] = 0;
         for (0..total_cells_3d) |i| {
             cell_offsets[i + 1] = cell_offsets[i] + counts[i];
