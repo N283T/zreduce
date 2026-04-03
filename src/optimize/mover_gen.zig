@@ -144,6 +144,20 @@ fn resolveCcdRotatorAtoms(
     return false;
 }
 
+/// Resolve center and axis atom names for N-terminal H atoms (H1, H2, H3).
+/// N-terminal NH3+ and PRO NH2+ groups rotate around the N-CA bond:
+///   center = N, axis = CA.
+/// Returns true if h_name matches a known N-terminal H name.
+fn resolveNtermRotatorAtoms(h_name: []const u8, center_out: *[4]u8, axis_out: *[4]u8) bool {
+    const is_nterm_h = std.mem.eql(u8, h_name, "H1") or
+        std.mem.eql(u8, h_name, "H2") or
+        std.mem.eql(u8, h_name, "H3");
+    if (!is_nterm_h) return false;
+    center_out.* = .{ ' ', 'N', ' ', ' ' };
+    axis_out.* = .{ ' ', 'C', 'A', ' ' };
+    return true;
+}
+
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
@@ -217,6 +231,9 @@ pub fn generateMovers(
                 } else if (resolveCcdRotatorAtoms(effective_dict, comp_id, h_name, &center_name_buf, &axis_name_buf)) {
                     center_name = trimName(&center_name_buf);
                     axis_name = trimName(&axis_name_buf);
+                } else if (resolveNtermRotatorAtoms(h_name, &center_name_buf, &axis_name_buf)) {
+                    center_name = trimName(&center_name_buf);
+                    axis_name = trimName(&axis_name_buf);
                 } else {
                     log.warn("no plan for H '{s}' in {s} (res {d}), skipping rotator", .{ h_name, comp_id, residue_idx });
                     n_skipped += 1;
@@ -263,6 +280,9 @@ pub fn generateMovers(
                 } else if (resolveCcdRotatorAtoms(effective_dict, comp_id, h_name, &center_name_raw, &axis_name_buf)) {
                     center_name = trimName(&center_name_raw);
                     axis_name = trimName(&axis_name_buf);
+                } else if (resolveNtermRotatorAtoms(h_name, &center_name_raw, &axis_name_buf)) {
+                    center_name = trimName(&center_name_raw);
+                    axis_name = trimName(&axis_name_buf);
                 } else {
                     n_skipped += 1;
                     continue;
@@ -291,13 +311,16 @@ pub fn generateMovers(
                 var h_count: u32 = 0;
                 for (atoms[mdl.original_atom_count..], mdl.original_atom_count..) |*a, ai| {
                     if (a.residue_idx == residue_idx and a.is_added and a.mover_hint == atom.mover_hint and a.altloc == target_altloc) {
-                        // Resolve this H's center via standard plan or CCD
+                        // Resolve this H's center via standard plan, CCD, or N-terminal fallback
                         var a_center: [4]u8 = undefined;
                         var a_axis: [4]u8 = undefined;
                         const has_center = if (findPlanForH(comp_id, a.nameSlice())) |ap| blk: {
                             a_center = ap.connected[0];
                             break :blk true;
-                        } else resolveCcdRotatorAtoms(effective_dict, comp_id, a.nameSlice(), &a_center, &a_axis);
+                        } else if (resolveCcdRotatorAtoms(effective_dict, comp_id, a.nameSlice(), &a_center, &a_axis))
+                            true
+                        else
+                            resolveNtermRotatorAtoms(a.nameSlice(), &a_center, &a_axis);
 
                         if (has_center and std.mem.eql(u8, &a_center, &center_name_raw)) {
                             if (h_count < 3) {
@@ -602,10 +625,16 @@ test "generateMovers total count for ALA" {
         testing.allocator.free(movers);
     }
 
-    // ALA should have: 1 methyl rotator (CB)
+    // ALA N-terminal should have: 1 methyl rotator (CB) + 1 NH3+ rotator (N-terminal H1/H2/H3)
     // No single-H rotators (ALA has no OH/SH groups)
-    // No NH3 rotators (N-terminal NH3+ would need rotate_nh3 hint)
-    try testing.expect(movers.len >= 1);
+    var methyl_count: u32 = 0;
+    var nh3_count: u32 = 0;
+    for (movers) |m| {
+        if (m.kind == .methyl_rotator) methyl_count += 1;
+        if (m.kind == .nh3_rotator) nh3_count += 1;
+    }
+    try testing.expectEqual(@as(u32, 1), methyl_count);
+    try testing.expectEqual(@as(u32, 1), nh3_count);
 }
 
 test "optimizer pipeline runs without error on ALA" {

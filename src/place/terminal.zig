@@ -46,7 +46,7 @@ pub fn isBackboneAmideH(plan: *const standard.PlacementPlan) bool {
 }
 
 /// Append an N-terminal H atom to the model.
-pub fn appendNtermH(mdl: *Model, h_pos: Vec3f32, name: []const u8, res_idx: u32, meta: ParentMeta) !void {
+pub fn appendNtermH(mdl: *Model, h_pos: Vec3f32, name: []const u8, res_idx: u32, meta: ParentMeta, mover_hint: standard.MoverHint) !void {
     const hpol_info = element.AtomType.Hpol.info();
     var atom = Atom{
         .pos = h_pos,
@@ -59,6 +59,7 @@ pub fn appendNtermH(mdl: *Model, h_pos: Vec3f32, name: []const u8, res_idx: u32,
         .occupancy = meta.occupancy,
         .b_factor = meta.b_factor,
         .flags = .{ .donor = true },
+        .mover_hint = mover_hint,
     };
     atom.setName(name);
     try mdl.atoms.append(mdl.allocator, atom);
@@ -95,7 +96,7 @@ pub fn placeNtermNH3(mdl: *Model, res: Residue, res_idx: u32, target_altloc: u8,
 
         const h64 = geometry.placeH3XR(n64, ca64, c64, bond_len, angle_deg, dihedral);
         const h_pos = Vec3f32{ .x = @floatCast(h64.x), .y = @floatCast(h64.y), .z = @floatCast(h64.z) };
-        try appendNtermH(mdl, h_pos, name, res_idx, meta);
+        try appendNtermH(mdl, h_pos, name, res_idx, meta, .rotate_nh3);
         placed += 1;
     }
     return .{ .placed = placed, .skipped = skipped };
@@ -132,7 +133,7 @@ pub fn placeNtermNH2Pro(mdl: *Model, res: Residue, res_idx: u32, target_altloc: 
 
         const h64 = geometry.placeH2XR2(n64, ca64, cd64, bond_len, angle_deg, dihedral);
         const h_pos = Vec3f32{ .x = @floatCast(h64.x), .y = @floatCast(h64.y), .z = @floatCast(h64.z) };
-        try appendNtermH(mdl, h_pos, name, res_idx, meta);
+        try appendNtermH(mdl, h_pos, name, res_idx, meta, .rotate);
         placed += 1;
     }
     return .{ .placed = placed, .skipped = skipped };
@@ -194,6 +195,77 @@ pub fn isNucleotideResidue(mdl: *const Model, res: Residue) bool {
 /// In CCD, these are H atoms on phosphate oxygens OP2/OP3.
 pub fn isPhosphateH(h_name: [4]u8) bool {
     return (h_name[0] == 'H' and h_name[1] == 'O' and h_name[2] == 'P');
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+const testing = @import("std").testing;
+const mmcif = @import("../mmcif.zig");
+
+test "placeNtermNH3 sets rotate_nh3 mover_hint on all 3 H atoms" {
+    const source = @embedFile("../test_data/tiny.cif");
+    var mdl = try mmcif.parseModel(testing.allocator, source);
+    defer mdl.deinit();
+
+    const res = mdl.residues.items[0];
+    // tiny.cif is ALA N-terminal — needs N, CA, C atoms
+    _ = try placeNtermNH3(&mdl, res, 0, ' ', .neutron);
+
+    var nh3_count: u32 = 0;
+    for (mdl.atoms.items) |atom| {
+        if (!atom.is_added) continue;
+        const name = atom.nameSlice();
+        const is_nterm = std.mem.eql(u8, name, "H1") or
+            std.mem.eql(u8, name, "H2") or
+            std.mem.eql(u8, name, "H3");
+        if (!is_nterm) continue;
+        try testing.expectEqual(standard.MoverHint.rotate_nh3, atom.mover_hint);
+        nh3_count += 1;
+    }
+    try testing.expectEqual(@as(u32, 3), nh3_count);
+}
+
+test "placeNtermNH2Pro sets rotate mover_hint on both H atoms" {
+    // Build a minimal PRO-like model with N, CA, CD atoms
+    var mdl = try mmcif.parseModel(testing.allocator,
+        \\data_PRO_TEST
+        \\loop_
+        \\_atom_site.group_PDB
+        \\_atom_site.id
+        \\_atom_site.type_symbol
+        \\_atom_site.label_atom_id
+        \\_atom_site.label_comp_id
+        \\_atom_site.label_asym_id
+        \\_atom_site.label_seq_id
+        \\_atom_site.Cartn_x
+        \\_atom_site.Cartn_y
+        \\_atom_site.Cartn_z
+        \\_atom_site.occupancy
+        \\_atom_site.B_iso_or_equiv
+        \\_atom_site.label_alt_id
+        \\_atom_site.auth_asym_id
+        \\ATOM 1 N N   PRO A 1 1.000 2.000 3.000 1.00 10.0 . A
+        \\ATOM 2 C CA  PRO A 1 2.000 3.000 4.000 1.00 10.0 . A
+        \\ATOM 3 C C   PRO A 1 3.000 4.000 5.000 1.00 10.0 . A
+        \\ATOM 4 O O   PRO A 1 4.000 5.000 6.000 1.00 10.0 . A
+        \\ATOM 5 C CD  PRO A 1 0.500 3.000 3.500 1.00 10.0 . A
+        \\#
+    );
+    defer mdl.deinit();
+
+    const res = mdl.residues.items[0];
+    _ = try placeNtermNH2Pro(&mdl, res, 0, ' ', .neutron);
+
+    var h_count: u32 = 0;
+    for (mdl.atoms.items) |atom| {
+        if (!atom.is_added) continue;
+        const name = atom.nameSlice();
+        const is_pro_nterm = std.mem.eql(u8, name, "H2") or std.mem.eql(u8, name, "H3");
+        if (!is_pro_nterm) continue;
+        try testing.expectEqual(standard.MoverHint.rotate, atom.mover_hint);
+        h_count += 1;
+    }
+    try testing.expectEqual(@as(u32, 2), h_count);
 }
 
 /// Check if a residue has atom named "P" (phosphorus — nucleotide backbone).

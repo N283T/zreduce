@@ -325,8 +325,8 @@ pub fn placeWaterHydrogens(
         const h1 = math_mod.rotateAroundAxis(f64, base64, oxygen64, axis64, half_angle).cast(f32);
         const h2 = math_mod.rotateAroundAxis(f64, base64, oxygen64, axis64, -half_angle).cast(f32);
 
-        try appendNtermH(mdl, h1, "H1", res_idx, meta);
-        try appendNtermH(mdl, h2, "H2", res_idx, meta);
+        try appendNtermH(mdl, h1, "H1", res_idx, meta, .none);
+        try appendNtermH(mdl, h2, "H2", res_idx, meta, .none);
         result.n_placed += 2;
     }
 
