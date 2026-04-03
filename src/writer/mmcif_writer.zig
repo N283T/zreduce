@@ -187,14 +187,12 @@ fn writeAtomSitePreserving(writer: anytype, model: *const Model, orig_loop: *con
     if (cm.b_factor) |c| col_widths[c] = @max(col_widths[c], 6);
     // Account for added H atom names which may be wider than original names
     // (e.g. "HG11" = 4 chars vs original max of 3 chars like "CG1").
-    if (cm.label_atom_id) |c| {
+    if (cm.label_atom_id != null or cm.auth_atom_id != null) {
         for (model.atoms.items) |atom| {
-            if (atom.is_added) col_widths[c] = @max(col_widths[c], atom.nameSlice().len);
-        }
-    }
-    if (cm.auth_atom_id) |c| {
-        for (model.atoms.items) |atom| {
-            if (atom.is_added) col_widths[c] = @max(col_widths[c], atom.nameSlice().len);
+            if (!atom.is_added) continue;
+            const name_len = atom.nameSlice().len;
+            if (cm.label_atom_id) |c| col_widths[c] = @max(col_widths[c], name_len);
+            if (cm.auth_atom_id) |c| col_widths[c] = @max(col_widths[c], name_len);
         }
     }
 
@@ -236,9 +234,6 @@ fn writeAtomSitePreserving(writer: anytype, model: *const Model, orig_loop: *con
         added_counts[r] += 1;
     }
 
-    // Cell buffer for formatting values before padded output.
-    var cell_buf: [128]u8 = undefined;
-
     // Write rows grouped by residue: original heavy atoms then added H
     for (model.residues.items, 0..) |res, res_idx| {
         const chain = model.chains.items[res.chain_idx];
@@ -252,9 +247,7 @@ fn writeAtomSitePreserving(writer: anytype, model: *const Model, orig_loop: *con
                 for (0..w) |col| {
                     if (col > 0) try writer.writeByte(' ');
                     if (cm.id != null and col == cm.id.?) {
-                        var fbs_int = std.io.fixedBufferStream(&cell_buf);
-                        fbs_int.writer().print("{d}", .{serial}) catch {};
-                        try writePaddedCell(writer, fbs_int.getWritten(), col_widths[col]);
+                        try writePaddedInt(writer, serial, col_widths[col]);
                     } else if (cm.cartn_x != null and col == cm.cartn_x.?) {
                         try writePaddedFloat3(writer, atom.pos.x, col_widths[col]);
                     } else if (cm.cartn_y != null and col == cm.cartn_y.?) {
@@ -263,7 +256,7 @@ fn writeAtomSitePreserving(writer: anytype, model: *const Model, orig_loop: *con
                         try writePaddedFloat3(writer, atom.pos.z, col_widths[col]);
                     } else {
                         const val = orig_loop.val(orig_row_idx, col) orelse ".";
-                        try writePaddedCell(writer, val, col_widths[col]);
+                        try writePaddedCifValue(writer, val, col_widths[col]);
                     }
                 }
                 try writer.writeByte('\n');
@@ -285,9 +278,7 @@ fn writeAtomSitePreserving(writer: anytype, model: *const Model, orig_loop: *con
                 if (cm.group_pdb != null and col == cm.group_pdb.?) {
                     try writePaddedCell(writer, "ATOM", cw);
                 } else if (cm.id != null and col == cm.id.?) {
-                    var fbs_int = std.io.fixedBufferStream(&cell_buf);
-                    fbs_int.writer().print("{d}", .{serial}) catch {};
-                    try writePaddedCell(writer, fbs_int.getWritten(), cw);
+                    try writePaddedInt(writer, serial, cw);
                 } else if (cm.type_symbol != null and col == cm.type_symbol.?) {
                     try writePaddedCell(writer, atomTypeSymbol(atom, output_isotope), cw);
                 } else if (cm.label_atom_id != null and col == cm.label_atom_id.?) {
@@ -305,15 +296,12 @@ fn writeAtomSitePreserving(writer: anytype, model: *const Model, orig_loop: *con
                 } else if (cm.label_entity_id != null and col == cm.label_entity_id.?) {
                     const first_orig = res.atom_start;
                     if (first_orig < orig_loop.length()) {
-                        const val = orig_loop.val(first_orig, col) orelse ".";
-                        try writePaddedCell(writer, val, cw);
+                        try writePaddedCifValue(writer, orig_loop.val(first_orig, col) orelse ".", cw);
                     } else {
                         try writePaddedCell(writer, ".", cw);
                     }
                 } else if (cm.label_seq_id != null and col == cm.label_seq_id.?) {
-                    var fbs_int = std.io.fixedBufferStream(&cell_buf);
-                    fbs_int.writer().print("{d}", .{res.seq_id}) catch {};
-                    try writePaddedCell(writer, fbs_int.getWritten(), cw);
+                    try writePaddedInt(writer, res.seq_id, cw);
                 } else if (cm.cartn_x != null and col == cm.cartn_x.?) {
                     try writePaddedFloat3(writer, atom.pos.x, cw);
                 } else if (cm.cartn_y != null and col == cm.cartn_y.?) {
@@ -327,12 +315,9 @@ fn writeAtomSitePreserving(writer: anytype, model: *const Model, orig_loop: *con
                 } else if (cm.auth_seq_id != null and col == cm.auth_seq_id.?) {
                     const first_orig = res.atom_start;
                     if (first_orig < orig_loop.length()) {
-                        const val = orig_loop.val(first_orig, col) orelse ".";
-                        try writePaddedCell(writer, val, cw);
+                        try writePaddedCifValue(writer, orig_loop.val(first_orig, col) orelse ".", cw);
                     } else {
-                        var fbs_int = std.io.fixedBufferStream(&cell_buf);
-                        fbs_int.writer().print("{d}", .{res.seq_id}) catch {};
-                        try writePaddedCell(writer, fbs_int.getWritten(), cw);
+                        try writePaddedInt(writer, res.seq_id, cw);
                     }
                 } else if (cm.auth_comp_id != null and col == cm.auth_comp_id.?) {
                     try writePaddedCell(writer, res.compIdSlice(), cw);
@@ -345,8 +330,7 @@ fn writeAtomSitePreserving(writer: anytype, model: *const Model, orig_loop: *con
                 } else {
                     const first_orig = res.atom_start;
                     if (first_orig < orig_loop.length()) {
-                        const val = orig_loop.val(first_orig, col) orelse ".";
-                        try writePaddedCell(writer, val, cw);
+                        try writePaddedCifValue(writer, orig_loop.val(first_orig, col) orelse ".", cw);
                     } else {
                         try writePaddedCell(writer, ".", cw);
                     }
@@ -361,23 +345,37 @@ fn writeAtomSitePreserving(writer: anytype, model: *const Model, orig_loop: *con
 /// Write a cell value padded to min_width with trailing spaces.
 fn writePaddedCell(writer: anytype, val: []const u8, min_width: usize) !void {
     try writer.writeAll(val);
-    if (val.len < min_width) {
-        const pad = min_width - val.len;
-        const spaces = "                                ";
-        var remaining = pad;
-        while (remaining > 0) {
-            const chunk = @min(remaining, spaces.len);
-            try writer.writeAll(spaces[0..chunk]);
-            remaining -= chunk;
-        }
+    var i: usize = val.len;
+    while (i < min_width) : (i += 1) {
+        try writer.writeByte(' ');
     }
+}
+
+/// Write a CIF value with quoting, then pad to min_width.
+fn writePaddedCifValue(writer: anytype, val: []const u8, min_width: usize) !void {
+    var buf: [256]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buf);
+    writeCifValueInLoop(fbs.writer(), val) catch {
+        // Value too large for buffer — write directly without padding
+        try writeCifValueInLoop(writer, val);
+        return;
+    };
+    try writePaddedCell(writer, fbs.getWritten(), min_width);
+}
+
+/// Write an integer value padded to min_width.
+fn writePaddedInt(writer: anytype, val: anytype, min_width: usize) !void {
+    var buf: [20]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buf);
+    fbs.writer().print("{d}", .{val}) catch unreachable;
+    try writePaddedCell(writer, fbs.getWritten(), min_width);
 }
 
 /// Write a float3 value padded to min_width.
 fn writePaddedFloat3(writer: anytype, val: f32, min_width: usize) !void {
     var buf: [64]u8 = undefined;
     var fbs = std.io.fixedBufferStream(&buf);
-    try format.writeFixedFloat3(fbs.writer(), val);
+    format.writeFixedFloat3(fbs.writer(), val) catch unreachable;
     try writePaddedCell(writer, fbs.getWritten(), min_width);
 }
 
@@ -385,7 +383,7 @@ fn writePaddedFloat3(writer: anytype, val: f32, min_width: usize) !void {
 fn writePaddedFloat2(writer: anytype, val: f32, min_width: usize) !void {
     var buf: [64]u8 = undefined;
     var fbs = std.io.fixedBufferStream(&buf);
-    try format.writeFixedFloat2(fbs.writer(), val);
+    format.writeFixedFloat2(fbs.writer(), val) catch unreachable;
     try writePaddedCell(writer, fbs.getWritten(), min_width);
 }
 
