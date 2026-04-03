@@ -83,7 +83,7 @@ fn buildColMap(orig_loop: *const Loop) ColMap {
     return cm;
 }
 
-/// Result of buildAddedHIndex — caller must free all three slices.
+/// Result of buildAddedHIndex — caller must call deinit to free slices.
 const AddedHIndex = struct {
     offsets: []u32,
     indices: []u32,
@@ -111,6 +111,7 @@ fn buildAddedHIndex(model: *const Model) !AddedHIndex {
 
     // Phase 2: build prefix-sum offsets (length n_residues + 1).
     const offsets = try allocator.alloc(u32, n_residues + 1);
+    errdefer allocator.free(offsets);
     offsets[0] = 0;
     for (0..n_residues) |r| {
         offsets[r + 1] = offsets[r] + counts[r];
