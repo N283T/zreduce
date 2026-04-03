@@ -284,12 +284,13 @@ pub fn generateMovers(
                     center_name = trimName(&center_name_raw);
                     axis_name = trimName(&axis_name_buf);
                 } else {
+                    log.warn("no plan for group H '{s}' in {s} (res {d}), skipping rotator", .{ h_name, comp_id, residue_idx });
                     n_skipped += 1;
                     continue;
                 }
 
-                // Dedup key
-                const group_key = GroupKey{ .residue_idx = residue_idx, .center_name = center_name_raw, .altloc = target_altloc };
+                // Dedup key (normalize padding so CCD 'N   ' and PDB ' N  ' match)
+                const group_key = GroupKey{ .residue_idx = residue_idx, .center_name = normalizeNameKey(center_name_raw), .altloc = target_altloc };
                 const gop = try seen_groups.getOrPut(allocator, group_key);
                 if (gop.found_existing) continue;
 
@@ -322,7 +323,7 @@ pub fn generateMovers(
                         else
                             resolveNtermRotatorAtoms(a.nameSlice(), &a_center, &a_axis);
 
-                        if (has_center and std.mem.eql(u8, &a_center, &center_name_raw)) {
+                        if (has_center and std.mem.eql(u8, trimName(&a_center), center_name)) {
                             if (h_count < 3) {
                                 h_indices[h_count] = @intCast(ai);
                                 h_count += 1;
@@ -493,6 +494,15 @@ const GroupKey = struct {
     center_name: [4]u8,
     altloc: u8,
 };
+
+/// Normalize a 4-byte atom name for use as a hash key.
+/// Trims spaces and left-aligns so that ' N  ' and 'N   ' produce the same key.
+fn normalizeNameKey(raw: [4]u8) [4]u8 {
+    const trimmed = trimName(&raw);
+    var out: [4]u8 = .{ ' ', ' ', ' ', ' ' };
+    for (trimmed, 0..) |c, i| out[i] = c;
+    return out;
+}
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
