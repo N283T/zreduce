@@ -221,7 +221,7 @@ fn writeAtomSitePreserving(writer: anytype, model: *const Model, orig_loop: *con
     // Phase 3: fill sorted atom indices (reuse added_counts as cursor).
     const added_indices = try allocator.alloc(u32, total_added);
     defer allocator.free(added_indices);
-    @memset(added_counts, 0); // reset to use as write cursor
+    @memset(added_counts, 0);
     for (model.atoms.items, 0..) |atom, atom_idx| {
         if (!atom.is_added) continue;
         const r = atom.residue_idx;
@@ -251,12 +251,12 @@ fn writeAtomSitePreserving(writer: anytype, model: *const Model, orig_loop: *con
                         try writer.print("{d:.3}", .{atom.pos.z});
                     } else {
                         const val = orig_loop.val(orig_row_idx, col) orelse ".";
-                        try writeCifValue(writer, val);
+                        try writeCifValueInLoop(writer, val);
                     }
                 }
                 try writer.writeByte('\n');
+                serial += 1;
             }
-            serial += 1;
         }
 
         // Added H atoms for this residue — look up via pre-built index.
@@ -288,7 +288,7 @@ fn writeAtomSitePreserving(writer: anytype, model: *const Model, orig_loop: *con
                     const first_orig = res.atom_start;
                     if (first_orig < orig_loop.length()) {
                         const val = orig_loop.val(first_orig, col) orelse ".";
-                        try writeCifValue(writer, val);
+                        try writeCifValueInLoop(writer, val);
                     } else {
                         try writer.writeAll(".");
                     }
@@ -309,7 +309,7 @@ fn writeAtomSitePreserving(writer: anytype, model: *const Model, orig_loop: *con
                     const first_orig = res.atom_start;
                     if (first_orig < orig_loop.length()) {
                         const val = orig_loop.val(first_orig, col) orelse ".";
-                        try writeCifValue(writer, val);
+                        try writeCifValueInLoop(writer, val);
                     } else {
                         try writer.print("{d}", .{res.seq_id});
                     }
@@ -326,7 +326,7 @@ fn writeAtomSitePreserving(writer: anytype, model: *const Model, orig_loop: *con
                     const first_orig = res.atom_start;
                     if (first_orig < orig_loop.length()) {
                         const val = orig_loop.val(first_orig, col) orelse ".";
-                        try writeCifValue(writer, val);
+                        try writeCifValueInLoop(writer, val);
                     } else {
                         try writer.writeAll(".");
                     }
@@ -350,7 +350,7 @@ fn writeLoop(writer: anytype, loop: *const Loop) !void {
             for (0..w) |col| {
                 if (col > 0) try writer.writeByte(' ');
                 const val = loop.val(row, col) orelse ".";
-                try writeCifValue(writer, val);
+                try writeCifValueInLoop(writer, val);
             }
             try writer.writeByte('\n');
         }
@@ -378,7 +378,23 @@ fn writeAtomName(writer: anytype, name: []const u8) !void {
 /// Note: '.' and '?' are written unquoted as CIF null/unknown markers.
 /// This is correct for round-tripping parsed CIF values where the parser
 /// already stripped quotes from actual data values.
+///
+/// When `in_loop` is true, the semicolon text-field form is avoided because
+/// it requires the ';' to appear at the start of a line, which is not
+/// guaranteed mid-row. Instead, the value is wrapped in double-quotes with
+/// any internal '"' replaced by '\'' (single-quote). This is slightly lossy
+/// for the exotic case where a value contains both quote types, but produces
+/// valid CIF that parses correctly.
 fn writeCifValue(writer: anytype, val: []const u8) !void {
+    return writeCifValueImpl(writer, val, false);
+}
+
+/// Loop-safe variant: never emits semicolon text fields.
+fn writeCifValueInLoop(writer: anytype, val: []const u8) !void {
+    return writeCifValueImpl(writer, val, true);
+}
+
+fn writeCifValueImpl(writer: anytype, val: []const u8, in_loop: bool) !void {
     if (val.len == 0) {
         try writer.writeByte('.');
         return;
@@ -430,8 +446,24 @@ fn writeCifValue(writer: anytype, val: []const u8) !void {
             }
         }
         try writer.writeByte('"');
+    } else if (in_loop) {
+        // Both quote types in a loop context: semicolon text fields are not safe
+        // here because CIF requires ';' to appear at column 1 (start of line),
+        // but we may be mid-row. Wrap in double-quotes and replace internal '"'
+        // with '\'' so the output is valid CIF. Newlines are replaced with spaces.
+        try writer.writeByte('"');
+        for (val) |c| {
+            if (c == '\n' or c == '\r') {
+                try writer.writeByte(' ');
+            } else if (c == '"') {
+                try writer.writeByte('\'');
+            } else {
+                try writer.writeByte(c);
+            }
+        }
+        try writer.writeByte('"');
     } else {
-        // Both quote types — use semicolon text field (the only lossless CIF option).
+        // Both quote types outside a loop — use semicolon text field (lossless).
         // Semicolon text fields must start on a new line with ';' as the first char.
         try writer.writeAll("\n;");
         try writer.writeAll(val);
@@ -508,17 +540,45 @@ fn writeAtomSite(writer: anytype, model: *const Model, output_isotope: place.Out
     // Write atoms grouped by residue: heavy atoms first, then added H atoms.
     // The placer appends H atoms at the end of model.atoms, so we need to
     // reorder output so each residue's H atoms follow its heavy atoms.
+    // Pre-index added H atoms by residue_idx to avoid O(N*R) inner scan.
+    const n_residues = model.residues.items.len;
+    const allocator = model.allocator;
+    const added_counts = try allocator.alloc(u32, n_residues + 1);
+    defer allocator.free(added_counts);
+    @memset(added_counts, 0);
+    for (model.atoms.items) |atom| {
+        if (!atom.is_added) continue;
+        added_counts[atom.residue_idx] += 1;
+    }
+    const added_offsets = try allocator.alloc(u32, n_residues + 1);
+    defer allocator.free(added_offsets);
+    added_offsets[0] = 0;
+    for (0..n_residues) |r| {
+        added_offsets[r + 1] = added_offsets[r] + added_counts[r];
+    }
+    const total_added = added_offsets[n_residues];
+    const added_indices = try allocator.alloc(u32, total_added);
+    defer allocator.free(added_indices);
+    @memset(added_counts, 0);
+    for (model.atoms.items, 0..) |atom, atom_idx| {
+        if (!atom.is_added) continue;
+        const r = atom.residue_idx;
+        added_indices[added_offsets[r] + added_counts[r]] = @intCast(atom_idx);
+        added_counts[r] += 1;
+    }
+
     var serial: u32 = 1;
     for (model.residues.items, 0..) |res, res_idx| {
-        // First pass: original heavy atoms in this residue's range
+        // Original heavy atoms in this residue's range
         for (model.atoms.items[res.atom_start..res.atom_end]) |atom| {
             try writeAtomRow(writer, model, atom, res, serial, output_isotope);
             serial += 1;
         }
-        // Second pass: added H atoms belonging to this residue (appended at end)
-        for (model.atoms.items) |atom| {
-            if (!atom.is_added) continue;
-            if (atom.residue_idx != res_idx) continue;
+        // Added H atoms for this residue — look up via pre-built index.
+        const h_start = added_offsets[res_idx];
+        const h_end = added_offsets[res_idx + 1];
+        for (added_indices[h_start..h_end]) |atom_idx| {
+            const atom = model.atoms.items[atom_idx];
             // Skip absent H atoms (flipper sentinel position)
             if (mover_mod.isAbsentH(atom)) continue;
             try writeAtomRow(writer, model, atom, res, serial, output_isotope);
@@ -1103,6 +1163,70 @@ test "writeCifValue uses semicolon field when value has both quote types" {
     try testing.expect(std.mem.endsWith(u8, buf.items, ";\n"));
     // The original value must be preserved verbatim
     try testing.expect(std.mem.indexOf(u8, buf.items, val) != null);
+}
+
+test "writeCifValueInLoop avoids semicolon field when value has both quote types" {
+    const val = "it's a \"test\"";
+    var buf = std.ArrayList(u8).empty;
+    defer buf.deinit(testing.allocator);
+    try writeCifValueInLoop(buf.writer(testing.allocator), val);
+    // Must NOT produce a semicolon text field (no leading newline+semicolon)
+    try testing.expect(!std.mem.startsWith(u8, buf.items, "\n;"));
+    // Must be wrapped in double-quotes
+    try testing.expect(std.mem.startsWith(u8, buf.items, "\""));
+    try testing.expect(std.mem.endsWith(u8, buf.items, "\""));
+    // Internal double-quote should have been replaced (no raw " inside)
+    const inner = buf.items[1 .. buf.items.len - 1];
+    try testing.expect(std.mem.indexOf(u8, inner, "\"") == null);
+}
+
+test "writeAtomSitePreserving serial numbers are contiguous even with out-of-range rows" {
+    // Construct a document with an atom_site loop that has fewer rows than
+    // the model expects (simulating orig_row_idx >= orig_loop.length()).
+    // The serial counter must only increment for actually-written rows.
+    const source =
+        \\data_TEST
+        \\loop_
+        \\_atom_site.group_PDB
+        \\_atom_site.id
+        \\_atom_site.type_symbol
+        \\_atom_site.label_atom_id
+        \\_atom_site.label_comp_id
+        \\_atom_site.label_asym_id
+        \\_atom_site.label_seq_id
+        \\_atom_site.Cartn_x
+        \\_atom_site.Cartn_y
+        \\_atom_site.Cartn_z
+        \\_atom_site.occupancy
+        \\_atom_site.B_iso_or_equiv
+        \\_atom_site.label_alt_id
+        \\ATOM 1 N N ALA A 1 0.0 0.0 0.0 1.0 10.0 .
+        \\ATOM 2 C CA ALA A 1 1.5 0.0 0.0 1.0 10.0 .
+        \\#
+    ;
+
+    var doc = try cif.readString(testing.allocator, source);
+    defer doc.deinit();
+
+    var mdl = try mmcif.parseModel(testing.allocator, source);
+    defer mdl.deinit();
+
+    // Extend the residue's atom range beyond loop length to simulate gap
+    mdl.residues.items[0].atom_end = 4; // only 2 rows exist in loop
+
+    var buf: std.ArrayListUnmanaged(u8) = .empty;
+    defer buf.deinit(testing.allocator);
+    try writeWithDocument(buf.writer(testing.allocator), &mdl, &doc);
+
+    // Parse output and verify serial numbers are 1 and 2 (no gap)
+    var reparsed = try cif.readString(testing.allocator, buf.items);
+    defer reparsed.deinit();
+    const block = &reparsed.blocks.items[0];
+    const atom_site = block.findLoop("_atom_site.id").?;
+    const id_col = atom_site.findTag("_atom_site.id").?;
+    try testing.expectEqual(@as(usize, 2), atom_site.length());
+    try testing.expectEqualStrings("1", atom_site.val(0, id_col).?);
+    try testing.expectEqualStrings("2", atom_site.val(1, id_col).?);
 }
 
 test "writeFixedFloat3 no negative zero" {
