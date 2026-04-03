@@ -67,11 +67,14 @@ fn writeCoord(writer: anytype, val: f32) !void {
     var fbs = std.io.fixedBufferStream(&buf);
     try writeFixedFloat3(fbs.writer(), val);
     const s = fbs.getWritten();
-    // Right-justify in 8 chars
-    if (s.len < 8) {
+    if (s.len <= 8) {
+        // Right-justify in 8 chars
         for (0..8 - s.len) |_| try writer.writeByte(' ');
+        try writer.writeAll(s);
+    } else {
+        // Overflow: write as many chars as fit (truncate from left padding)
+        try writer.writeAll(s[0..@min(s.len, 8)]);
     }
-    try writer.writeAll(s);
 }
 
 /// Format occupancy/b-factor (6.2f) right-justified into a 6-char field.
@@ -80,11 +83,14 @@ fn writeOccupancy(writer: anytype, val: f32) !void {
     var fbs = std.io.fixedBufferStream(&buf);
     try writeFixedFloat2(fbs.writer(), val);
     const s = fbs.getWritten();
-    // Right-justify in 6 chars
-    if (s.len < 6) {
+    if (s.len <= 6) {
+        // Right-justify in 6 chars
         for (0..6 - s.len) |_| try writer.writeByte(' ');
+        try writer.writeAll(s);
+    } else {
+        // Overflow: write as many chars as fit (truncate from left padding)
+        try writer.writeAll(s[0..@min(s.len, 6)]);
     }
-    try writer.writeAll(s);
 }
 
 // ── Single ATOM/HETATM line writer ───────────────────────────────────────────
@@ -415,6 +421,18 @@ pub fn writeModel(
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 const testing = std.testing;
+
+test "formatAtomNamePdb" {
+    // 1-char element, short name -> starts at col 14
+    try testing.expectEqualStrings(" CA ", &formatAtomNamePdb("CA", "C"));
+    try testing.expectEqualStrings(" N  ", &formatAtomNamePdb("N", "N"));
+    // 2-char element -> starts at col 13
+    try testing.expectEqualStrings("FE  ", &formatAtomNamePdb("FE", "Fe"));
+    // 4-char name -> fills all columns
+    try testing.expectEqualStrings("HG11", &formatAtomNamePdb("HG11", "H"));
+    // Digit-prefixed hydrogen
+    try testing.expectEqualStrings("1HB ", &formatAtomNamePdb("1HB", "H"));
+}
 
 test "write tiny PDB round-trip" {
     const pdb_parse_mod = @import("../pdb.zig");

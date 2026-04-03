@@ -52,6 +52,10 @@ const polymer_comp_ids = std.StaticStringMap(void).initComptime(.{
     .{ "THR", {} }, .{ "TRP", {} }, .{ "TYR", {} }, .{ "VAL", {} },
     // Special amino acids
     .{ "MSE", {} }, .{ "SEC", {} }, .{ "PYL", {} },
+    // Common modified amino acids
+    .{ "TPO", {} }, .{ "SEP", {} }, .{ "PTR", {} }, .{ "MLY", {} }, .{ "CSO", {} },
+    .{ "HYP", {} }, .{ "CSS", {} }, .{ "CME", {} }, .{ "CSD", {} }, .{ "OCS", {} },
+    .{ "KCX", {} }, .{ "LLP", {} }, .{ "M3L", {} }, .{ "ALY", {} }, .{ "CGU", {} },
     // Standard nucleotides (RNA)
     .{ "A",   {} }, .{ "C",   {} }, .{ "G",   {} }, .{ "U",   {} },
     // Standard nucleotides (DNA)
@@ -81,11 +85,18 @@ fn safeSlice(line: []const u8, start: usize, end: usize) []const u8 {
     return line[start..e];
 }
 
-/// Parse a float from a slice, trimming whitespace. Returns 0 on failure.
-fn parseFloat(s: []const u8) f32 {
+/// Parse a float strictly — returns error for empty or malformed values.
+fn parseFloatStrict(s: []const u8) PdbError!f32 {
     const trimmed = std.mem.trim(u8, s, " ");
-    if (trimmed.len == 0) return 0.0;
-    return std.fmt.parseFloat(f32, trimmed) catch 0.0;
+    if (trimmed.len == 0) return PdbError.InvalidCoordinateValue;
+    return std.fmt.parseFloat(f32, trimmed) catch return PdbError.InvalidCoordinateValue;
+}
+
+/// Parse a float with a default for empty fields. Non-empty malformed values return error.
+fn parseFloatOpt(s: []const u8, default: f32) PdbError!f32 {
+    const trimmed = std.mem.trim(u8, s, " ");
+    if (trimmed.len == 0) return default;
+    return std.fmt.parseFloat(f32, trimmed) catch return PdbError.InvalidCoordinateValue;
 }
 
 /// Parse an integer from a slice, trimming whitespace. Returns 0 on failure.
@@ -96,23 +107,40 @@ fn parseInt(comptime T: type, s: []const u8) T {
 }
 
 /// Infer element from PDB atom name when columns 76-77 are absent.
-/// PDB atom names are 4 chars (cols 12-15). The element is typically the
-/// first non-digit, non-space character when the name starts in col 13
-/// (1-char element), or the first two chars for 4-char names starting at
-/// col 12 (e.g. " CA " -> C, "FE1 " -> Fe).
+/// PDB atom names are 4 chars (cols 12-15). PDB convention:
+///   - Names starting with a space (col 13): 1-char element at col 14 (index 1).
+///   - Names starting with a digit (col 13): hydrogen, element is H.
+///   - Names starting with a letter (col 13): 2-char element at cols 13-14 (e.g. "FE  " -> Fe).
 fn inferElementFromName(raw_name: []const u8) element.AtomType {
     // raw_name is the 4-char field from cols 12-15 (may have leading/trailing spaces)
-    const trimmed = std.mem.trim(u8, raw_name, " ");
-    if (trimmed.len == 0) return .unknown;
+    if (raw_name.len == 0) return .unknown;
 
-    // Strip leading digits (e.g. "1H", "2HB" in hydrogen names)
-    var start: usize = 0;
-    while (start < trimmed.len and std.ascii.isDigit(trimmed[start])) : (start += 1) {}
-    if (start >= trimmed.len) return .unknown;
+    // Digit-prefixed names (e.g. "1HB ", "2HG1"): these are always hydrogen.
+    // Use the untrimmed first char to detect the leading-digit convention.
+    // Also trim to handle names shorter than 4 chars.
+    const first = raw_name[0];
+    if (std.ascii.isDigit(first)) {
+        // Hydrogen with numeric prefix
+        const trimmed = std.mem.trim(u8, raw_name, " ");
+        // Strip the leading digit(s) and take 1 char for element
+        var i: usize = 0;
+        while (i < trimmed.len and std.ascii.isDigit(trimmed[i])) : (i += 1) {}
+        if (i >= trimmed.len) return .unknown;
+        return element.elementFromSymbol(trimmed[i .. i + 1]);
+    }
 
-    // The element symbol is at most 2 chars starting at `start`
-    const sym_end = @min(start + 2, trimmed.len);
-    return element.elementFromSymbol(trimmed[start..sym_end]);
+    if (first == ' ') {
+        // Space in column 13: 1-char element at column 14 (index 1)
+        if (raw_name.len < 2) return .unknown;
+        const ch = raw_name[1];
+        if (ch == ' ') return .unknown;
+        return element.elementFromSymbol(raw_name[1..2]);
+    }
+
+    // Non-space, non-digit first char: 2-char element starting at col 13
+    // (e.g. "FE  " -> Fe, "CL  " -> Cl)
+    const end = if (raw_name.len >= 2 and raw_name[1] != ' ') @as(usize, 2) else @as(usize, 1);
+    return element.elementFromSymbol(raw_name[0..end]);
 }
 
 // ---------------------------------------------------------------------------
@@ -189,7 +217,7 @@ const ParseState = struct {
     /// must call flushChain() first when transitioning between chains.
     fn openChain(self: *ParseState, chain_id: u8) !void {
         const chain_str = [_]u8{chain_id};
-        var entity_buf: [4]u8 = undefined;
+        var entity_buf: [8]u8 = undefined;
         const entity_str = std.fmt.bufPrint(&entity_buf, "{d}", .{self.next_entity_id}) catch "1";
         self.next_entity_id += 1;
 
@@ -209,6 +237,9 @@ const ParseState = struct {
 
     /// Process a single ATOM/HETATM line.
     fn processAtomLine(self: *ParseState, line: []const u8) !void {
+        // Minimum length to reach end of Z coordinate (column 54).
+        if (line.len < 54) return PdbError.InvalidCoordinateValue;
+
         // --- Extract fixed-width fields ---
         const raw_name = safeSlice(line, 12, 16); // 4 chars, space-padded
         const altloc_ch = if (line.len > 16) line[16] else ' ';
@@ -224,14 +255,9 @@ const ParseState = struct {
         const elem_raw = safeSlice(line, 76, 78);
 
         const seq_id = parseInt(i32, seq_id_str);
-        const x = parseFloat(x_str);
-        const y = parseFloat(y_str);
-        const z = parseFloat(z_str);
-
-        // Validate coordinates by checking the strings are non-empty
-        if (std.mem.trim(u8, x_str, " ").len == 0) return PdbError.InvalidCoordinateValue;
-        if (std.mem.trim(u8, y_str, " ").len == 0) return PdbError.InvalidCoordinateValue;
-        if (std.mem.trim(u8, z_str, " ").len == 0) return PdbError.InvalidCoordinateValue;
+        const x = try parseFloatStrict(x_str);
+        const y = try parseFloatStrict(y_str);
+        const z = try parseFloatStrict(z_str);
 
         // --- Chain transition ---
         if (!self.in_chain or chain_id_ch != self.cur_chain_id) {
@@ -276,8 +302,8 @@ const ParseState = struct {
             .element_type = atom_type,
             .residue_idx = @intCast(self.mdl.residues.items.len),
             .altloc = altloc_ch,
-            .occupancy = parseFloat(occ_str),
-            .b_factor = parseFloat(bfac_str),
+            .occupancy = try parseFloatOpt(occ_str, 1.0),
+            .b_factor = try parseFloatOpt(bfac_str, 0.0),
             .is_hydrogen = is_h,
             .vdw_radius = vdw,
         };
@@ -461,4 +487,87 @@ test "parse HETATM and entity types" {
     try testing.expectEqual(model_mod.residue.EntityType.non_polymer, mdl.residues.items[1].entity_type);
     // HOH -> water
     try testing.expectEqual(model_mod.residue.EntityType.water, mdl.residues.items[2].entity_type);
+}
+
+test "parse MODEL 1 only from multi-model PDB" {
+    const source =
+        \\MODEL        1
+        \\ATOM      1  N   ALA A   1       1.000   2.000   3.000  1.00 10.00           N
+        \\ATOM      2  CA  ALA A   1       2.000   3.000   4.000  1.00 10.00           C
+        \\ENDMDL
+        \\MODEL        2
+        \\ATOM      1  N   ALA A   1       9.000   9.000   9.000  1.00 10.00           N
+        \\ATOM      2  CA  ALA A   1       8.000   8.000   8.000  1.00 10.00           C
+        \\ENDMDL
+        \\END
+    ;
+    var mdl = try parseModel(testing.allocator, source);
+    defer mdl.deinit();
+    try testing.expectEqual(@as(usize, 2), mdl.atoms.items.len);
+    // Coordinates should be from MODEL 1, not MODEL 2
+    try testing.expectApproxEqAbs(mdl.atoms.items[0].pos.x, 1.0, 1e-3);
+}
+
+test "parse altloc" {
+    const source =
+        \\ATOM      1  CA AALA A   1       1.000   2.000   3.000  1.00 10.00           C
+        \\ATOM      2  CA BALA A   1       1.500   2.500   3.500  0.50 10.00           C
+        \\END
+    ;
+    var mdl = try parseModel(testing.allocator, source);
+    defer mdl.deinit();
+    try testing.expectEqual(@as(usize, 2), mdl.atoms.items.len);
+    try testing.expectEqual(@as(u8, 'A'), mdl.atoms.items[0].altloc);
+    try testing.expectEqual(@as(u8, 'B'), mdl.atoms.items[1].altloc);
+}
+
+test "parse insertion code splits residues" {
+    const source =
+        \\ATOM      1  N   ALA A   1       1.000   2.000   3.000  1.00 10.00           N
+        \\ATOM      2  N   GLY A   1A      2.000   3.000   4.000  1.00 10.00           N
+        \\END
+    ;
+    var mdl = try parseModel(testing.allocator, source);
+    defer mdl.deinit();
+    try testing.expectEqual(@as(usize, 2), mdl.residues.items.len);
+    try testing.expectEqual(@as(u8, ' '), mdl.residues.items[0].ins_code);
+    try testing.expectEqual(@as(u8, 'A'), mdl.residues.items[1].ins_code);
+}
+
+test "chain break detection from seq_id gap" {
+    const source =
+        \\ATOM      1  N   ALA A   1       1.000   2.000   3.000  1.00 10.00           N
+        \\ATOM      2  N   GLY A   5       2.000   3.000   4.000  1.00 10.00           N
+        \\END
+    ;
+    var mdl = try parseModel(testing.allocator, source);
+    defer mdl.deinit();
+    try testing.expectEqual(@as(usize, 2), mdl.residues.items.len);
+    try testing.expect(!mdl.residues.items[0].is_chain_break_before);
+    try testing.expect(mdl.residues.items[1].is_chain_break_before);
+}
+
+test "inferElementFromName" {
+    // Standard: " CA " -> C
+    try testing.expectEqual(element.AtomType.C, inferElementFromName(" CA "));
+    // Hydrogen with digit prefix: "1HB " -> H
+    try testing.expectEqual(element.AtomType.H, inferElementFromName("1HB "));
+    // Iron: "FE  " -> Fe
+    try testing.expectEqual(element.AtomType.Fe, inferElementFromName("FE  "));
+    // Single letter: " N  " -> N
+    try testing.expectEqual(element.AtomType.N, inferElementFromName(" N  "));
+}
+
+test "invalid coordinate returns error" {
+    const source =
+        \\ATOM      1  N   ALA A   1       abc     2.000   3.000  1.00 10.00           N
+    ;
+    const result = parseModel(testing.allocator, source);
+    try testing.expectError(PdbError.InvalidCoordinateValue, result);
+}
+
+test "short ATOM line returns error" {
+    const source = "ATOM      1  N   ALA A   1\n";
+    const result = parseModel(testing.allocator, source);
+    try testing.expectError(PdbError.InvalidCoordinateValue, result);
 }

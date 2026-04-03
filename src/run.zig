@@ -136,10 +136,13 @@ pub fn processFile(allocator: Allocator, config: ProcessConfig) !ProcessResult {
     var atom_lookup: ?zreduce.mmcif.AtomLookup = null;
     defer if (atom_lookup) |*al| al.deinit();
 
-    // PDB-specific objects (only used when format == .pdb)
+    // PDB-specific: records for passthrough output.
+    // Ownership note: when format == .pdb, pdb_result.model is moved into `mdl`
+    // (value copy). `mdl.deinit()` frees the model arrays. This defer only
+    // frees the records list. Do NOT call pdb_result.?.deinit() as that would
+    // double-free the model.
     var pdb_result: ?zreduce.pdb.PdbParseResult = null;
     defer if (pdb_result) |*r| {
-        // Only free records; model is moved into mdl below.
         r.records.deinit(allocator);
     };
 
@@ -375,11 +378,23 @@ fn dispatchWriter(
             try zreduce.writer.mmcif_writer.writeWithDocumentWithPolicy(writer, mdl, if (doc.*) |*d| d else null, config.bond_policy);
         },
         .pdb => {
-            if (pdb_result.*) |pr| {
-                try zreduce.writer.pdb_writer.writeModel(writer, mdl, pr.records.items, config.bond_policy.output_isotope);
-            } else {
-                try zreduce.writer.mmcif_writer.writeWithDocumentWithPolicy(writer, mdl, null, config.bond_policy);
-            }
+            // pdb_result is always set when format == .pdb (set in the parse switch above)
+            const pr = pdb_result.*.?;
+            try zreduce.writer.pdb_writer.writeModel(writer, mdl, pr.records.items, config.bond_policy.output_isotope);
         },
     }
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+test "detectFormat identifies PDB extensions" {
+    try std.testing.expectEqual(InputFormat.pdb, detectFormat("input.pdb"));
+    try std.testing.expectEqual(InputFormat.pdb, detectFormat("input.pdb.gz"));
+    try std.testing.expectEqual(InputFormat.pdb, detectFormat("input.ent"));
+    try std.testing.expectEqual(InputFormat.pdb, detectFormat("input.ent.gz"));
+    try std.testing.expectEqual(InputFormat.mmcif, detectFormat("input.cif"));
+    try std.testing.expectEqual(InputFormat.mmcif, detectFormat("input.cif.gz"));
+    try std.testing.expectEqual(InputFormat.mmcif, detectFormat("input.mmcif"));
 }
