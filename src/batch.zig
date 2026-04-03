@@ -25,6 +25,7 @@ pub const BatchConfig = struct {
     protonation_path: ?[]const u8 = null,
     fix_path: ?[]const u8 = null,
     strip_h: bool = false,
+    gzip_output: bool = false,
 };
 
 // ---------------------------------------------------------------------------
@@ -130,11 +131,16 @@ fn processFileInBatch(
     const input_path = try std.fs.path.join(allocator, &.{ input_dir, filename });
     defer allocator.free(input_path);
 
-    // Strip .gz extension from output filename (output is always plain CIF)
-    const out_name = if (std.mem.endsWith(u8, filename, ".gz"))
+    // Determine output filename: strip .gz if present, re-add if gzip_output requested.
+    const base_name = if (std.mem.endsWith(u8, filename, ".gz"))
         filename[0 .. filename.len - 3]
     else
         filename;
+    const out_name = if (config.gzip_output)
+        try std.fmt.allocPrint(allocator, "{s}.gz", .{base_name})
+    else
+        try allocator.dupe(u8, base_name);
+    defer allocator.free(out_name);
     const output_path = try std.fs.path.join(allocator, &.{ output_dir, out_name });
     defer allocator.free(output_path);
 

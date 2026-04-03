@@ -271,14 +271,22 @@ pub fn processFile(allocator: Allocator, config: ProcessConfig) !ProcessResult {
         }
     }
 
-    // 9. Write output mmCIF
+    // 9. Write output mmCIF (plain or gzip-compressed based on extension)
     var out_buf: [4096]u8 = undefined;
     if (config.output_path) |out_path| {
-        const file = try std.fs.cwd().createFile(out_path, .{});
-        defer file.close();
-        var fw = file.writer(&out_buf);
-        try zreduce.writer.mmcif_writer.writeWithDocumentWithPolicy(&fw.interface, &mdl, &doc, config.bond_policy);
-        try fw.interface.flush();
+        if (std.mem.endsWith(u8, out_path, ".gz")) {
+            var gw = try zreduce.gzip.GzipWriter.init(allocator, out_path);
+            errdefer gw.close() catch {};
+            const aw = gw.anyWriter();
+            try zreduce.writer.mmcif_writer.writeWithDocumentWithPolicy(&aw, &mdl, &doc, config.bond_policy);
+            try gw.close();
+        } else {
+            const file = try std.fs.cwd().createFile(out_path, .{});
+            defer file.close();
+            var fw = file.writer(&out_buf);
+            try zreduce.writer.mmcif_writer.writeWithDocumentWithPolicy(&fw.interface, &mdl, &doc, config.bond_policy);
+            try fw.interface.flush();
+        }
     } else {
         const stdout = std.fs.File.stdout();
         var sw = stdout.writer(&out_buf);

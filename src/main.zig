@@ -354,6 +354,8 @@ fn parseBatchArgs(args: []const []const u8) ?zreduce.batch.BatchConfig {
             };
         } else if (std.mem.eql(u8, arg, "--quiet")) {
             config.quiet = true;
+        } else if (std.mem.eql(u8, arg, "--gz")) {
+            config.gzip_output = true;
         } else if (parseCommonOption(args, &i, &common)) {
             // consumed by parseCommonOption
         } else if (arg.len > 0 and arg[0] == '-') {
@@ -410,6 +412,7 @@ fn printBatchUsage() void {
         \\    --isotope NAME     Output isotope for added H: hydrogen|h|deuterium|d (default: hydrogen)
         \\    --deuterium        Shortcut for --isotope deuterium
         \\    --strip-h          Remove existing H atoms before placement
+        \\    --gz               Write gzip-compressed output (.cif.gz)
         \\
     , .{});
 }
