@@ -2,7 +2,6 @@
 //!
 //! Checks the model for common issues after hydrogen placement and optimization:
 //! - Sentinel positions (absent H atoms that should have been removed)
-//! - Abnormal bond lengths
 //! - Atoms with NaN/Inf coordinates
 
 const std = @import("std");
