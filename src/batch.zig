@@ -26,6 +26,7 @@ pub const BatchConfig = struct {
     fix_path: ?[]const u8 = null,
     strip_h: bool = false,
     gzip_output: bool = false,
+    model_filter: zreduce.run.ModelFilter = .all,
 };
 
 // ---------------------------------------------------------------------------
@@ -164,6 +165,7 @@ fn processFileInBatch(
         .fix_path = config.fix_path,
         .strip_h = config.strip_h,
         .format = run_mod.detectFormat(input_path),
+        .model_filter = config.model_filter,
     };
 
     var timer = try std.time.Timer.start();

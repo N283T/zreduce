@@ -18,6 +18,7 @@ const RunConfig = struct {
     fix_path: ?[]const u8 = null,
     dump_movers_path: ?[]const u8 = null,
     strip_h: bool = false,
+    model_filter: zreduce.run.ModelFilter = .all,
 };
 
 /// Fields shared between RunConfig and BatchConfig, parsed by parseCommonOption.
@@ -29,6 +30,7 @@ const CommonOptions = struct {
     protonation_path: ?[]const u8 = null,
     fix_path: ?[]const u8 = null,
     strip_h: bool = false,
+    model_filter: zreduce.run.ModelFilter = .all,
 };
 
 fn parseBondModeValue(s: []const u8) ?zreduce.place.BondLengthMode {
@@ -144,6 +146,23 @@ fn parseCommonOption(args: []const []const u8, i: *usize, common: *CommonOptions
     } else if (std.mem.eql(u8, arg, "--strip-h")) {
         common.strip_h = true;
         return true;
+    } else if (std.mem.eql(u8, arg, "--model")) {
+        i.* += 1;
+        if (i.* >= args.len) {
+            std.debug.print("Error: --model requires 'all' or a model number\n", .{});
+            std.process.exit(1);
+        }
+        const val = args[i.*];
+        if (std.ascii.eqlIgnoreCase(val, "all")) {
+            common.model_filter = .all;
+        } else {
+            const num = std.fmt.parseInt(u32, val, 10) catch {
+                std.debug.print("Error: invalid --model value '{s}' (expected 'all' or a number)\n", .{val});
+                std.process.exit(1);
+            };
+            common.model_filter = .{ .specific = num };
+        }
+        return true;
     }
     return false;
 }
@@ -218,6 +237,7 @@ fn parseRunArgs(args: []const []const u8) ?RunConfig {
     config.protonation_path = common.protonation_path;
     config.fix_path = common.fix_path;
     config.strip_h = common.strip_h;
+    config.model_filter = common.model_filter;
 
     return config;
 }
@@ -267,6 +287,7 @@ fn printRunUsage() void {
         \\    --isotope NAME     Output isotope for added H: hydrogen|h|deuterium|d (default: hydrogen)
         \\    --deuterium        Shortcut for --isotope deuterium
         \\    --strip-h          Remove existing H atoms before placement
+        \\    --model VALUE      Model selection: 'all' (default) or a model number
         \\
     , .{});
 }
@@ -384,6 +405,7 @@ fn parseBatchArgs(args: []const []const u8) ?zreduce.batch.BatchConfig {
     config.protonation_path = common.protonation_path;
     config.fix_path = common.fix_path;
     config.strip_h = common.strip_h;
+    config.model_filter = common.model_filter;
     config.json_version = build_options.version;
     return config;
 }
@@ -412,6 +434,7 @@ fn printBatchUsage() void {
         \\    --isotope NAME     Output isotope for added H: hydrogen|h|deuterium|d (default: hydrogen)
         \\    --deuterium        Shortcut for --isotope deuterium
         \\    --strip-h          Remove existing H atoms before placement
+        \\    --model VALUE      Model selection: 'all' (default) or a model number
         \\    --gz               Write gzip-compressed output (.cif.gz)
         \\
     , .{});
@@ -570,6 +593,7 @@ fn runSubcommand(allocator: Allocator, args: []const []const u8) void {
         .dump_movers_path = config.dump_movers_path,
         .strip_h = config.strip_h,
         .format = zreduce.run.detectFormat(config.input_path),
+        .model_filter = config.model_filter,
     };
 
     const result = zreduce.run.processFile(allocator, proc_config) catch |err| {

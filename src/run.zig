@@ -22,6 +22,7 @@ pub const ProcessConfig = struct {
     dump_movers_path: ?[]const u8 = null,
     strip_h: bool = false,
     format: InputFormat = .mmcif,
+    model_filter: ModelFilter = .all,
 };
 
 pub const ProcessResult = struct {
@@ -45,6 +46,8 @@ pub const InputFormat = enum {
     mmcif,
     pdb,
 };
+
+pub const ModelFilter = zreduce.mmcif.ModelFilter;
 
 /// Detect input format from file extension.
 pub fn detectFormat(path: []const u8) InputFormat {
@@ -125,64 +128,253 @@ pub fn processFile(allocator: Allocator, config: ProcessConfig) !ProcessResult {
     const source = try readFile(allocator, config.input_path);
     defer allocator.free(source);
 
-    // 2-3. Parse based on format
-    // mmCIF-specific objects (only used when format == .mmcif)
-    var doc: ?zreduce.cif.types.Document = null;
-    defer if (doc) |*d| d.deinit();
-
-    var inline_dict: ?zreduce.ccd.ComponentDict = null;
-    defer if (inline_dict) |*d| d.deinit();
-
-    var atom_lookup: ?zreduce.mmcif.AtomLookup = null;
-    defer if (atom_lookup) |*al| al.deinit();
-
-    // PDB-specific: records for passthrough output.
-    // Ownership note: when format == .pdb, pdb_result.model is moved into `mdl`
-    // (value copy). `mdl.deinit()` frees the model arrays. This defer only
-    // frees the records list. Do NOT call pdb_result.?.deinit() as that would
-    // double-free the model.
-    var pdb_result: ?zreduce.pdb.PdbParseResult = null;
-    defer if (pdb_result) |*r| {
-        r.records.deinit(allocator);
+    return switch (config.format) {
+        .mmcif => processFileMmcif(allocator, config, source),
+        .pdb => processFilePdb(allocator, config, source),
     };
+}
 
-    var mdl: zreduce.model.Model = switch (config.format) {
-        .mmcif => blk: {
-            // 2. Parse CIF document (for preserving non-atom_site categories in output)
-            doc = try zreduce.cif.readString(allocator, source);
+/// mmCIF pipeline: supports multi-model processing.
+fn processFileMmcif(allocator: Allocator, config: ProcessConfig, source: []const u8) !ProcessResult {
+    // 2. Parse CIF document (for preserving non-atom_site categories in output)
+    var doc = try zreduce.cif.readString(allocator, source);
+    defer doc.deinit();
 
-            // 3. Extract model from CIF
-            break :blk try zreduce.mmcif.parseModel(allocator, source);
-        },
-        .pdb => blk: {
-            // 2-3. Parse PDB file
-            pdb_result = try zreduce.pdb.parse(allocator, source);
-            break :blk pdb_result.?.model;
-        },
-    };
-    defer mdl.deinit();
+    // 3. Extract models from CIF
+    var entries = try zreduce.mmcif.parseModels(allocator, source, config.model_filter);
+    defer {
+        for (entries.items) |*e| e.model.deinit();
+        entries.deinit(allocator);
+    }
+
+    if (entries.items.len == 0) {
+        if (!config.quiet) std.debug.print("  No models found matching filter\n", .{});
+        return ProcessResult{
+            .n_placed = 0,
+            .n_residues = 0,
+            .n_skipped_existing = 0,
+            .n_skipped_inter_residue = 0,
+            .n_skipped_missing_ref = 0,
+        };
+    }
 
     // 3a. Strip existing hydrogens if requested
+    // Note: when strip_h is active, cif_row_start/end in entries become stale
+    // after stripDocumentHydrogens compacts the doc's _atom_site loop. We set
+    // use_doc=false to use the non-preserving writer path, which doesn't depend
+    // on orig_loop row indices.
+    var use_doc_for_write = true;
+    if (config.strip_h) {
+        for (entries.items) |*entry| {
+            const n_stripped = entry.model.stripHydrogens();
+            if (!config.quiet and n_stripped > 0) {
+                std.debug.print("  Model {d}: stripped {d} existing H atoms\n", .{ entry.model_num, n_stripped });
+            }
+        }
+        stripDocumentHydrogens(&doc.blocks.items[0]);
+        // Invalidate preserving mode for multi-model to avoid stale row offsets
+        if (entries.items.len > 1) {
+            use_doc_for_write = false;
+        }
+    }
+
+    // 3b. Parse inline components (once — model-independent)
+    var inline_dict: ?zreduce.ccd.ComponentDict = null;
+    defer if (inline_dict) |*d| d.deinit();
+    const block = &doc.blocks.items[0];
+    inline_dict = try zreduce.mmcif.parseInlineComponents(allocator, block);
+
+    // Parse overrides (once — shared across models)
+    var protonation_overrides: ?zreduce.place.ProtonationOverrides = null;
+    defer if (protonation_overrides) |*ov| ov.deinit();
+    if (config.protonation_path) |path| {
+        protonation_overrides = zreduce.place.protonation.parseFile(allocator, path) catch |err| {
+            std.debug.print("Error: failed to load protonation override file '{s}': {s}\n", .{ path, @errorName(err) });
+            return err;
+        };
+    }
+
+    var fix_overrides: ?zreduce.optimize.fix.FixOverrides = null;
+    defer if (fix_overrides) |*ov| ov.deinit();
+    if (config.fix_path) |path| {
+        fix_overrides = zreduce.optimize.fix.parseFile(allocator, path) catch |err| {
+            std.debug.print("Error: failed to load fix override file '{s}': {s}\n", .{ path, @errorName(err) });
+            return err;
+        };
+    }
+
+    // Process each model independently
+    var result = ProcessResult{
+        .n_placed = 0,
+        .n_residues = 0,
+        .n_skipped_existing = 0,
+        .n_skipped_inter_residue = 0,
+        .n_skipped_missing_ref = 0,
+    };
+
+    for (entries.items) |*entry| {
+        const mdl = &entry.model;
+
+        if (!config.quiet and entries.items.len > 1) {
+            std.debug.print("  Processing model {d} ({d} atoms)\n", .{ entry.model_num, mdl.atoms.items.len });
+        }
+
+        // Build per-model atom lookup for bond parsing
+        var atom_lookup = try zreduce.mmcif.buildAtomLookupForRange(allocator, block, entry.cif_row_start, entry.cif_row_end);
+        defer atom_lookup.deinit();
+
+        // 4. Apply chemistry annotations
+        zreduce.place.applyChemistryWithConfig(mdl, .{
+            .protonation = if (protonation_overrides) |*ov| ov else null,
+        });
+
+        // 4a-4c. mmCIF-specific bond parsing
+        try zreduce.mmcif.parseStructConn(mdl, block, &atom_lookup);
+        try zreduce.mmcif.parseBranchLinks(allocator, mdl, block, &atom_lookup);
+        zreduce.mmcif.flagLeavingAtoms(mdl, if (inline_dict) |*d| d else null, config.dict);
+
+        // 5. Place hydrogens
+        const place_result = try zreduce.place.addHydrogensWithConfig(
+            mdl,
+            config.dict,
+            if (inline_dict) |*d| d else null,
+            .{
+                .water = config.water,
+                .bond_policy = config.bond_policy,
+                .protonation = if (protonation_overrides) |*ov| ov else null,
+            },
+        );
+
+        result.n_placed += place_result.n_placed;
+        result.n_residues += place_result.n_residues;
+        result.n_skipped_existing += place_result.n_skipped_existing;
+        result.n_skipped_inter_residue += place_result.n_skipped_inter_residue;
+        result.n_skipped_missing_ref += place_result.n_skipped_missing_ref;
+        result.n_skipped_quality_filter += place_result.n_skipped_quality_filter;
+
+        // 6. Generate movers and optimize
+        const needs_movers = !config.no_opt or config.fix_path != null or config.dump_movers_path != null;
+        if (needs_movers) {
+            const gen_result = try zreduce.optimize.generateMovers(
+                allocator,
+                mdl,
+                config.no_flip,
+                config.dict,
+                if (inline_dict) |*d| d else null,
+                if (protonation_overrides) |*ov| ov else null,
+                config.bond_policy.mode,
+            );
+            var movers = gen_result.movers;
+            defer {
+                for (0..movers.len) |i| movers[i].deinit();
+                allocator.free(movers);
+            }
+            result.n_movers += @intCast(movers.len);
+
+            if (fix_overrides) |*ov| {
+                try zreduce.optimize.fix.applyFixes(ov, mdl, movers);
+                for (movers) |*m| {
+                    if (m.is_fixed) m.applyOrientation(mdl.atoms.items, m.best_orientation);
+                }
+            }
+
+            if (!config.no_opt and movers.len > 0) {
+                const opt_result = try zreduce.optimize.optimizer.optimize(
+                    allocator,
+                    movers,
+                    mdl,
+                    .{ .n_threads = config.opt_threads },
+                );
+                result.n_singletons += opt_result.n_singletons;
+                result.n_brute_force += opt_result.n_brute_force;
+                result.n_vertex_cut += opt_result.n_vertex_cut;
+            }
+        }
+
+        // 7. Mark absent H atoms
+        markAbsentHydrogens(mdl);
+
+        // 8. Validate
+        {
+            var validation = try zreduce.validate.validateModel(allocator, mdl);
+            defer validation.deinit();
+
+            if (!validation.ok()) {
+                if (!config.quiet) std.debug.print("  Model {d}: {d} validation issue(s)\n", .{ entry.model_num, validation.issues.len });
+                if (config.validate_flag) {
+                    zreduce.validate.reportIssues(validation.issues, mdl);
+                }
+            }
+        }
+    }
+
+    // Warn about unmatched overrides (after all models processed)
+    if (protonation_overrides) |*ov| {
+        if (!config.quiet) {
+            // Use first model for name resolution (overrides are file-level, not per-model)
+            ov.warnUnmatched(&entries.items[0].model);
+        }
+    }
+
+    // 9. Write output (all models into one file)
+    var out_buf: [4096]u8 = undefined;
+    if (config.output_path) |out_path| {
+        if (std.mem.endsWith(u8, out_path, ".gz")) {
+            var gw = try zreduce.gzip.GzipWriter.init(allocator, out_path);
+            errdefer gw.close() catch {};
+            const aw = gw.anyWriter();
+            try zreduce.writer.mmcif_writer.writeMultiModelWithDocumentWithPolicy(&aw, entries.items, if (use_doc_for_write) &doc else null, config.bond_policy);
+            try gw.close();
+        } else {
+            const file = try std.fs.cwd().createFile(out_path, .{});
+            defer file.close();
+            var fw = file.writer(&out_buf);
+            try zreduce.writer.mmcif_writer.writeMultiModelWithDocumentWithPolicy(&fw.interface, entries.items, if (use_doc_for_write) &doc else null, config.bond_policy);
+            try fw.interface.flush();
+        }
+    } else {
+        const stdout = std.fs.File.stdout();
+        var sw = stdout.writer(&out_buf);
+        try zreduce.writer.mmcif_writer.writeMultiModelWithDocumentWithPolicy(&sw.interface, entries.items, if (use_doc_for_write) &doc else null, config.bond_policy);
+        try sw.interface.flush();
+    }
+
+    // 10. Write JSON log (optional, uses first model for summary)
+    if (config.json_path) |json_path| {
+        var json_buf: [4096]u8 = undefined;
+        const file = try std.fs.cwd().createFile(json_path, .{});
+        defer file.close();
+        var jw = file.writer(&json_buf);
+        var total_added: u32 = 0;
+        for (entries.items) |entry| total_added += countAddedHydrogens(&entry.model);
+        try zreduce.writer.json_writer.writeLog(
+            &jw.interface,
+            config.json_version,
+            config.input_path,
+            total_added,
+            config.bond_policy,
+            &.{}, // movers not available here (freed per model)
+            entries.items[0].model.residues.items,
+            entries.items[0].model.chains.items,
+        );
+        try jw.interface.flush();
+    }
+
+    return result;
+}
+
+/// PDB pipeline: single-model processing (multi-model PDB support is a future task).
+fn processFilePdb(allocator: Allocator, config: ProcessConfig, source: []const u8) !ProcessResult {
+    var pdb_result = try zreduce.pdb.parse(allocator, source);
+    var mdl = pdb_result.model;
+    defer mdl.deinit();
+    defer pdb_result.records.deinit(allocator);
+
     if (config.strip_h) {
         const n_stripped = mdl.stripHydrogens();
         if (!config.quiet and n_stripped > 0) {
             std.debug.print("  Stripped {d} existing H atoms\n", .{n_stripped});
         }
-        // Also strip H rows from the CIF document's _atom_site loop so that
-        // the writer's orig_loop row indices stay in sync with the model.
-        if (doc) |*d| {
-            stripDocumentHydrogens(&d.blocks.items[0]);
-        }
-    }
-
-    // 3b-4a. mmCIF-specific: inline dict, atom lookup, struct_conn, branch links
-    if (config.format == .mmcif) {
-        const block = &doc.?.blocks.items[0];
-
-        inline_dict = try zreduce.mmcif.parseInlineComponents(allocator, block);
-
-        // Build atom lookup once for bond parsing
-        atom_lookup = try zreduce.mmcif.buildAtomLookup(allocator, block);
     }
 
     var protonation_overrides: ?zreduce.place.ProtonationOverrides = null;
@@ -203,25 +395,14 @@ pub fn processFile(allocator: Allocator, config: ProcessConfig) !ProcessResult {
         };
     }
 
-    // 4. Apply chemistry annotations
     zreduce.place.applyChemistryWithConfig(&mdl, .{
         .protonation = if (protonation_overrides) |*ov| ov else null,
     });
 
-    // 4a-4c. mmCIF-specific bond parsing (after applyChemistry which replaces atom.flags)
-    if (config.format == .mmcif) {
-        const block = &doc.?.blocks.items[0];
-
-        try zreduce.mmcif.parseStructConn(&mdl, block, &atom_lookup.?);
-        try zreduce.mmcif.parseBranchLinks(allocator, &mdl, block, &atom_lookup.?);
-        zreduce.mmcif.flagLeavingAtoms(&mdl, if (inline_dict) |*d| d else null, config.dict);
-    }
-
-    // 5. Place hydrogens (per-component fallback: inline dict first, then external CCD)
     const place_result = try zreduce.place.addHydrogensWithConfig(
         &mdl,
         config.dict,
-        if (inline_dict) |*d| d else null,
+        null, // no inline dict for PDB
         .{
             .water = config.water,
             .bond_policy = config.bond_policy,
@@ -229,7 +410,6 @@ pub fn processFile(allocator: Allocator, config: ProcessConfig) !ProcessResult {
         },
     );
 
-    // Warn about unmatched protonation overrides
     if (protonation_overrides) |*ov| {
         if (!config.quiet) ov.warnUnmatched(&mdl);
     }
@@ -243,7 +423,6 @@ pub fn processFile(allocator: Allocator, config: ProcessConfig) !ProcessResult {
         .n_skipped_quality_filter = place_result.n_skipped_quality_filter,
     };
 
-    // 6. Generate movers, apply fixes, and optimize unless --no-opt
     var movers: []zreduce.optimize.Mover = &.{};
     var movers_owned = false;
     defer {
@@ -253,13 +432,12 @@ pub fn processFile(allocator: Allocator, config: ProcessConfig) !ProcessResult {
 
     const needs_movers = !config.no_opt or config.fix_path != null or config.dump_movers_path != null;
     if (needs_movers) {
-        // Movers use per-component fallback: inline_dict first, then external CCD dict.
         const gen_result = try zreduce.optimize.generateMovers(
             allocator,
             &mdl,
             config.no_flip,
             config.dict,
-            if (inline_dict) |*d| d else null,
+            null,
             if (protonation_overrides) |*ov| ov else null,
             config.bond_policy.mode,
         );
@@ -289,14 +467,11 @@ pub fn processFile(allocator: Allocator, config: ProcessConfig) !ProcessResult {
         }
 
         if (!config.no_opt and movers.len > 0) {
-            const opt_config = zreduce.optimize.OptConfig{
-                .n_threads = config.opt_threads,
-            };
             const opt_result = try zreduce.optimize.optimizer.optimize(
                 allocator,
                 movers,
                 &mdl,
-                opt_config,
+                .{ .n_threads = config.opt_threads },
             );
             result.n_singletons = opt_result.n_singletons;
             result.n_brute_force = opt_result.n_brute_force;
@@ -304,10 +479,8 @@ pub fn processFile(allocator: Allocator, config: ProcessConfig) !ProcessResult {
         }
     }
 
-    // 7. Mark absent H atoms
     markAbsentHydrogens(&mdl);
 
-    // 8. Validate
     {
         var validation = try zreduce.validate.validateModel(allocator, &mdl);
         defer validation.deinit();
@@ -320,30 +493,28 @@ pub fn processFile(allocator: Allocator, config: ProcessConfig) !ProcessResult {
         }
     }
 
-    // 9. Write output (format-aware, plain or gzip-compressed based on extension)
     var out_buf: [4096]u8 = undefined;
     if (config.output_path) |out_path| {
         if (std.mem.endsWith(u8, out_path, ".gz")) {
             var gw = try zreduce.gzip.GzipWriter.init(allocator, out_path);
             errdefer gw.close() catch {};
             const aw = gw.anyWriter();
-            try dispatchWriter(&aw, &mdl, config, &doc, &pdb_result);
+            try zreduce.writer.pdb_writer.writeModel(&aw, &mdl, pdb_result.records.items, config.bond_policy.output_isotope);
             try gw.close();
         } else {
             const file = try std.fs.cwd().createFile(out_path, .{});
             defer file.close();
             var fw = file.writer(&out_buf);
-            try dispatchWriter(&fw.interface, &mdl, config, &doc, &pdb_result);
+            try zreduce.writer.pdb_writer.writeModel(&fw.interface, &mdl, pdb_result.records.items, config.bond_policy.output_isotope);
             try fw.interface.flush();
         }
     } else {
         const stdout = std.fs.File.stdout();
         var sw = stdout.writer(&out_buf);
-        try dispatchWriter(&sw.interface, &mdl, config, &doc, &pdb_result);
+        try zreduce.writer.pdb_writer.writeModel(&sw.interface, &mdl, pdb_result.records.items, config.bond_policy.output_isotope);
         try sw.interface.flush();
     }
 
-    // 10. Write JSON log (optional)
     if (config.json_path) |json_path| {
         var json_buf: [4096]u8 = undefined;
         const file = try std.fs.cwd().createFile(json_path, .{});
@@ -363,26 +534,6 @@ pub fn processFile(allocator: Allocator, config: ProcessConfig) !ProcessResult {
     }
 
     return result;
-}
-
-/// Dispatch to the correct writer based on input format.
-fn dispatchWriter(
-    writer: anytype,
-    mdl: *const zreduce.model.Model,
-    config: ProcessConfig,
-    doc: *const ?zreduce.cif.types.Document,
-    pdb_result: *const ?zreduce.pdb.PdbParseResult,
-) !void {
-    switch (config.format) {
-        .mmcif => {
-            try zreduce.writer.mmcif_writer.writeWithDocumentWithPolicy(writer, mdl, if (doc.*) |*d| d else null, config.bond_policy);
-        },
-        .pdb => {
-            // pdb_result is always set when format == .pdb (set in the parse switch above)
-            const pr = pdb_result.*.?;
-            try zreduce.writer.pdb_writer.writeModel(writer, mdl, pr.records.items, config.bond_policy.output_isotope);
-        },
-    }
 }
 
 // ---------------------------------------------------------------------------
