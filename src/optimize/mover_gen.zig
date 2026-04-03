@@ -284,6 +284,7 @@ pub fn generateMovers(
                     center_name = trimName(&center_name_raw);
                     axis_name = trimName(&axis_name_buf);
                 } else {
+                    log.warn("no plan for group H '{s}' in {s} (res {d}), skipping rotator", .{ h_name, comp_id, residue_idx });
                     n_skipped += 1;
                     continue;
                 }
