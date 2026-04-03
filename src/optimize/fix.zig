@@ -332,7 +332,8 @@ test "apply fix locks his mover state" {
     defer overrides.deinit();
     try applyFixes(&overrides, &mdl, movers);
 
-    try testing.expectEqual(@as(usize, 1), movers.len);
+    // HIS N-terminal: his_flip (movers[0]) + nh3_rotator (movers[1])
+    try testing.expectEqual(@as(usize, 2), movers.len);
     try testing.expect(movers[0].is_fixed);
     try testing.expectEqual(@as(u16, 3), movers[0].best_orientation);
 }
