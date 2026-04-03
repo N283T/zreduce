@@ -6,7 +6,8 @@ zreduce reads mmCIF structures, adds hydrogen atoms using geometric rules and CC
 
 ## Features
 
-- **mmCIF-native** input and output (no PDB format dependency)
+- **mmCIF and PDB** input and output formats
+- **Gzip support** for compressed input files (.cif.gz, .pdb.gz)
 - **CCD-driven** hydrogen placement for non-standard residues (nucleotides, glycans, ligands, modified residues)
 - **20 standard amino acids** with hardcoded placement plans and bond topology
 - **6 geometry types**: tetrahedral, sp2, dihedral-controlled, planar bisector, fractional angle, linear
@@ -28,7 +29,8 @@ zreduce reads mmCIF structures, adds hydrogen atoms using geometric rules and CC
 
 ### Requirements
 
-- [Zig](https://ziglang.org/) 0.14+ (tested with 0.15.2)
+- [Zig](https://ziglang.org/) 0.14+ (tested with 0.15.x)
+- zlib (linked as system library for gzip I/O)
 
 ### Build
 
@@ -40,8 +42,14 @@ zig build -Doptimize=ReleaseFast    # Optimized (recommended for real structures
 ### Run
 
 ```bash
-# Single file processing
+# Single file processing (mmCIF)
 zreduce run input.cif -o output.cif
+
+# PDB format input
+zreduce run input.pdb -o output.pdb
+
+# Gzip-compressed input
+zreduce run input.cif.gz -o output.cif
 
 # With CCD dictionary (enables non-standard residue H placement + optimization)
 zreduce run input.cif -d components.cif -o output.cif
@@ -80,7 +88,7 @@ zreduce batch input_dir/ -j 4    # limit to 4 threads
 ### Test
 
 ```bash
-zig build test --summary all    # 325 tests
+zig build test --summary all    # 400 tests
 ```
 
 ## CLI
@@ -217,7 +225,7 @@ mmCIF input
          |
          v
 +------------------+
-| Output Writer    |  mmCIF with H atoms + JSON log
+| Output Writer    |  mmCIF / PDB with H atoms + JSON log
 +------------------+
 
 Batch mode wraps the above pipeline with file-level parallelism:
@@ -248,31 +256,81 @@ src/
   validate.zig          Post-placement model validation
   math.zig              Vec3(T), rotation, dihedral
   element.zig           AtomType, VDW radii, AtomFlags
+  gzip.zig              Gzip I/O via C zlib (workaround for Zig std lib bug)
+  integration_test.zig  End-to-end pipeline integration tests
+  real_file_test.zig    End-to-end tests with real PDB structures
+  cif.zig               CIF module re-exports
   cif/                  CIF parser subsystem
+    char_table.zig      Character classification table
+    parser.zig          CIF document parser
+    tokenizer.zig       Zero-copy CIF tokenizer
+    types.zig           CIF data types (Document, Block, Loop, Pair)
+    value.zig           CIF value helpers (null, float, int parsing)
   mmcif.zig             atom_site + poly_seq_scheme + unobs atoms
-  ccd.zig               CCD component dictionary
+  mmcif/
+    conn.zig            _struct_conn and _pdbx_entity_branch_link parsing
+    inline_comp.zig     Inline component dictionary and leaving atom flags
+  ccd.zig               CCD component dictionary (streaming parser)
+  ccd_binary.zig        Binary format for fast CCD load/save
+  pdb.zig               PDB format parser (ATOM/HETATM records)
+  model.zig             Model module re-exports
   model/                Molecular model structs
+    atom.zig            Atom struct and helpers
+    bond.zig            Bond struct
+    chain.zig           Chain struct
+    fixed_string.zig    Fixed-capacity space-padded PDB-style identifiers
+    model.zig           Aggregate model container
+    neighbor.zig        Spatial cell list for neighbor lookups
+    residue.zig         Residue struct
+  place.zig             Place module re-exports
   place/                Hydrogen placement
     placer.zig          Unified placer (conformer-aware)
-    standard.zig        20 AA placement plans
-    het.zig             CCD-derived placement
-    topology.zig        Bond topology tables
-    chemistry.zig       Chemical annotations
+    placer_test.zig     Placement pipeline integration tests
+    standard.zig        20 AA placement plans + MoverHint
+    ccd_derive.zig      CCD-derived placement plan generation
+    nucleotide.zig      DNA/RNA nucleotide placement plans
+    modified.zig        Modified amino acid placement plans (MSE, SEP, etc.)
+    topology.zig        Bond topology tables for 20 AAs
+    chemistry.zig       Chemical annotations (donor/acceptor/aromatic/charge)
+    geometry.zig        Hydrogen placement geometry functions (Types 1-6)
+    execute.zig         Plan execution and geometry dispatch
+    lookup.zig          Atom lookup utilities for placement
+    bond_policy.zig     Bond length policies (X-ray vs neutron)
+    protonation.zig     Protonation state overrides
+    terminal.zig        N-terminal and 3'-terminal H placement
+    water.zig           Water hydrogen placement
   optimize/             Optimization engine
+    optimize.zig        Optimize module re-exports
     optimizer.zig       Clique search + fine search + multithreaded optimization
     scoring.zig         CellList-based scoring with SoA layout
     mover_gen.zig       Mover generation (standard + CCD)
     scorer.zig          Dot-sphere scoring
-    rotator.zig         Rotation movers
-    flipper.zig         Flip movers
-    mover.zig           Mover types
-    clique.zig          Interaction graph
-    dot_sphere.zig      Dot generation
+    rotator.zig         Rotation movers (OH/SH, NH3+, methyl)
+    flipper.zig         Flip movers (Asn/Gln amide, His ring)
+    mover.zig           Mover struct, Orientation, isAbsentH
+    fix.zig             Mover state override from fix file
+    clique.zig          Interaction graph + connected components
+    dot_sphere.zig      Concentric ring dot generation
+  writer.zig            Writer module re-exports
   writer/               Output writers
+    mmcif_writer.zig    mmCIF format output
+    pdb_writer.zig      PDB format output
+    json_writer.zig     JSON optimization log output
+    format.zig          Value formatting and fixed-point float helpers
+  test_data/            Test CIF/PDB fixtures
 examples/
-  data/                 Input structures
+  data/                 Input structures (AF models, fold_test2)
   result/               zreduce output
 ```
+
+## Known Limitations
+
+- CCD dihedral estimation uses fixed heuristics (not computed from ideal coords)
+- Gzip I/O uses C zlib as a workaround for a Zig std lib bug ([ziglang/zig#25035](https://github.com/ziglang/zig/issues/25035))
+
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md) for a detailed history of changes.
 
 ## License
 
