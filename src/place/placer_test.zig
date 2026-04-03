@@ -1140,3 +1140,111 @@ test "backbone NH placed in peptide plane using C(i-1)" {
     // H should lie approximately in the C(i-1)-N-CA plane (z ≈ 0 for this fixture)
     try testing.expectApproxEqAbs(h_pos.z, 0.0, 0.1);
 }
+
+// ---------------------------------------------------------------------------
+// Nucleotide placement tests
+// ---------------------------------------------------------------------------
+
+test "place hydrogens on DC (DNA cytidine)" {
+    const source = @embedFile("../test_data/dc_residue.cif");
+    var mdl = try mmcif.parseModel(testing.allocator, source);
+    defer mdl.deinit();
+
+    applyChemistry(&mdl);
+    const result = try addHydrogens(&mdl, null, null);
+
+    // DC has 11 H atoms: 7 sugar + 4 base (H5, H6, H41, H42)
+    // Some sugar H may be missing_ref if neighbors aren't all bonded.
+    // At minimum H5, H6, H41, H42 on the base ring should be placed.
+    try testing.expect(result.n_placed >= 4);
+    try testing.expect(result.n_residues >= 1);
+
+    // Verify bond lengths are reasonable (0.8 – 1.2 Å)
+    for (mdl.atoms.items) |atom| {
+        if (!atom.is_added or !atom.is_hydrogen) continue;
+        // Find nearest heavy atom in the same residue
+        var min_dist: f32 = std.math.inf(f32);
+        for (mdl.atoms.items) |other| {
+            if (other.is_hydrogen) continue;
+            if (other.residue_idx != atom.residue_idx) continue;
+            const d = atom.pos.distance(other.pos);
+            if (d < min_dist) min_dist = d;
+        }
+        try testing.expect(min_dist > 0.8 and min_dist < 1.2);
+    }
+}
+
+test "place hydrogens on RNA adenosine (A)" {
+    // Use an inline CIF with idealized coordinates for adenosine (A).
+    // We construct just the ribose + base heavy atoms needed to place H.
+    const source =
+        \\data_RNA_A
+        \\#
+        \\_entry.id RNA_A
+        \\#
+        \\loop_
+        \\_atom_site.group_PDB
+        \\_atom_site.id
+        \\_atom_site.type_symbol
+        \\_atom_site.label_atom_id
+        \\_atom_site.label_comp_id
+        \\_atom_site.label_asym_id
+        \\_atom_site.label_seq_id
+        \\_atom_site.Cartn_x
+        \\_atom_site.Cartn_y
+        \\_atom_site.Cartn_z
+        \\_atom_site.occupancy
+        \\_atom_site.B_iso_or_equiv
+        \\_atom_site.label_alt_id
+        \\_atom_site.auth_asym_id
+        \\ATOM 1  P  P    A A 1  -2.397  0.829  1.300 1.00 10.0 . A
+        \\ATOM 2  O  OP1  A A 1  -3.498  1.740  1.058 1.00 10.0 . A
+        \\ATOM 3  O  OP2  A A 1  -2.703 -0.629  1.400 1.00 10.0 . A
+        \\ATOM 4  O  O5'  A A 1  -1.279  1.195  0.255 1.00 10.0 . A
+        \\ATOM 5  C  C5'  A A 1   0.017  0.620  0.236 1.00 10.0 . A
+        \\ATOM 6  C  C4'  A A 1   0.965  1.534 -0.510 1.00 10.0 . A
+        \\ATOM 7  O  O4'  A A 1   0.489  2.877 -0.513 1.00 10.0 . A
+        \\ATOM 8  C  C3'  A A 1   1.232  1.052 -1.941 1.00 10.0 . A
+        \\ATOM 9  O  O3'  A A 1   2.578  0.613 -2.089 1.00 10.0 . A
+        \\ATOM 10 C  C2'  A A 1   0.858  2.282 -2.778 1.00 10.0 . A
+        \\ATOM 11 O  O2'  A A 1   1.903  3.222 -2.982 1.00 10.0 . A
+        \\ATOM 12 C  C1'  A A 1   0.817  3.372 -1.718 1.00 10.0 . A
+        \\ATOM 13 N  N9   A A 1  -0.518  3.933 -1.469 1.00 10.0 . A
+        \\ATOM 14 C  C8   A A 1  -0.949  5.219 -1.612 1.00 10.0 . A
+        \\ATOM 15 N  N7   A A 1  -2.198  5.393 -1.366 1.00 10.0 . A
+        \\ATOM 16 C  C5   A A 1  -2.600  4.163 -1.064 1.00 10.0 . A
+        \\ATOM 17 C  C6   A A 1  -3.891  3.671 -0.763 1.00 10.0 . A
+        \\ATOM 18 N  N6   A A 1  -4.963  4.417 -0.740 1.00 10.0 . A
+        \\ATOM 19 N  N1   A A 1  -4.148  2.382 -0.529 1.00 10.0 . A
+        \\ATOM 20 C  C2   A A 1  -3.128  1.467 -0.495 1.00 10.0 . A
+        \\ATOM 21 N  N3   A A 1  -1.894  1.755 -0.719 1.00 10.0 . A
+        \\ATOM 22 C  C4   A A 1  -1.600  3.070 -0.975 1.00 10.0 . A
+        \\#
+    ;
+    var mdl = try mmcif.parseModel(testing.allocator, source);
+    defer mdl.deinit();
+
+    applyChemistry(&mdl);
+    const result = try addHydrogens(&mdl, null, null);
+
+    // RNA A has 11 H atoms: 7 sugar (H1', H2', HO2', H3', H4', H5', H5'') + 4 base (H2, H8, H61, H62)
+    // In a single isolated residue some sugar H may be missing_ref (no 3rd neighbor for HXR3).
+    // The base H (H2, H8, H61, H62) should all succeed.
+    try testing.expect(result.n_placed >= 4);
+
+    // Verify bond lengths for all placed H
+    var n_h: u32 = 0;
+    for (mdl.atoms.items) |atom| {
+        if (!atom.is_added or !atom.is_hydrogen) continue;
+        n_h += 1;
+        var min_dist: f32 = std.math.inf(f32);
+        for (mdl.atoms.items) |other| {
+            if (other.is_hydrogen) continue;
+            if (other.residue_idx != atom.residue_idx) continue;
+            const d = atom.pos.distance(other.pos);
+            if (d < min_dist) min_dist = d;
+        }
+        try testing.expect(min_dist > 0.8 and min_dist < 1.2);
+    }
+    try testing.expect(n_h >= 4);
+}
