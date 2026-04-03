@@ -388,21 +388,39 @@ fn writePaddedFloat2(writer: anytype, val: f32, min_width: usize) !void {
 }
 
 /// Write a CIF loop body (tags + data rows) without surrounding '#' separators.
+/// Preserves PDBx-styled column alignment by computing and applying column widths.
 fn writeLoopBody(writer: anytype, loop: *const Loop) !void {
     try writer.writeAll("loop_\n");
     for (loop.tags.items) |tag| {
         try writer.print("{s}\n", .{tag});
     }
     const w = loop.width();
-    if (w > 0) {
-        for (0..loop.length()) |row| {
-            for (0..w) |col| {
-                if (col > 0) try writer.writeByte(' ');
-                const val = loop.val(row, col) orelse ".";
+    if (w == 0) return;
+    const n_rows = loop.length();
+    if (n_rows == 0) return;
+
+    // Compute column widths for alignment.
+    var col_widths_buf: [64]usize = undefined;
+    const col_widths = col_widths_buf[0..@min(w, 64)];
+    @memset(col_widths, 0);
+    for (0..n_rows) |row| {
+        for (0..col_widths.len) |col| {
+            const val = loop.val(row, col) orelse ".";
+            if (val.len > col_widths[col]) col_widths[col] = val.len;
+        }
+    }
+
+    for (0..n_rows) |row| {
+        for (0..w) |col| {
+            if (col > 0) try writer.writeByte(' ');
+            const val = loop.val(row, col) orelse ".";
+            if (col < col_widths.len) {
+                try writePaddedCifValue(writer, val, col_widths[col]);
+            } else {
                 try writeCifValueInLoop(writer, val);
             }
-            try writer.writeByte('\n');
         }
+        try writer.writeByte('\n');
     }
 }
 
