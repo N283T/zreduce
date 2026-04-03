@@ -22,6 +22,7 @@ pub const ProcessConfig = struct {
     dump_movers_path: ?[]const u8 = null,
     strip_h: bool = false,
     format: InputFormat = .mmcif,
+    model_filter: ModelFilter = .all,
 };
 
 pub const ProcessResult = struct {
@@ -44,6 +45,12 @@ pub const ProcessResult = struct {
 pub const InputFormat = enum {
     mmcif,
     pdb,
+};
+
+pub const ModelFilter = union(enum) {
+    all,
+    first,
+    specific: u32,
 };
 
 /// Detect input format from file extension.
