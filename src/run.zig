@@ -359,7 +359,6 @@ fn processFileMmcif(allocator: Allocator, config: ProcessConfig, source: []const
     return result;
 }
 
-/// PDB pipeline: single-model processing (multi-model PDB support is a future task).
 /// PDB pipeline: supports multi-model processing.
 fn processFilePdb(allocator: Allocator, config: ProcessConfig, source: []const u8) !ProcessResult {
     var pdb_result = try zreduce.pdb.parseAll(allocator, source, config.model_filter);
@@ -462,6 +461,16 @@ fn processFilePdb(allocator: Allocator, config: ProcessConfig, source: []const u
                 for (movers) |*m| {
                     if (m.is_fixed) m.applyOrientation(mdl.atoms.items, m.best_orientation);
                 }
+                if (!config.quiet) ov.warnUnmatched(mdl, movers);
+            }
+
+            if (config.dump_movers_path) |dump_path| {
+                var dump_buf: [4096]u8 = undefined;
+                const dump_file = try std.fs.cwd().createFile(dump_path, .{});
+                defer dump_file.close();
+                var dump_fw = dump_file.writer(&dump_buf);
+                try zreduce.optimize.fix.dumpMovers(&dump_fw.interface, mdl, movers);
+                try dump_fw.interface.flush();
             }
 
             if (!config.no_opt and movers.len > 0) {

@@ -314,7 +314,7 @@ pub fn writeMultiModel(
         switch (rec) {
             .raw_line => |line| {
                 // Skip END record in header — we'll write our own at the end
-                if (line.len >= 3 and std.mem.eql(u8, line[0..3], "END")) continue;
+                if (line.len >= 3 and std.mem.eql(u8, std.mem.trimRight(u8, line, " "), "END")) continue;
                 try writer.print("{s}\n", .{line});
             },
             .atom_site => {},
@@ -333,6 +333,8 @@ pub fn writeMultiModel(
             try writer.writeAll("ENDMDL\n");
         }
     }
+
+    try writer.writeAll("END\n");
 }
 
 /// `records` must match the original parse order: `atom_site` tags mark where
