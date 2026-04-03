@@ -276,9 +276,10 @@ pub fn processFile(allocator: Allocator, config: ProcessConfig) !ProcessResult {
     if (config.output_path) |out_path| {
         if (std.mem.endsWith(u8, out_path, ".gz")) {
             var gw = try zreduce.gzip.GzipWriter.init(allocator, out_path);
-            defer gw.close() catch {};
+            errdefer gw.close() catch {};
             const aw = gw.anyWriter();
             try zreduce.writer.mmcif_writer.writeWithDocumentWithPolicy(&aw, &mdl, &doc, config.bond_policy);
+            try gw.close();
         } else {
             const file = try std.fs.cwd().createFile(out_path, .{});
             defer file.close();

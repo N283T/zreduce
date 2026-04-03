@@ -61,7 +61,7 @@ pub const GzipWriteError = error{GzipOpenFailed, GzipWriteFailed, GzipCloseFaile
 /// A writer that compresses output to a gzip file via C zlib.
 /// Implements the write function signature expected by std.io.AnyWriter.
 pub const GzipWriter = struct {
-    gz: c.gzFile,
+    gz: ?c.gzFile,
 
     pub fn init(allocator: std.mem.Allocator, path: []const u8) GzipWriteError!GzipWriter {
         const c_path = allocator.dupeZ(u8, path) catch return error.OutOfMemory;
@@ -70,16 +70,21 @@ pub const GzipWriter = struct {
         return .{ .gz = gz };
     }
 
+    /// Close the gzip handle, flushing the final block and CRC trailer.
+    /// Idempotent: calling close on an already-closed writer is a no-op.
     pub fn close(self: *GzipWriter) GzipWriteError!void {
-        const result = c.gzclose(self.gz);
+        const gz = self.gz orelse return;
+        self.gz = null;
+        const result = c.gzclose(gz);
         if (result != c.Z_OK) return error.GzipCloseFailed;
     }
 
     /// Write function compatible with std.io.AnyWriter.
     pub fn write(context: *const anyopaque, bytes: []const u8) anyerror!usize {
         const self: *const GzipWriter = @ptrCast(@alignCast(context));
+        const gz = self.gz orelse return error.GzipWriteFailed;
         if (bytes.len == 0) return 0;
-        const n = c.gzwrite(self.gz, bytes.ptr, @intCast(bytes.len));
+        const n = c.gzwrite(gz, bytes.ptr, @intCast(bytes.len));
         if (n <= 0) return error.GzipWriteFailed;
         return @intCast(n);
     }
