@@ -525,6 +525,10 @@ pub fn parseAll(allocator: Allocator, source: []const u8, filter: ModelFilter) P
             };
 
             if (want) {
+                // Free previous state/records before overwriting
+                // (handles consecutive MODEL without ENDMDL)
+                state.deinit();
+                cur_records.deinit(allocator);
                 in_model_block = true;
                 cur_model_num = model_num;
                 state = ParseState.init(allocator);

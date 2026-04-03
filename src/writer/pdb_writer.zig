@@ -326,8 +326,7 @@ pub fn writeMultiModel(
         if (multi) {
             try writer.print("MODEL     {d:>4}\n", .{entry.model_num});
         }
-        // Use writeModel for each entry's atoms.
-        // writeModel writes atoms + TER + END; we suppress END for multi-model.
+        // Use writeModel for each entry's per-model records (atoms + TER).
         try writeModel(writer, &entry.model, entry.records.items, output_isotope);
         if (multi) {
             try writer.writeAll("ENDMDL\n");

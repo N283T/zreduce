@@ -143,6 +143,17 @@ fn processFileMmcif(allocator: Allocator, config: ProcessConfig, source: []const
     // 2a. Strip existing hydrogens from the document BEFORE parsing models.
     // This ensures cif_row_start/end in ModelEntry are consistent with the
     // (possibly stripped) document loop used by the writer and atom lookup.
+    if (doc.blocks.items.len == 0) {
+        if (!config.quiet) std.debug.print("  No CIF data blocks found\n", .{});
+        return ProcessResult{
+            .n_placed = 0,
+            .n_residues = 0,
+            .n_skipped_existing = 0,
+            .n_skipped_inter_residue = 0,
+            .n_skipped_missing_ref = 0,
+        };
+    }
+
     if (config.strip_h) {
         stripDocumentHydrogens(&doc.blocks.items[0]);
     }
