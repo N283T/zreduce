@@ -1,5 +1,6 @@
-//! Gzip decompression using C zlib.
+//! Gzip I/O using C zlib.
 //!
+//! Provides both decompression (readGzip) and compression (GzipWriter) via zlib.
 //! Workaround for Zig 0.15 flate bug (unreachable in Writer.rebase).
 //! See: https://github.com/ziglang/zig/issues/25035
 //! TODO: revert to native flate when Zig fixes the bug (test with 2oxd.cif.gz)
@@ -52,6 +53,45 @@ pub fn readGzipLimited(allocator: std.mem.Allocator, path: []const u8, max_size:
     }
     return buf.toOwnedSlice(allocator);
 }
+
+// -- Gzip Writer --
+
+pub const GzipWriteError = error{GzipOpenFailed, GzipWriteFailed, GzipCloseFailed, OutOfMemory};
+
+/// A writer that compresses output to a gzip file via C zlib.
+/// Implements the write function signature expected by std.io.AnyWriter.
+pub const GzipWriter = struct {
+    gz: c.gzFile,
+
+    pub fn init(allocator: std.mem.Allocator, path: []const u8) GzipWriteError!GzipWriter {
+        const c_path = allocator.dupeZ(u8, path) catch return error.OutOfMemory;
+        defer allocator.free(c_path);
+        const gz = c.gzopen(c_path.ptr, "wb") orelse return error.GzipOpenFailed;
+        return .{ .gz = gz };
+    }
+
+    pub fn close(self: *GzipWriter) GzipWriteError!void {
+        const result = c.gzclose(self.gz);
+        if (result != c.Z_OK) return error.GzipCloseFailed;
+    }
+
+    /// Write function compatible with std.io.AnyWriter.
+    pub fn write(context: *const anyopaque, bytes: []const u8) anyerror!usize {
+        const self: *const GzipWriter = @ptrCast(@alignCast(context));
+        if (bytes.len == 0) return 0;
+        const n = c.gzwrite(self.gz, bytes.ptr, @intCast(bytes.len));
+        if (n <= 0) return error.GzipWriteFailed;
+        return @intCast(n);
+    }
+
+    /// Return an AnyWriter interface for this gzip writer.
+    pub fn anyWriter(self: *const GzipWriter) std.io.AnyWriter {
+        return .{
+            .context = @ptrCast(self),
+            .writeFn = &write,
+        };
+    }
+};
 
 // -- Tests --
 
@@ -138,4 +178,34 @@ test "readGzip returns empty slice for empty file" {
     const content = try readGzip(allocator, tmp_path);
     defer allocator.free(content);
     try std.testing.expectEqual(@as(usize, 0), content.len);
+}
+
+test "GzipWriter round-trip write and read" {
+    const allocator = std.testing.allocator;
+    const test_data = "Hello, gzip writer!\nLine two.\n";
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    const tmp_path = try tmp_dir.dir.realpathAlloc(allocator, ".");
+    defer allocator.free(tmp_path);
+    const gz_path = try std.fmt.allocPrint(allocator, "{s}/roundtrip.gz", .{tmp_path});
+    defer allocator.free(gz_path);
+
+    // Write
+    var gw = try GzipWriter.init(allocator, gz_path);
+    const aw = gw.anyWriter();
+    try aw.writeAll(test_data);
+    try gw.close();
+
+    // Read back
+    const content = try readGzip(allocator, gz_path);
+    defer allocator.free(content);
+    try std.testing.expectEqualStrings(test_data, content);
+}
+
+test "GzipWriter returns error for invalid path" {
+    const allocator = std.testing.allocator;
+    const result = GzipWriter.init(allocator, "/nonexistent/dir/file.gz");
+    try std.testing.expectError(error.GzipOpenFailed, result);
 }
