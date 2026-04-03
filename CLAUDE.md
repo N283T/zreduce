@@ -93,5 +93,5 @@ examples/
 ## Open areas
 
 - CCD dihedral estimation uses fixed heuristics (not computed from ideal coords)
-- Multi-model JSON log omits per-model mover details (movers freed per model)
+
 - State-dependent chemistry updates for flip movers are per-orientation flags only
