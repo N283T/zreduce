@@ -183,10 +183,11 @@ test "real-file: 1rqf — chain gaps, 4-chain CK2 beta" {
     var result = try runPipeline(testing.allocator, "examples/data/1rqf.cif.gz");
     defer result.deinit();
 
-    // 1rqf: ~1418 residues, ~10467 H placed (measured)
-    try testing.expect(result.n_placed > 5000);
-    try testing.expect(result.n_placed < 20000);
-    try testing.expect(result.n_residues > 500);
+    // 1rqf: ~1418 residues, ~10467 H placed (measured); bounds ±10%
+    try testing.expect(result.n_placed > 9420);
+    try testing.expect(result.n_placed < 11514);
+    try testing.expect(result.n_residues > 1276);
+    try testing.expect(result.n_residues < 1560);
     try testing.expect(result.n_movers > 0);
 
     // Mid-chain gaps in B/C
@@ -194,8 +195,8 @@ test "real-file: 1rqf — chain gaps, 4-chain CK2 beta" {
     try testing.expect(n_breaks > 0);
 
     const final_h = countFinalH(&result.model);
-    try testing.expect(final_h > 5000);
-    try testing.expect(final_h < 20000);
+    try testing.expect(final_h > 9420);
+    try testing.expect(final_h < 11514);
 
     try verifyBondLengths(&result.model);
     try verifyOutputRoundTrip(testing.allocator, &result.model);
@@ -205,18 +206,19 @@ test "real-file: 3rk2 — chain gaps, SNARE complex" {
     var result = try runPipeline(testing.allocator, "examples/data/3rk2.cif.gz");
     defer result.deinit();
 
-    // 3rk2: ~505 residues, ~3734 H placed (measured)
-    try testing.expect(result.n_placed > 1500);
-    try testing.expect(result.n_placed < 8000);
-    try testing.expect(result.n_residues > 200);
+    // 3rk2: ~505 residues, ~3734 H placed (measured); bounds ±10%
+    try testing.expect(result.n_placed > 3361);
+    try testing.expect(result.n_placed < 4107);
+    try testing.expect(result.n_residues > 455);
+    try testing.expect(result.n_residues < 556);
     try testing.expect(result.n_movers > 0);
 
     const n_breaks = countChainBreaks(&result.model);
     try testing.expect(n_breaks > 0);
 
     const final_h = countFinalH(&result.model);
-    try testing.expect(final_h > 1500);
-    try testing.expect(final_h < 8000);
+    try testing.expect(final_h > 3361);
+    try testing.expect(final_h < 4107);
 
     try verifyBondLengths(&result.model);
     try verifyOutputRoundTrip(testing.allocator, &result.model);
@@ -230,15 +232,16 @@ test "real-file: 6fys — insertion codes, nanobody" {
     var result = try runPipeline(testing.allocator, "examples/data/6fys.cif.gz");
     defer result.deinit();
 
-    // 6fys: ~1218 residues (with HOH), ~7320 H placed (measured)
-    try testing.expect(result.n_placed > 3000);
-    try testing.expect(result.n_placed < 15000);
-    try testing.expect(result.n_residues > 100);
+    // 6fys: ~1218 residues (with HOH), ~7320 H placed (measured); bounds ±10%
+    try testing.expect(result.n_placed > 6588);
+    try testing.expect(result.n_placed < 8052);
+    try testing.expect(result.n_residues > 1096);
+    try testing.expect(result.n_residues < 1340);
     try testing.expect(result.n_movers > 0);
 
     const final_h = countFinalH(&result.model);
-    try testing.expect(final_h > 3000);
-    try testing.expect(final_h < 15000);
+    try testing.expect(final_h > 6588);
+    try testing.expect(final_h < 8052);
 
     try verifyBondLengths(&result.model);
     try verifyOutputRoundTrip(testing.allocator, &result.model);
@@ -248,17 +251,18 @@ test "real-file: 2cf8 — insertion codes, thrombin 3-chain" {
     var result = try runPipeline(testing.allocator, "examples/data/2cf8.cif.gz");
     defer result.deinit();
 
-    // 2cf8: ~684 residues, ~151 H placed (many HOH skipped without CCD)
-    try testing.expect(result.n_placed > 50);
-    try testing.expect(result.n_placed < 1000);
-    try testing.expect(result.n_residues > 100);
+    // 2cf8: ~684 residues, ~151 H placed (many HOH skipped without CCD); bounds ±30%
+    try testing.expect(result.n_placed > 106);
+    try testing.expect(result.n_placed < 196);
+    try testing.expect(result.n_residues > 477);
+    try testing.expect(result.n_residues < 889);
 
     // Multi-chain: should have at least 3 chains
     try testing.expect(result.model.chains.items.len >= 3);
 
     const final_h = countFinalH(&result.model);
-    try testing.expect(final_h > 50);
-    try testing.expect(final_h < 1000);
+    try testing.expect(final_h > 106);
+    try testing.expect(final_h < 196);
 
     try verifyBondLengths(&result.model);
     try verifyOutputRoundTrip(testing.allocator, &result.model);
@@ -272,10 +276,11 @@ test "real-file: 2hnt — gaps + insertion codes, gamma-thrombin" {
     var result = try runPipeline(testing.allocator, "examples/data/2hnt.cif.gz");
     defer result.deinit();
 
-    // 2hnt: ~448 residues, ~2100 H placed (measured)
-    try testing.expect(result.n_placed > 1000);
-    try testing.expect(result.n_placed < 5000);
-    try testing.expect(result.n_residues > 200);
+    // 2hnt: ~448 residues, ~2100 H placed (measured); bounds ±10%
+    try testing.expect(result.n_placed > 1890);
+    try testing.expect(result.n_placed < 2310);
+    try testing.expect(result.n_residues > 403);
+    try testing.expect(result.n_residues < 493);
     try testing.expect(result.n_movers > 0);
 
     // Should have chain breaks
@@ -286,8 +291,8 @@ test "real-file: 2hnt — gaps + insertion codes, gamma-thrombin" {
     try testing.expect(result.model.chains.items.len >= 2);
 
     const final_h = countFinalH(&result.model);
-    try testing.expect(final_h > 1000);
-    try testing.expect(final_h < 5000);
+    try testing.expect(final_h > 1890);
+    try testing.expect(final_h < 2310);
 
     try verifyBondLengths(&result.model);
     try verifyOutputRoundTrip(testing.allocator, &result.model);

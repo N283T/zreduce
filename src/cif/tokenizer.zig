@@ -291,3 +291,55 @@ test "unterminated text field returns invalid" {
     const t0 = tok.next();
     try std.testing.expectEqual(TokenType.invalid, t0.type);
 }
+
+// ── Parser robustness / edge case tests ──────────────────────────────────────
+
+test "empty input yields eof immediately" {
+    const source = "";
+    var tok = try Tokenizer.init(source);
+    const t = tok.next();
+    try std.testing.expectEqual(TokenType.eof, t.type);
+}
+
+test "whitespace-only input yields eof" {
+    const source = "   \t\n   \n\t  ";
+    var tok = try Tokenizer.init(source);
+    const t = tok.next();
+    try std.testing.expectEqual(TokenType.eof, t.type);
+}
+
+test "comment-only input yields eof" {
+    const source = "# this is a comment\n# another comment\n";
+    var tok = try Tokenizer.init(source);
+    const t = tok.next();
+    try std.testing.expectEqual(TokenType.eof, t.type);
+}
+
+test "input with no data_ block yields a plain value token" {
+    // A bare word that is not data_/loop_/save_ becomes a value token.
+    const source = "justAValue\n";
+    var tok = try Tokenizer.init(source);
+    const t = tok.next();
+    try std.testing.expectEqual(TokenType.value, t.type);
+    try std.testing.expectEqualStrings("justAValue", t.text(source));
+}
+
+test "single tag with no value yields tag then eof" {
+    const source = "_orphan_tag\n";
+    var tok = try Tokenizer.init(source);
+    const t0 = tok.next();
+    try std.testing.expectEqual(TokenType.tag, t0.type);
+    try std.testing.expectEqualStrings("_orphan_tag", t0.text(source));
+    const t1 = tok.next();
+    try std.testing.expectEqual(TokenType.eof, t1.type);
+}
+
+test "multiple consecutive eof calls all return eof" {
+    const source = "data_X\n";
+    var tok = try Tokenizer.init(source);
+    _ = tok.next(); // data_X
+    const t1 = tok.next();
+    try std.testing.expectEqual(TokenType.eof, t1.type);
+    const t2 = tok.next();
+    try std.testing.expectEqual(TokenType.eof, t2.type);
+}

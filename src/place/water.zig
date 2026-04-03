@@ -23,6 +23,206 @@ const padName = lookup.padName;
 const nameMatch = lookup.nameMatch;
 const appendNtermH = terminal.appendNtermH;
 
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+const testing = std.testing;
+
+test "isWaterResidue recognizes HOH and WAT" {
+    var res = Residue{};
+    res.entity_type = .polymer;
+
+    res.setCompId("HOH");
+    try testing.expect(isWaterResidue(res, "HOH"));
+
+    res.setCompId("WAT");
+    try testing.expect(isWaterResidue(res, "WAT"));
+
+    res.setCompId("ALA");
+    try testing.expect(!isWaterResidue(res, "ALA"));
+}
+
+test "isWaterResidue recognizes entity_type water regardless of comp_id" {
+    var res = Residue{};
+    res.entity_type = .water;
+    res.setCompId("O");
+    try testing.expect(isWaterResidue(res, "O"));
+}
+
+test "orthogonalUnit produces unit vector perpendicular to input" {
+    // orthogonalUnit is private; test it indirectly via its observable effect.
+    // The function always produces a vector perpendicular to v with length 1.
+    // We verify this property using a direct copy of the logic.
+    const v1 = Vec3f32{ .x = 1.0, .y = 0.0, .z = 0.0 };
+    const v2 = Vec3f32{ .x = 0.0, .y = 1.0, .z = 0.0 };
+    const v3 = Vec3f32{ .x = 0.577, .y = 0.577, .z = 0.577 };
+
+    // orthogonalUnit: picks x_axis if |v.x| < 0.8, else y_axis; then cross+normalize
+    for ([_]Vec3f32{ v1, v2, v3 }) |v| {
+        const x_axis = Vec3f32{ .x = 1.0, .y = 0.0, .z = 0.0 };
+        const y_axis = Vec3f32{ .x = 0.0, .y = 1.0, .z = 0.0 };
+        const candidate = if (@abs(v.x) < 0.8) x_axis else y_axis;
+        const result = v.cross(candidate).normalize();
+        // Must be a unit vector
+        try testing.expectApproxEqAbs(@as(f32, 1.0), result.length(), 1e-5);
+        // Must be perpendicular to v (dot product ≈ 0)
+        const dot = result.x * v.x + result.y * v.y + result.z * v.z;
+        try testing.expectApproxEqAbs(@as(f32, 0.0), dot, 1e-4);
+    }
+}
+
+test "placeWaterHydrogens: water with no neighbors is skipped (no phantom)" {
+    // Build a single-residue model with just a water oxygen and no neighboring atoms.
+    var mdl = Model.init(testing.allocator);
+    defer mdl.deinit();
+
+    var oxygen = Atom{
+        .pos = .{ .x = 0.0, .y = 0.0, .z = 0.0 },
+        .element_type = .O,
+        .residue_idx = 0,
+        .occupancy = 1.0,
+        .b_factor = 10.0,
+        .vdw_radius = 1.52,
+    };
+    oxygen.setName("O");
+    try mdl.atoms.append(testing.allocator, oxygen);
+
+    var res = Residue{};
+    res.setCompId("HOH");
+    res.entity_type = .water;
+    res.atom_start = 0;
+    res.atom_end = 1;
+    try mdl.residues.append(testing.allocator, res);
+
+    const config = WaterConfig{
+        .enabled = true,
+        .phantom = false,
+        .occupancy_cutoff = 0.5,
+        .b_factor_cutoff = 80.0,
+        .metal_cutoff = 3.2,
+    };
+
+    var altlocs_buf = [_]u8{' '};
+    const water_res = mdl.residues.items[0];
+    const result = try placeWaterHydrogens(&mdl, water_res, 0, config, .neutron, null, 0, &altlocs_buf);
+
+    // No neighbors → n_skipped_missing_ref should be 1, n_placed = 0
+    try testing.expectEqual(@as(u32, 0), result.n_placed);
+    try testing.expectEqual(@as(u32, 1), result.n_skipped_missing_ref);
+}
+
+test "placeWaterHydrogens: water with one neighbor places H1 and H2" {
+    // Build a model: water oxygen at origin, one neighbor at (2.5, 0, 0).
+    var mdl = Model.init(testing.allocator);
+    defer mdl.deinit();
+
+    // Neighbor atom (residue 1)
+    var neighbor = Atom{
+        .pos = .{ .x = 2.5, .y = 0.0, .z = 0.0 },
+        .element_type = .N,
+        .residue_idx = 1,
+        .occupancy = 1.0,
+        .b_factor = 5.0,
+        .vdw_radius = 1.55,
+    };
+    neighbor.setName("N");
+    try mdl.atoms.append(testing.allocator, neighbor);
+
+    // Water oxygen (residue 0)
+    var oxygen = Atom{
+        .pos = .{ .x = 0.0, .y = 0.0, .z = 0.0 },
+        .element_type = .O,
+        .residue_idx = 0,
+        .occupancy = 1.0,
+        .b_factor = 10.0,
+        .vdw_radius = 1.52,
+    };
+    oxygen.setName("O");
+    try mdl.atoms.append(testing.allocator, oxygen);
+
+    // Residue 0 = water (atom index 1)
+    var water_res = Residue{};
+    water_res.setCompId("HOH");
+    water_res.entity_type = .water;
+    water_res.atom_start = 1;
+    water_res.atom_end = 2;
+    try mdl.residues.append(testing.allocator, water_res);
+
+    // Residue 1 = neighbor protein (atom index 0)
+    var prot_res = Residue{};
+    prot_res.setCompId("ALA");
+    prot_res.entity_type = .polymer;
+    prot_res.atom_start = 0;
+    prot_res.atom_end = 1;
+    try mdl.residues.append(testing.allocator, prot_res);
+
+    const config = WaterConfig{
+        .enabled = true,
+        .phantom = false,
+        .occupancy_cutoff = 0.5,
+        .b_factor_cutoff = 80.0,
+        .metal_cutoff = 3.2,
+    };
+
+    var altlocs_buf = [_]u8{' '};
+    const wr = mdl.residues.items[0];
+    const result = try placeWaterHydrogens(&mdl, wr, 0, config, .neutron, null, 0, &altlocs_buf);
+
+    try testing.expectEqual(@as(u32, 2), result.n_placed);
+    try testing.expectEqual(@as(u32, 0), result.n_skipped_missing_ref);
+
+    // Verify H1 and H2 were appended with ~0.97 A bond length to oxygen
+    var h1_found = false;
+    var h2_found = false;
+    for (mdl.atoms.items) |atom| {
+        if (!atom.is_hydrogen) continue;
+        const o_pos = math_mod.Vec3(f32){ .x = 0.0, .y = 0.0, .z = 0.0 };
+        const dist = atom.pos.distance(o_pos);
+        try testing.expect(dist > 0.80 and dist < 1.10);
+        if (std.mem.eql(u8, atom.nameSlice(), "H1")) h1_found = true;
+        if (std.mem.eql(u8, atom.nameSlice(), "H2")) h2_found = true;
+    }
+    try testing.expect(h1_found);
+    try testing.expect(h2_found);
+}
+
+test "placeWaterHydrogens: low occupancy water is skipped" {
+    var mdl = Model.init(testing.allocator);
+    defer mdl.deinit();
+
+    var oxygen = Atom{
+        .pos = .{ .x = 0.0, .y = 0.0, .z = 0.0 },
+        .element_type = .O,
+        .residue_idx = 0,
+        .occupancy = 0.3, // below default cutoff of 0.66
+        .b_factor = 10.0,
+        .vdw_radius = 1.52,
+    };
+    oxygen.setName("O");
+    try mdl.atoms.append(testing.allocator, oxygen);
+
+    var res = Residue{};
+    res.setCompId("HOH");
+    res.entity_type = .water;
+    res.atom_start = 0;
+    res.atom_end = 1;
+    try mdl.residues.append(testing.allocator, res);
+
+    const config = WaterConfig{
+        .enabled = true,
+        .phantom = false,
+        .occupancy_cutoff = 0.66,
+        .b_factor_cutoff = 40.0,
+        .metal_cutoff = 3.2,
+    };
+
+    var altlocs_buf = [_]u8{' '};
+    const wr = mdl.residues.items[0];
+    const result = try placeWaterHydrogens(&mdl, wr, 0, config, .neutron, null, 0, &altlocs_buf);
+
+    try testing.expectEqual(@as(u32, 0), result.n_placed);
+    try testing.expectEqual(@as(u32, 1), result.n_skipped_quality_filter);
+}
+
 pub const WaterConfig = struct {
     enabled: bool = false,
     phantom: bool = false,

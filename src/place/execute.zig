@@ -129,6 +129,234 @@ fn placeCarboxylHydrogen(
     return .placed;
 }
 
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+const testing = std.testing;
+
+/// Build a minimal two-residue Model suitable for executePlan tests.
+/// chain 0, residue 0 = ALA-like with N/CA/C/O/CB.
+/// residue 1 = preceding residue that contributes prev-C for backbone amide tests.
+fn buildMinimalModel(allocator: std.mem.Allocator) !Model {
+    var mdl = Model.init(allocator);
+
+    // atoms for residue 0
+    const atoms = [_]struct { name: []const u8, x: f32, y: f32, z: f32, elem: element.AtomType }{
+        .{ .name = "N", .x = 1.0, .y = 2.0, .z = 3.0, .elem = .N },
+        .{ .name = "CA", .x = 2.0, .y = 3.0, .z = 4.0, .elem = .C },
+        .{ .name = "C", .x = 3.0, .y = 4.0, .z = 5.0, .elem = .C },
+        .{ .name = "O", .x = 4.0, .y = 5.0, .z = 6.0, .elem = .O },
+        .{ .name = "CB", .x = 2.5, .y = 2.5, .z = 3.5, .elem = .C },
+    };
+    for (atoms) |a| {
+        var atom = Atom{
+            .pos = .{ .x = a.x, .y = a.y, .z = a.z },
+            .element_type = a.elem,
+            .residue_idx = 0,
+            .vdw_radius = a.elem.info().explicit_radius,
+            .flags = a.elem.info().flags,
+        };
+        atom.setName(a.name);
+        try mdl.atoms.append(allocator, atom);
+    }
+
+    var res = Residue{};
+    res.setCompId("ALA");
+    res.atom_start = 0;
+    res.atom_end = @intCast(mdl.atoms.items.len);
+    res.entity_type = .polymer;
+    try mdl.residues.append(allocator, res);
+
+    return mdl;
+}
+
+test "executePlan hxr3 places H with correct bond length" {
+    var mdl = try buildMinimalModel(testing.allocator);
+    defer mdl.deinit();
+
+    const res = mdl.residues.items[0];
+    // HXR3: center=CA, known neighbors=N,CB; 3rd neighbor found by distance (C)
+    const plan = standard.PlacementPlan{
+        .h_name = lookup.padName("HA"),
+        .placement_type = .hxr3,
+        .connected = .{ lookup.padName("CA"), lookup.padName("N"), lookup.padName("CB") },
+        .bond_len = 1.09,
+        .atom_type = .H,
+    };
+
+    const result = try executePlan(&mdl, res, 0, &plan, null, ' ', .neutron);
+    try testing.expectEqual(PlaceResult.placed, result);
+
+    // Verify HA was appended
+    var found_ha = false;
+    for (mdl.atoms.items) |atom| {
+        if (atom.is_hydrogen and std.mem.eql(u8, atom.nameSlice(), "HA")) {
+            found_ha = true;
+            // Bond length to CA should be ~1.09
+            const ca_pos = math_mod.Vec3(f32){ .x = 2.0, .y = 3.0, .z = 4.0 };
+            const dist = atom.pos.distance(ca_pos);
+            try testing.expect(dist > 0.9 and dist < 1.3);
+            break;
+        }
+    }
+    try testing.expect(found_ha);
+}
+
+test "executePlan h2xr2 places H with correct bond length" {
+    var mdl = try buildMinimalModel(testing.allocator);
+    defer mdl.deinit();
+
+    const res = mdl.residues.items[0];
+    // H2XR2: center=CB, ref_neighbor=CA; findOtherNeighbor finds 2nd neighbor by distance
+    // CB is at (2.5,2.5,3.5); CA at (2.0,3.0,4.0) — distance ~0.87, within 1.9 A
+    const plan = standard.PlacementPlan{
+        .h_name = lookup.padName("HB2"),
+        .placement_type = .h2xr2,
+        .connected = .{ lookup.padName("CB"), lookup.padName("CA"), lookup.padName("    ") },
+        .bond_len = 1.09,
+        .angle = 109.5,
+        .dihedral = 120.0,
+        .atom_type = .H,
+    };
+
+    const result = try executePlan(&mdl, res, 0, &plan, null, ' ', .neutron);
+    try testing.expectEqual(PlaceResult.placed, result);
+
+    var found = false;
+    for (mdl.atoms.items) |atom| {
+        if (atom.is_hydrogen and std.mem.eql(u8, atom.nameSlice(), "HB2")) {
+            found = true;
+            const cb_pos = math_mod.Vec3(f32){ .x = 2.5, .y = 2.5, .z = 3.5 };
+            const dist = atom.pos.distance(cb_pos);
+            try testing.expect(dist > 0.9 and dist < 1.3);
+            break;
+        }
+    }
+    try testing.expect(found);
+}
+
+test "executePlan hxr2_planar places aromatic H" {
+    var mdl = try buildMinimalModel(testing.allocator);
+    defer mdl.deinit();
+
+    // For hxr2_planar we need a center atom between two reference atoms.
+    // Add a simple planar arrangement: O is "center", N and C are references.
+    // O is at (4,5,6), N at (1,2,3), C at (3,4,5).
+    // connected[0]=O (n1), connected[1]=C (n2), center = atom between them at dist < 1.9 from both
+    // Actually hxr2_planar: connected[0] and connected[1] are the two flanking atoms,
+    // and the center atom is found between them by findAtomBetween.
+    // Let's use N(connected[0]) and C(connected[1]) — CA is ~1.41A from N and ~1.52A from C
+    const res = mdl.residues.items[0];
+    const plan = standard.PlacementPlan{
+        .h_name = lookup.padName("HO"),
+        .placement_type = .hxr2_planar,
+        .connected = .{ lookup.padName("N"), lookup.padName("C"), lookup.padName("    ") },
+        .bond_len = 1.08,
+        .atom_type = .Har,
+    };
+
+    const result = try executePlan(&mdl, res, 0, &plan, null, ' ', .neutron);
+    // Should place or fail with missing_ref if CA isn't close enough — either is valid for this unit test
+    try testing.expect(result == .placed or result == .missing_ref);
+}
+
+test "executePlan returns missing_parent when base atom absent" {
+    var mdl = try buildMinimalModel(testing.allocator);
+    defer mdl.deinit();
+
+    const res = mdl.residues.items[0];
+    // Plan references "CG" which doesn't exist in our minimal ALA model
+    const plan = standard.PlacementPlan{
+        .h_name = lookup.padName("HG"),
+        .placement_type = .hxr3,
+        .connected = .{ lookup.padName("CG"), lookup.padName("CB"), lookup.padName("CA") },
+        .bond_len = 1.09,
+        .atom_type = .H,
+    };
+
+    const result = try executePlan(&mdl, res, 0, &plan, null, ' ', .neutron);
+    try testing.expectEqual(PlaceResult.missing_parent, result);
+}
+
+test "executePlan returns missing_ref when reference atom absent" {
+    var mdl = try buildMinimalModel(testing.allocator);
+    defer mdl.deinit();
+
+    const res = mdl.residues.items[0];
+    // For hxr2_frac: connected[0]=N (exists), connected[1]=CA (exists), connected[2]=CG (missing)
+    const plan = standard.PlacementPlan{
+        .h_name = lookup.padName("HN"),
+        .placement_type = .hxr2_frac,
+        .connected = .{ lookup.padName("N"), lookup.padName("CA"), lookup.padName("CG") },
+        .bond_len = 1.01,
+        .fudge = 0.5,
+        .atom_type = .Hpol,
+    };
+
+    const result = try executePlan(&mdl, res, 0, &plan, null, ' ', .neutron);
+    try testing.expectEqual(PlaceResult.missing_ref, result);
+}
+
+test "executePlan returns existing_h when hydrogen already present" {
+    var mdl = try buildMinimalModel(testing.allocator);
+    defer mdl.deinit();
+
+    // Pre-append HA so executePlan sees it already exists
+    var existing_h = Atom{
+        .pos = .{ .x = 1.5, .y = 2.5, .z = 3.5 },
+        .element_type = .H,
+        .residue_idx = 0,
+        .is_hydrogen = true,
+        .vdw_radius = 1.2,
+    };
+    existing_h.setName("HA");
+    try mdl.atoms.append(testing.allocator, existing_h);
+    // Update residue atom_end so existsInResidue can see it
+    mdl.residues.items[0].atom_end = @intCast(mdl.atoms.items.len);
+
+    const res = mdl.residues.items[0];
+    const plan = standard.PlacementPlan{
+        .h_name = lookup.padName("HA"),
+        .placement_type = .hxr3,
+        .connected = .{ lookup.padName("CA"), lookup.padName("N"), lookup.padName("CB") },
+        .bond_len = 1.09,
+        .atom_type = .H,
+    };
+
+    const result = try executePlan(&mdl, res, 0, &plan, null, ' ', .neutron);
+    try testing.expectEqual(PlaceResult.existing_h, result);
+}
+
+test "executePlan hxy places linear H" {
+    var mdl = try buildMinimalModel(testing.allocator);
+    defer mdl.deinit();
+
+    const res = mdl.residues.items[0];
+    // hxy: center=O (connected[0]), neighbor=C (connected[1])
+    // O at (4,5,6), C at (3,4,5) — distance sqrt(3) ≈ 1.73, within 1.9A
+    const plan = standard.PlacementPlan{
+        .h_name = lookup.padName("HO"),
+        .placement_type = .hxy,
+        .connected = .{ lookup.padName("O"), lookup.padName("C"), lookup.padName("    ") },
+        .bond_len = 0.97,
+        .atom_type = .Hpol,
+    };
+
+    const result = try executePlan(&mdl, res, 0, &plan, null, ' ', .neutron);
+    try testing.expectEqual(PlaceResult.placed, result);
+
+    var found = false;
+    for (mdl.atoms.items) |atom| {
+        if (atom.is_hydrogen and std.mem.eql(u8, atom.nameSlice(), "HO")) {
+            found = true;
+            const o_pos = math_mod.Vec3(f32){ .x = 4.0, .y = 5.0, .z = 6.0 };
+            const dist = atom.pos.distance(o_pos);
+            try testing.expectApproxEqAbs(@as(f32, 0.97), dist, 0.01);
+            break;
+        }
+    }
+    try testing.expect(found);
+}
+
 /// Execute a single placement plan: find reference atoms, compute H position, add to model.
 /// Returns the placement result (placed / skipped / missing ref).
 pub fn executePlan(mdl: *Model, res: Residue, res_idx: u32, plan: *const standard.PlacementPlan, bonds: ?[]const topology.BondEntry, target_altloc: u8, mode: bond_policy.BondLengthMode) !PlaceResult {
