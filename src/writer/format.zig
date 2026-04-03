@@ -1,4 +1,4 @@
-//! CIF value formatting and fixed-point float output helpers.
+//! CIF value formatting, element symbol conversion, and fixed-point float output helpers.
 //!
 //! Extracted from mmcif_writer.zig to keep that module focused on
 //! atom-site and document-level output.
@@ -51,7 +51,7 @@ pub fn elementSymbol(atom_type: AtomType) []const u8 {
     };
 }
 
-/// Write an atom name, trimming trailing spaces.
+/// Write an atom name, trimming leading and trailing spaces.
 /// Atom names in CIF are typically unquoted even when they contain leading spaces.
 pub fn writeAtomName(writer: anytype, name: []const u8) !void {
     // Trim trailing spaces
