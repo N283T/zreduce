@@ -12,15 +12,7 @@ const MoverHint = standard.MoverHint;
 const c_h_arom: f32 = 1.08; // C-H aromatic (CCD mean: 1.0793)
 const n_h_ring: f32 = 1.02; // N-H ring (CCD: 1.016)
 
-// Atom name helper (same as standard.zig)
-fn n(comptime s: []const u8) [4]u8 {
-    var buf: [4]u8 = .{ ' ', ' ', ' ', ' ' };
-    for (s, 0..) |c, i| {
-        if (i >= 4) break;
-        buf[i] = c;
-    }
-    return buf;
-}
+const n = @import("lookup.zig").padName;
 
 const blank = n("    ");
 

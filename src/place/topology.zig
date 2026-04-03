@@ -18,14 +18,7 @@ pub const BondEntry = struct {
 // Helpers
 // ---------------------------------------------------------------------------
 
-fn n(comptime s: []const u8) [4]u8 {
-    var buf: [4]u8 = .{ ' ', ' ', ' ', ' ' };
-    for (s, 0..) |c, i| {
-        if (i >= 4) break;
-        buf[i] = c;
-    }
-    return buf;
-}
+const n = @import("lookup.zig").padName;
 
 fn b(comptime a: []const u8, comptime bname: []const u8) BondEntry {
     return .{ .a1 = n(a), .a2 = n(bname) };
