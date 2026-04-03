@@ -374,6 +374,11 @@ pub fn parse(allocator: Allocator, source: []const u8) PdbError!PdbParseResult {
         if (std.mem.startsWith(u8, rec_type, "MODEL ") or std.mem.eql(u8, std.mem.trim(u8, rec_type, " "), "MODEL")) {
             if (!model_done and !in_model_block) {
                 in_model_block = true;
+                // Parse model serial number from columns 10-14
+                if (line.len >= 14) {
+                    const num_str = std.mem.trim(u8, safeSlice(line, 10, 14), " ");
+                    state.mdl.model_num = std.fmt.parseInt(u32, num_str, 10) catch 1;
+                }
             } else {
                 // Skip subsequent models; still passthrough the line
                 try records.append(allocator, .{ .raw_line = line });

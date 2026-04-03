@@ -338,6 +338,11 @@ pub fn parseModel(allocator: Allocator, source: []const u8) MmcifError!Model {
     // Record the number of original atoms before any hydrogen placement.
     mdl.original_atom_count = @intCast(mdl.atoms.items.len);
 
+    // Set model number from first parsed model_num value (default 1)
+    if (first_model_num) |num_str| {
+        mdl.model_num = std.fmt.parseInt(u32, num_str, 10) catch 1;
+    }
+
     // Close final chain
     if (in_chain) {
         const res_end: u32 = @intCast(mdl.residues.items.len);
@@ -589,6 +594,16 @@ test "parseModel extracts only the first model from multi-model mmCIF" {
     // Verify coordinates are from model 1
     try testing.expectApproxEqAbs(@as(f32, 1.0), mdl.atoms.items[0].pos.x, 0.01);
     try testing.expectApproxEqAbs(@as(f32, 2.0), mdl.atoms.items[1].pos.x, 0.01);
+
+    // model_num should be parsed from the column
+    try testing.expectEqual(@as(u32, 1), mdl.model_num);
+}
+
+test "parseModel sets model_num to 1 when column is absent" {
+    const source = @embedFile("test_data/tiny.cif");
+    var mdl = try parseModel(testing.allocator, source);
+    defer mdl.deinit();
+    try testing.expectEqual(@as(u32, 1), mdl.model_num);
 }
 
 test "parseModel skips CIF-null model numbers and filters by first real model" {
