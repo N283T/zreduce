@@ -47,11 +47,7 @@ pub const InputFormat = enum {
     pdb,
 };
 
-pub const ModelFilter = union(enum) {
-    all,
-    first,
-    specific: u32,
-};
+pub const ModelFilter = zreduce.mmcif.ModelFilter;
 
 /// Detect input format from file extension.
 pub fn detectFormat(path: []const u8) InputFormat {

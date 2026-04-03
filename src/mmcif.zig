@@ -14,6 +14,25 @@ const Atom = model_mod.Atom;
 const Residue = model_mod.Residue;
 const Chain = model_mod.Chain;
 
+pub const ModelFilter = union(enum) {
+    all,
+    first,
+    specific: u32,
+};
+
+pub const ModelEntry = struct {
+    model_num: u32,
+    model: Model,
+    /// Row range in the _atom_site loop for this model's original atoms.
+    /// Used by the preserving writer and buildAtomLookupForRange.
+    cif_row_start: u32,
+    cif_row_end: u32,
+
+    pub fn deinit(self: *ModelEntry) void {
+        self.model.deinit();
+    }
+};
+
 pub const MmcifError = error{
     NoAtomSiteLoop,
     MissingCoordinateField,
@@ -147,8 +166,22 @@ fn applyEntityTypes(mdl: *Model, block: *const cif.Block) void {
     }
 }
 
-/// Parse an mmCIF source string and extract all _atom_site records into a Model.
+/// Parse an mmCIF source string and extract the first model's _atom_site records.
+/// Convenience wrapper around parseModels with filter=.first.
 pub fn parseModel(allocator: Allocator, source: []const u8) MmcifError!Model {
+    var entries = try parseModels(allocator, source, .first);
+    defer {
+        // Free all entries except index 0 (which we return)
+        for (entries.items[1..]) |*e| e.model.deinit();
+        entries.deinit(allocator);
+    }
+    if (entries.items.len == 0) return MmcifError.NoAtomSiteLoop;
+    return entries.items[0].model;
+}
+
+/// Parse an mmCIF source string and extract _atom_site records into Models.
+/// Returns one ModelEntry per model found (filtered by ModelFilter).
+pub fn parseModels(allocator: Allocator, source: []const u8, filter: ModelFilter) MmcifError!std.ArrayListUnmanaged(ModelEntry) {
     var doc = cif.readString(allocator, source) catch |err| switch (err) {
         error.OutOfMemory => return MmcifError.OutOfMemory,
         else => return MmcifError.CifParseError,
@@ -186,12 +219,18 @@ pub fn parseModel(allocator: Allocator, source: []const u8) MmcifError!Model {
         return MmcifError.MissingCoordinateField;
     }
 
+    var entries = std.ArrayListUnmanaged(ModelEntry){};
+    errdefer {
+        for (entries.items) |*e| e.model.deinit();
+        entries.deinit(allocator);
+    }
+
     var mdl = Model.init(allocator);
     errdefer mdl.deinit();
 
     const nrows = loop.length();
 
-    // State tracking for chain/residue boundaries
+    // State tracking for chain/residue boundaries (reset per model)
     var cur_label_asym_id: []const u8 = "";
     var cur_seq_id: []const u8 = "";
     var cur_comp_id: []const u8 = "";
@@ -201,21 +240,85 @@ pub fn parseModel(allocator: Allocator, source: []const u8) MmcifError!Model {
     var in_chain = false;
     var in_residue = false;
 
-    // Multi-model filter: only parse the first model
-    var first_model_num: ?[]const u8 = null;
+    // Multi-model tracking
+    var cur_model_str: []const u8 = "";
+    var cur_model_row_start: u32 = 0;
+    var model_started = false;
 
     for (0..nrows) |row| {
-        // Multi-model filter: only parse the first model.
-        // Models are contiguous per mmCIF convention; break on model change.
+        // Determine model number for this row
+        var row_model_str: []const u8 = "";
         if (cols.pdbx_PDB_model_num) |model_col| {
             const raw = loop.val(row, model_col);
-            const model_str = if (raw) |r| cif.asString(r) else "";
-            if (model_str.len == 0) continue; // missing or CIF-null ('?'/'.') model number
-            if (first_model_num) |first| {
-                if (!std.mem.eql(u8, model_str, first)) break;
+            row_model_str = if (raw) |r| cif.asString(r) else "";
+            if (row_model_str.len == 0) continue; // skip CIF-null model numbers
+        }
+
+        // Detect model boundary
+        const model_changed = model_started and cols.pdbx_PDB_model_num != null and
+            !std.mem.eql(u8, row_model_str, cur_model_str);
+
+        if (model_changed) {
+            // Finalize and push current model only if it has atoms
+            if (mdl.atoms.items.len > 0) {
+                finalizeModel(&mdl, in_residue, in_chain);
+
+                const model_num = std.fmt.parseInt(u32, cur_model_str, 10) catch 1;
+                mdl.model_num = model_num;
+
+                try entries.append(allocator, .{
+                    .model_num = model_num,
+                    .model = mdl,
+                    .cif_row_start = cur_model_row_start,
+                    .cif_row_end = @intCast(row),
+                });
+
+                mdl = Model.init(allocator);
             } else {
-                first_model_num = model_str;
+                // Discard empty model (skipped by filter)
+                mdl.deinit();
+                mdl = Model.init(allocator);
             }
+            in_residue = false;
+            in_chain = false;
+
+            // For .first filter, stop after the first model
+            if (filter == .first) break;
+            // For .specific filter, stop if we already found the target
+            switch (filter) {
+                .specific => {
+                    if (entries.items.len > 0) break;
+                },
+                else => {},
+            }
+
+            // Reset state for new model
+            cur_label_asym_id = "";
+            cur_seq_id = "";
+            cur_comp_id = "";
+            cur_ins_code = "";
+            cur_auth_seq = "";
+            cur_model_row_start = @intCast(row);
+        }
+
+        if (!model_started) {
+            model_started = true;
+            cur_model_row_start = @intCast(row);
+        }
+        cur_model_str = row_model_str;
+
+        // Apply filter: skip rows for non-matching specific model
+        switch (filter) {
+            .specific => |target| {
+                const row_num = std.fmt.parseInt(u32, row_model_str, 10) catch 0;
+                if (cols.pdbx_PDB_model_num != null and row_num != target) {
+                    // If we already collected atoms for the target, we can stop
+                    // (models are contiguous per mmCIF convention)
+                    if (mdl.atoms.items.len > 0) break;
+                    continue;
+                }
+            },
+            else => {},
         }
 
         const x_str = loop.val(row, cols.cartn_x.?) orelse return MmcifError.InvalidCoordinateValue;
@@ -328,48 +431,65 @@ pub fn parseModel(allocator: Allocator, source: []const u8) MmcifError!Model {
         try mdl.atoms.append(mdl.allocator, atom);
     }
 
-    // Close final residue
+    // Finalize the last model (if it has atoms)
+    if (mdl.atoms.items.len > 0) {
+        finalizeModel(&mdl, in_residue, in_chain);
+
+        const model_num = if (cur_model_str.len > 0)
+            std.fmt.parseInt(u32, cur_model_str, 10) catch 1
+        else
+            1;
+        mdl.model_num = model_num;
+
+        try entries.append(allocator, .{
+            .model_num = model_num,
+            .model = mdl,
+            .cif_row_start = cur_model_row_start,
+            .cif_row_end = @intCast(nrows),
+        });
+        // mdl ownership transferred to entries; prevent errdefer double-free
+        mdl = Model.init(allocator);
+    }
+    mdl.deinit(); // free the empty spare model
+
+    // Apply per-model post-processing
+    for (entries.items) |*entry| {
+        // Parse _pdbx_poly_seq_scheme for chain-break detection (optional)
+        if (block.findLoop("_pdbx_poly_seq_scheme.seq_id")) |pss| {
+            const col_asym = pss.findTag("_pdbx_poly_seq_scheme.asym_id");
+            const col_seq = pss.findTag("_pdbx_poly_seq_scheme.seq_id");
+            const col_auth_seq = pss.findTag("_pdbx_poly_seq_scheme.auth_seq_num");
+
+            if (col_asym != null and col_seq != null and col_auth_seq != null) {
+                detectChainBreaks(&entry.model, pss, col_asym.?, col_seq.?, col_auth_seq.?);
+            }
+        }
+
+        // Parse _pdbx_unobs_or_zero_occ_atoms count (optional, diagnostic)
+        if (block.findLoop("_pdbx_unobs_or_zero_occ_atoms.label_atom_id")) |unobs| {
+            entry.model.n_unobs_atoms = @intCast(unobs.length());
+        }
+
+        // Parse _entity loop for entity types (optional)
+        applyEntityTypes(&entry.model, block);
+    }
+
+    return entries;
+}
+
+/// Finalize a model: close the last residue and chain, set original_atom_count.
+fn finalizeModel(mdl: *Model, in_residue: bool, in_chain: bool) void {
     if (in_residue) {
         const atom_end: u32 = @intCast(mdl.atoms.items.len);
         const res_idx = mdl.residues.items.len - 1;
         mdl.residues.items[res_idx].atom_end = atom_end;
     }
-
-    // Record the number of original atoms before any hydrogen placement.
     mdl.original_atom_count = @intCast(mdl.atoms.items.len);
-
-    // Set model number from first parsed model_num value (default 1)
-    if (first_model_num) |num_str| {
-        mdl.model_num = std.fmt.parseInt(u32, num_str, 10) catch 1;
-    }
-
-    // Close final chain
     if (in_chain) {
         const res_end: u32 = @intCast(mdl.residues.items.len);
         const chain_idx = mdl.chains.items.len - 1;
         mdl.chains.items[chain_idx].residue_end = res_end;
     }
-
-    // Parse _pdbx_poly_seq_scheme for chain-break detection (optional)
-    if (block.findLoop("_pdbx_poly_seq_scheme.seq_id")) |pss| {
-        const col_asym = pss.findTag("_pdbx_poly_seq_scheme.asym_id");
-        const col_seq = pss.findTag("_pdbx_poly_seq_scheme.seq_id");
-        const col_auth_seq = pss.findTag("_pdbx_poly_seq_scheme.auth_seq_num");
-
-        if (col_asym != null and col_seq != null and col_auth_seq != null) {
-            detectChainBreaks(&mdl, pss, col_asym.?, col_seq.?, col_auth_seq.?);
-        }
-    }
-
-    // Parse _pdbx_unobs_or_zero_occ_atoms count (optional, diagnostic)
-    if (block.findLoop("_pdbx_unobs_or_zero_occ_atoms.label_atom_id")) |unobs| {
-        mdl.n_unobs_atoms = @intCast(unobs.length());
-    }
-
-    // Parse _entity loop for entity types (optional)
-    applyEntityTypes(&mdl, block);
-
-    return mdl;
 }
 
 // ── Sub-module re-exports ──────────────────────────────────────────────────────
@@ -618,6 +738,67 @@ test "parseModel skips CIF-null model numbers and filters by first real model" {
     try testing.expectEqual(@as(usize, 2), mdl.atoms.items.len);
     try testing.expectApproxEqAbs(@as(f32, 2.0), mdl.atoms.items[0].pos.x, 0.01);
     try testing.expectApproxEqAbs(@as(f32, 3.0), mdl.atoms.items[1].pos.x, 0.01);
+}
+
+test "parseModels with filter .all returns both models" {
+    const source = @embedFile("test_data/multi_model.cif");
+    var entries = try parseModels(testing.allocator, source, .all);
+    defer {
+        for (entries.items) |*e| e.model.deinit();
+        entries.deinit(testing.allocator);
+    }
+
+    try testing.expectEqual(@as(usize, 2), entries.items.len);
+
+    // Model 1
+    try testing.expectEqual(@as(u32, 1), entries.items[0].model_num);
+    try testing.expectEqual(@as(usize, 4), entries.items[0].model.atoms.items.len);
+    try testing.expectApproxEqAbs(@as(f32, 1.0), entries.items[0].model.atoms.items[0].pos.x, 0.01);
+    try testing.expectEqual(@as(u32, 0), entries.items[0].cif_row_start);
+    try testing.expectEqual(@as(u32, 4), entries.items[0].cif_row_end);
+
+    // Model 2
+    try testing.expectEqual(@as(u32, 2), entries.items[1].model_num);
+    try testing.expectEqual(@as(usize, 4), entries.items[1].model.atoms.items.len);
+    try testing.expectApproxEqAbs(@as(f32, 11.0), entries.items[1].model.atoms.items[0].pos.x, 0.01);
+    try testing.expectEqual(@as(u32, 4), entries.items[1].cif_row_start);
+    try testing.expectEqual(@as(u32, 8), entries.items[1].cif_row_end);
+}
+
+test "parseModels with filter .specific selects one model" {
+    const source = @embedFile("test_data/multi_model.cif");
+    var entries = try parseModels(testing.allocator, source, .{ .specific = 2 });
+    defer {
+        for (entries.items) |*e| e.model.deinit();
+        entries.deinit(testing.allocator);
+    }
+
+    try testing.expectEqual(@as(usize, 1), entries.items.len);
+    try testing.expectEqual(@as(u32, 2), entries.items[0].model_num);
+    try testing.expectApproxEqAbs(@as(f32, 11.0), entries.items[0].model.atoms.items[0].pos.x, 0.01);
+}
+
+test "parseModels with non-existent model returns empty" {
+    const source = @embedFile("test_data/multi_model.cif");
+    var entries = try parseModels(testing.allocator, source, .{ .specific = 99 });
+    defer {
+        for (entries.items) |*e| e.model.deinit();
+        entries.deinit(testing.allocator);
+    }
+
+    try testing.expectEqual(@as(usize, 0), entries.items.len);
+}
+
+test "parseModels without model column returns single entry" {
+    const source = @embedFile("test_data/tiny.cif");
+    var entries = try parseModels(testing.allocator, source, .all);
+    defer {
+        for (entries.items) |*e| e.model.deinit();
+        entries.deinit(testing.allocator);
+    }
+
+    try testing.expectEqual(@as(usize, 1), entries.items.len);
+    try testing.expectEqual(@as(u32, 1), entries.items[0].model_num);
 }
 
 test "entityTypeFromString maps correctly" {
