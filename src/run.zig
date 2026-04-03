@@ -105,6 +105,136 @@ fn stripDocumentHydrogens(block: *zreduce.cif.Block) void {
     loop.values.items.len = write * w;
 }
 
+/// Shared per-model processing: chemistry, place, movers/optimize, markAbsent, validate, snapshot.
+/// Called by both mmCIF and PDB pipelines. Format-specific steps (bond parsing, strip_h) are
+/// performed by the caller before invoking this function.
+///
+/// Parameters:
+///   mdl                   - the model to process (atoms already stripped if needed)
+///   model_num             - 1-based model number (for diagnostics and snapshots)
+///   n_models              - total model count in file (to decide whether to print progress)
+///   inline_dict           - CIF inline component dictionary (null for PDB)
+///   protonation_overrides - optional protonation overrides (caller owns, may be null)
+///   fix_overrides         - optional fix overrides (caller owns, may be null)
+///   mover_snapshots       - accumulator list for JSON log snapshots (appended to)
+///   result                - accumulator for ProcessResult fields (incremented in place)
+///   config                - full ProcessConfig for opt/validate/dump flags
+fn processModelShared(
+    allocator: Allocator,
+    mdl: *zreduce.model.Model,
+    model_num: u32,
+    n_models: usize,
+    inline_dict: ?*const zreduce.ccd.ComponentDict,
+    protonation_overrides: ?*zreduce.place.ProtonationOverrides,
+    fix_overrides: ?*zreduce.optimize.fix.FixOverrides,
+    mover_snapshots: *std.ArrayListUnmanaged(zreduce.writer.json_writer.MoverSnapshot),
+    result: *ProcessResult,
+    config: ProcessConfig,
+) !void {
+    if (!config.quiet and n_models > 1) {
+        std.debug.print("  Processing model {d} ({d} atoms)\n", .{ model_num, mdl.atoms.items.len });
+    }
+
+    // Apply chemistry annotations
+    zreduce.place.applyChemistryWithConfig(mdl, .{
+        .protonation = protonation_overrides,
+    });
+
+    // Place hydrogens
+    const place_result = try zreduce.place.addHydrogensWithConfig(
+        mdl,
+        config.dict,
+        inline_dict,
+        .{
+            .water = config.water,
+            .bond_policy = config.bond_policy,
+            .protonation = protonation_overrides,
+        },
+    );
+
+    result.n_placed += place_result.n_placed;
+    result.n_residues += place_result.n_residues;
+    result.n_skipped_existing += place_result.n_skipped_existing;
+    result.n_skipped_inter_residue += place_result.n_skipped_inter_residue;
+    result.n_skipped_missing_ref += place_result.n_skipped_missing_ref;
+    result.n_skipped_quality_filter += place_result.n_skipped_quality_filter;
+
+    // Generate movers and optimize
+    const needs_movers = !config.no_opt or config.fix_path != null or config.dump_movers_path != null;
+    if (needs_movers) {
+        const gen_result = try zreduce.optimize.generateMovers(
+            allocator,
+            mdl,
+            config.no_flip,
+            config.dict,
+            inline_dict,
+            protonation_overrides,
+            config.bond_policy.mode,
+        );
+        var movers = gen_result.movers;
+        defer {
+            for (0..movers.len) |i| movers[i].deinit();
+            allocator.free(movers);
+        }
+        result.n_movers += @intCast(movers.len);
+
+        if (fix_overrides) |ov| {
+            try zreduce.optimize.fix.applyFixes(ov, mdl, movers);
+            for (movers) |*m| {
+                if (m.is_fixed) m.applyOrientation(mdl.atoms.items, m.best_orientation);
+            }
+            if (!config.quiet) ov.warnUnmatched(mdl, movers);
+        }
+
+        if (config.dump_movers_path) |dump_path| {
+            var dump_buf: [4096]u8 = undefined;
+            const dump_file = try std.fs.cwd().createFile(dump_path, .{});
+            defer dump_file.close();
+            var dump_fw = dump_file.writer(&dump_buf);
+            try zreduce.optimize.fix.dumpMovers(&dump_fw.interface, mdl, movers);
+            try dump_fw.interface.flush();
+        }
+
+        if (!config.no_opt and movers.len > 0) {
+            const opt_result = try zreduce.optimize.optimizer.optimize(
+                allocator,
+                movers,
+                mdl,
+                .{ .n_threads = config.opt_threads },
+            );
+            result.n_singletons += opt_result.n_singletons;
+            result.n_brute_force += opt_result.n_brute_force;
+            result.n_vertex_cut += opt_result.n_vertex_cut;
+        }
+
+        // Capture mover snapshots for JSON log before movers are freed
+        if (config.json_path != null) {
+            try mover_snapshots.ensureUnusedCapacity(allocator, movers.len);
+            for (movers) |m| {
+                mover_snapshots.appendAssumeCapacity(
+                    zreduce.writer.json_writer.MoverSnapshot.capture(m, mdl.residues.items, mdl.chains.items, model_num),
+                );
+            }
+        }
+    }
+
+    // Mark absent H atoms
+    markAbsentHydrogens(mdl);
+
+    // Validate
+    {
+        var validation = try zreduce.validate.validateModel(allocator, mdl);
+        defer validation.deinit();
+
+        if (!validation.ok()) {
+            if (!config.quiet) std.debug.print("  Model {d}: {d} validation issue(s)\n", .{ model_num, validation.issues.len });
+            if (config.validate_flag) {
+                zreduce.validate.reportIssues(validation.issues, mdl);
+            }
+        }
+    }
+}
+
 fn markAbsentHydrogens(mdl: *zreduce.model.Model) void {
     for (mdl.atoms.items) |*atom| {
         if (zreduce.optimize.mover.isAbsentH(atom.*)) {
@@ -220,124 +350,34 @@ fn processFileMmcif(allocator: Allocator, config: ProcessConfig, source: []const
     };
 
     // Accumulate mover snapshots for JSON log (movers are freed per model)
-    const MoverSnapshot = zreduce.writer.json_writer.MoverSnapshot;
-    var mover_snapshots = std.ArrayListUnmanaged(MoverSnapshot){};
+    var mover_snapshots = std.ArrayListUnmanaged(zreduce.writer.json_writer.MoverSnapshot){};
     defer mover_snapshots.deinit(allocator);
 
     for (entries.items) |*entry| {
         const mdl = &entry.model;
 
-        if (!config.quiet and entries.items.len > 1) {
-            std.debug.print("  Processing model {d} ({d} atoms)\n", .{ entry.model_num, mdl.atoms.items.len });
-        }
-
-        // Build per-model atom lookup for bond parsing
+        // Build per-model atom lookup for bond parsing (mmCIF-specific)
         var atom_lookup = try zreduce.mmcif.buildAtomLookupForRange(allocator, block, entry.cif_row_start, entry.cif_row_end);
         defer atom_lookup.deinit();
 
-        // 4. Apply chemistry annotations
-        zreduce.place.applyChemistryWithConfig(mdl, .{
-            .protonation = if (protonation_overrides) |*ov| ov else null,
-        });
-
-        // 4a-4c. mmCIF-specific bond parsing
+        // mmCIF-specific: parse bonds from struct_conn/branch_link and flag leaving atoms
         try zreduce.mmcif.parseStructConn(mdl, block, &atom_lookup);
         try zreduce.mmcif.parseBranchLinks(allocator, mdl, block, &atom_lookup);
         zreduce.mmcif.flagLeavingAtoms(mdl, if (inline_dict) |*d| d else null, config.dict);
 
-        // 5. Place hydrogens
-        const place_result = try zreduce.place.addHydrogensWithConfig(
+        // Shared per-model pipeline: chemistry → place → movers/opt → markAbsent → validate → snapshot
+        try processModelShared(
+            allocator,
             mdl,
-            config.dict,
+            entry.model_num,
+            entries.items.len,
             if (inline_dict) |*d| d else null,
-            .{
-                .water = config.water,
-                .bond_policy = config.bond_policy,
-                .protonation = if (protonation_overrides) |*ov| ov else null,
-            },
+            if (protonation_overrides) |*ov| ov else null,
+            if (fix_overrides) |*ov| ov else null,
+            &mover_snapshots,
+            &result,
+            config,
         );
-
-        result.n_placed += place_result.n_placed;
-        result.n_residues += place_result.n_residues;
-        result.n_skipped_existing += place_result.n_skipped_existing;
-        result.n_skipped_inter_residue += place_result.n_skipped_inter_residue;
-        result.n_skipped_missing_ref += place_result.n_skipped_missing_ref;
-        result.n_skipped_quality_filter += place_result.n_skipped_quality_filter;
-
-        // 6. Generate movers and optimize
-        const needs_movers = !config.no_opt or config.fix_path != null or config.dump_movers_path != null;
-        if (needs_movers) {
-            const gen_result = try zreduce.optimize.generateMovers(
-                allocator,
-                mdl,
-                config.no_flip,
-                config.dict,
-                if (inline_dict) |*d| d else null,
-                if (protonation_overrides) |*ov| ov else null,
-                config.bond_policy.mode,
-            );
-            var movers = gen_result.movers;
-            defer {
-                for (0..movers.len) |i| movers[i].deinit();
-                allocator.free(movers);
-            }
-            result.n_movers += @intCast(movers.len);
-
-            if (fix_overrides) |*ov| {
-                try zreduce.optimize.fix.applyFixes(ov, mdl, movers);
-                for (movers) |*m| {
-                    if (m.is_fixed) m.applyOrientation(mdl.atoms.items, m.best_orientation);
-                }
-                if (!config.quiet) ov.warnUnmatched(mdl, movers);
-            }
-
-            if (config.dump_movers_path) |dump_path| {
-                var dump_buf: [4096]u8 = undefined;
-                const dump_file = try std.fs.cwd().createFile(dump_path, .{});
-                defer dump_file.close();
-                var dump_fw = dump_file.writer(&dump_buf);
-                try zreduce.optimize.fix.dumpMovers(&dump_fw.interface, mdl, movers);
-                try dump_fw.interface.flush();
-            }
-
-            if (!config.no_opt and movers.len > 0) {
-                const opt_result = try zreduce.optimize.optimizer.optimize(
-                    allocator,
-                    movers,
-                    mdl,
-                    .{ .n_threads = config.opt_threads },
-                );
-                result.n_singletons += opt_result.n_singletons;
-                result.n_brute_force += opt_result.n_brute_force;
-                result.n_vertex_cut += opt_result.n_vertex_cut;
-            }
-
-            // Capture mover snapshots for JSON log before movers are freed
-            if (config.json_path != null) {
-                try mover_snapshots.ensureUnusedCapacity(allocator, movers.len);
-                for (movers) |m| {
-                    mover_snapshots.appendAssumeCapacity(
-                        MoverSnapshot.capture(m, mdl.residues.items, mdl.chains.items, entry.model_num),
-                    );
-                }
-            }
-        }
-
-        // 7. Mark absent H atoms
-        markAbsentHydrogens(mdl);
-
-        // 8. Validate
-        {
-            var validation = try zreduce.validate.validateModel(allocator, mdl);
-            defer validation.deinit();
-
-            if (!validation.ok()) {
-                if (!config.quiet) std.debug.print("  Model {d}: {d} validation issue(s)\n", .{ entry.model_num, validation.issues.len });
-                if (config.validate_flag) {
-                    zreduce.validate.reportIssues(validation.issues, mdl);
-                }
-            }
-        }
     }
 
     // Warn about unmatched overrides (after all models processed)
@@ -436,17 +476,13 @@ fn processFilePdb(allocator: Allocator, config: ProcessConfig, source: []const u
         .n_skipped_missing_ref = 0,
     };
 
-    const MoverSnapshot = zreduce.writer.json_writer.MoverSnapshot;
-    var mover_snapshots = std.ArrayListUnmanaged(MoverSnapshot){};
+    var mover_snapshots = std.ArrayListUnmanaged(zreduce.writer.json_writer.MoverSnapshot){};
     defer mover_snapshots.deinit(allocator);
 
     for (pdb_result.entries.items) |*entry| {
         const mdl = &entry.model;
 
-        if (!config.quiet and pdb_result.entries.items.len > 1) {
-            std.debug.print("  Processing model {d} ({d} atoms)\n", .{ entry.model_num, mdl.atoms.items.len });
-        }
-
+        // PDB-specific: strip existing H per model (mmCIF strips at document level)
         if (config.strip_h) {
             const n_stripped = mdl.stripHydrogens();
             if (!config.quiet and n_stripped > 0) {
@@ -454,99 +490,19 @@ fn processFilePdb(allocator: Allocator, config: ProcessConfig, source: []const u
             }
         }
 
-        zreduce.place.applyChemistryWithConfig(mdl, .{
-            .protonation = if (protonation_overrides) |*ov| ov else null,
-        });
-
-        const place_result = try zreduce.place.addHydrogensWithConfig(
+        // Shared per-model pipeline: chemistry → place → movers/opt → markAbsent → validate → snapshot
+        try processModelShared(
+            allocator,
             mdl,
-            config.dict,
-            null,
-            .{
-                .water = config.water,
-                .bond_policy = config.bond_policy,
-                .protonation = if (protonation_overrides) |*ov| ov else null,
-            },
+            entry.model_num,
+            pdb_result.entries.items.len,
+            null, // no inline_dict for PDB
+            if (protonation_overrides) |*ov| ov else null,
+            if (fix_overrides) |*ov| ov else null,
+            &mover_snapshots,
+            &result,
+            config,
         );
-
-        result.n_placed += place_result.n_placed;
-        result.n_residues += place_result.n_residues;
-        result.n_skipped_existing += place_result.n_skipped_existing;
-        result.n_skipped_inter_residue += place_result.n_skipped_inter_residue;
-        result.n_skipped_missing_ref += place_result.n_skipped_missing_ref;
-        result.n_skipped_quality_filter += place_result.n_skipped_quality_filter;
-
-        const needs_movers = !config.no_opt or config.fix_path != null or config.dump_movers_path != null;
-        if (needs_movers) {
-            const gen_result = try zreduce.optimize.generateMovers(
-                allocator,
-                mdl,
-                config.no_flip,
-                config.dict,
-                null,
-                if (protonation_overrides) |*ov| ov else null,
-                config.bond_policy.mode,
-            );
-            var movers = gen_result.movers;
-            defer {
-                for (0..movers.len) |i| movers[i].deinit();
-                allocator.free(movers);
-            }
-            result.n_movers += @intCast(movers.len);
-
-            if (fix_overrides) |*ov| {
-                try zreduce.optimize.fix.applyFixes(ov, mdl, movers);
-                for (movers) |*m| {
-                    if (m.is_fixed) m.applyOrientation(mdl.atoms.items, m.best_orientation);
-                }
-                if (!config.quiet) ov.warnUnmatched(mdl, movers);
-            }
-
-            if (config.dump_movers_path) |dump_path| {
-                var dump_buf: [4096]u8 = undefined;
-                const dump_file = try std.fs.cwd().createFile(dump_path, .{});
-                defer dump_file.close();
-                var dump_fw = dump_file.writer(&dump_buf);
-                try zreduce.optimize.fix.dumpMovers(&dump_fw.interface, mdl, movers);
-                try dump_fw.interface.flush();
-            }
-
-            if (!config.no_opt and movers.len > 0) {
-                const opt_result = try zreduce.optimize.optimizer.optimize(
-                    allocator,
-                    movers,
-                    mdl,
-                    .{ .n_threads = config.opt_threads },
-                );
-                result.n_singletons += opt_result.n_singletons;
-                result.n_brute_force += opt_result.n_brute_force;
-                result.n_vertex_cut += opt_result.n_vertex_cut;
-            }
-
-            // Capture mover snapshots for JSON log before movers are freed
-            if (config.json_path != null) {
-                try mover_snapshots.ensureUnusedCapacity(allocator, movers.len);
-                for (movers) |m| {
-                    mover_snapshots.appendAssumeCapacity(
-                        MoverSnapshot.capture(m, mdl.residues.items, mdl.chains.items, entry.model_num),
-                    );
-                }
-            }
-        }
-
-        markAbsentHydrogens(mdl);
-
-        {
-            var validation = try zreduce.validate.validateModel(allocator, mdl);
-            defer validation.deinit();
-
-            if (!validation.ok()) {
-                if (!config.quiet) std.debug.print("  Model {d}: {d} validation issue(s)\n", .{ entry.model_num, validation.issues.len });
-                if (config.validate_flag) {
-                    zreduce.validate.reportIssues(validation.issues, mdl);
-                }
-            }
-        }
     }
 
     if (protonation_overrides) |*ov| {
