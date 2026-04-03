@@ -2,10 +2,10 @@
 
 const math = @import("../math.zig");
 const element = @import("../element.zig");
-const standard = @import("../place/standard.zig");
 const fixed_string = @import("fixed_string.zig");
 
 pub const AtomFlags = element.AtomFlags;
+pub const MoverHint = element.MoverHint;
 pub const FixedString = fixed_string.FixedString;
 
 pub const Atom = struct {
@@ -21,7 +21,7 @@ pub const Atom = struct {
     vdw_radius: f32 = 1.70,
     flags: AtomFlags = .{},
     serial: u32 = 0,
-    mover_hint: standard.MoverHint = .none,
+    mover_hint: MoverHint = .none,
 
     pub fn nameSlice(self: *const Atom) []const u8 {
         return self.name.slice();
