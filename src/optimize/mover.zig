@@ -37,9 +37,21 @@ pub const Mover = struct {
     center_idx: ?u32 = null,
     axis_idx: ?u32 = null,
 
+    /// Optional backing allocation for all orientation positions in one contiguous block.
+    /// When set, `deinit` frees this single block instead of each orientation's positions
+    /// slice individually. Each orientation's `positions` field points into this block.
+    positions_backing: ?[]Vec3(f32) = null,
+
     pub fn deinit(self: *Mover) void {
+        if (self.positions_backing) |backing| {
+            // Positions are sub-slices of the backing block; free the block once.
+            self.allocator.free(backing);
+        } else {
+            for (self.orientations) |o| {
+                self.allocator.free(o.positions);
+            }
+        }
         for (self.orientations) |o| {
-            self.allocator.free(o.positions);
             if (o.flags) |f| self.allocator.free(f);
         }
         self.allocator.free(self.orientations);
