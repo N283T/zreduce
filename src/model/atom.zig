@@ -27,6 +27,11 @@ pub const Atom = struct {
         return self.name.slice();
     }
 
+    /// Return the raw 4-byte name buffer (including space padding).
+    pub fn nameRaw(self: *const Atom) [4]u8 {
+        return self.name.buf;
+    }
+
     pub fn setName(self: *Atom, n: []const u8) void {
         self.name.set(n);
     }
