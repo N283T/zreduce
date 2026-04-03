@@ -31,6 +31,188 @@ const Loop = cif_types.Loop;
 const Pair = cif_types.Pair;
 const Item = cif_types.Item;
 
+// ── Shared types ──────────────────────────────────────────────────────────────
+
+/// Maps _atom_site column tags to their indices in a Loop.
+const ColMap = struct {
+    group_pdb: ?usize = null,
+    id: ?usize = null,
+    type_symbol: ?usize = null,
+    label_atom_id: ?usize = null,
+    label_alt_id: ?usize = null,
+    label_comp_id: ?usize = null,
+    label_asym_id: ?usize = null,
+    label_entity_id: ?usize = null,
+    label_seq_id: ?usize = null,
+    cartn_x: ?usize = null,
+    cartn_y: ?usize = null,
+    cartn_z: ?usize = null,
+    occupancy: ?usize = null,
+    b_factor: ?usize = null,
+    auth_seq_id: ?usize = null,
+    auth_comp_id: ?usize = null,
+    auth_asym_id: ?usize = null,
+    auth_atom_id: ?usize = null,
+    pdb_model_num: ?usize = null,
+};
+
+/// Build a ColMap from the tags of an _atom_site loop.
+fn buildColMap(orig_loop: *const Loop) ColMap {
+    var cm = ColMap{};
+    for (orig_loop.tags.items, 0..) |tag, i| {
+        if (std.ascii.eqlIgnoreCase(tag, "_atom_site.group_PDB")) cm.group_pdb = i;
+        if (std.ascii.eqlIgnoreCase(tag, "_atom_site.id")) cm.id = i;
+        if (std.ascii.eqlIgnoreCase(tag, "_atom_site.type_symbol")) cm.type_symbol = i;
+        if (std.ascii.eqlIgnoreCase(tag, "_atom_site.label_atom_id")) cm.label_atom_id = i;
+        if (std.ascii.eqlIgnoreCase(tag, "_atom_site.label_alt_id")) cm.label_alt_id = i;
+        if (std.ascii.eqlIgnoreCase(tag, "_atom_site.label_comp_id")) cm.label_comp_id = i;
+        if (std.ascii.eqlIgnoreCase(tag, "_atom_site.label_asym_id")) cm.label_asym_id = i;
+        if (std.ascii.eqlIgnoreCase(tag, "_atom_site.label_entity_id")) cm.label_entity_id = i;
+        if (std.ascii.eqlIgnoreCase(tag, "_atom_site.label_seq_id")) cm.label_seq_id = i;
+        if (std.ascii.eqlIgnoreCase(tag, "_atom_site.Cartn_x")) cm.cartn_x = i;
+        if (std.ascii.eqlIgnoreCase(tag, "_atom_site.Cartn_y")) cm.cartn_y = i;
+        if (std.ascii.eqlIgnoreCase(tag, "_atom_site.Cartn_z")) cm.cartn_z = i;
+        if (std.ascii.eqlIgnoreCase(tag, "_atom_site.occupancy")) cm.occupancy = i;
+        if (std.ascii.eqlIgnoreCase(tag, "_atom_site.B_iso_or_equiv")) cm.b_factor = i;
+        if (std.ascii.eqlIgnoreCase(tag, "_atom_site.auth_seq_id")) cm.auth_seq_id = i;
+        if (std.ascii.eqlIgnoreCase(tag, "_atom_site.auth_comp_id")) cm.auth_comp_id = i;
+        if (std.ascii.eqlIgnoreCase(tag, "_atom_site.auth_asym_id")) cm.auth_asym_id = i;
+        if (std.ascii.eqlIgnoreCase(tag, "_atom_site.auth_atom_id")) cm.auth_atom_id = i;
+        if (std.ascii.eqlIgnoreCase(tag, "_atom_site.pdbx_PDB_model_num")) cm.pdb_model_num = i;
+    }
+    return cm;
+}
+
+/// Result of buildAddedHIndex — caller must free all three slices.
+const AddedHIndex = struct {
+    offsets: []u32,
+    indices: []u32,
+
+    pub fn deinit(self: AddedHIndex, allocator: std.mem.Allocator) void {
+        allocator.free(self.offsets);
+        allocator.free(self.indices);
+    }
+};
+
+/// Build a counting-sort index of added-H atoms by residue.
+/// `offsets[r]..offsets[r+1]` gives the slice of `indices` for residue r.
+fn buildAddedHIndex(model: *const Model) !AddedHIndex {
+    const allocator = model.allocator;
+    const n_residues = model.residues.items.len;
+
+    // Phase 1: count added atoms per residue.
+    const counts = try allocator.alloc(u32, n_residues + 1);
+    defer allocator.free(counts);
+    @memset(counts, 0);
+    for (model.atoms.items) |atom| {
+        if (!atom.is_added) continue;
+        counts[atom.residue_idx] += 1;
+    }
+
+    // Phase 2: build prefix-sum offsets (length n_residues + 1).
+    const offsets = try allocator.alloc(u32, n_residues + 1);
+    offsets[0] = 0;
+    for (0..n_residues) |r| {
+        offsets[r + 1] = offsets[r] + counts[r];
+    }
+    const total_added = offsets[n_residues];
+
+    // Phase 3: fill sorted atom indices (reuse counts as cursor).
+    const indices = try allocator.alloc(u32, total_added);
+    @memset(counts, 0);
+    for (model.atoms.items, 0..) |atom, atom_idx| {
+        if (!atom.is_added) continue;
+        const r = atom.residue_idx;
+        indices[offsets[r] + counts[r]] = @intCast(atom_idx);
+        counts[r] += 1;
+    }
+
+    return .{ .offsets = offsets, .indices = indices };
+}
+
+/// Write one added-H atom row using the preserved column layout.
+/// `first_orig_row` is the loop row index of the residue's first heavy atom,
+/// used to inherit entity_id / auth_seq_id / unknown columns from the original.
+fn writeAddedHRow(
+    writer: anytype,
+    model: *const Model,
+    atom: Atom,
+    res: Residue,
+    serial: u32,
+    cm: ColMap,
+    col_widths: []const usize,
+    orig_loop: *const Loop,
+    first_orig_row: usize,
+    output_isotope: place.OutputIsotope,
+) !void {
+    const w = col_widths.len;
+    const chain = model.chains.items[res.chain_idx];
+    for (0..w) |col| {
+        if (col > 0) try writer.writeByte(' ');
+        const cw = col_widths[col];
+        if (cm.group_pdb != null and col == cm.group_pdb.?) {
+            try writePaddedCell(writer, "ATOM", cw);
+        } else if (cm.id != null and col == cm.id.?) {
+            try writePaddedInt(writer, serial, cw);
+        } else if (cm.type_symbol != null and col == cm.type_symbol.?) {
+            try writePaddedCell(writer, atomTypeSymbol(atom, output_isotope), cw);
+        } else if (cm.label_atom_id != null and col == cm.label_atom_id.?) {
+            try writePaddedCell(writer, atom.nameSlice(), cw);
+        } else if (cm.label_alt_id != null and col == cm.label_alt_id.?) {
+            if (atom.altloc == ' ') {
+                try writePaddedCell(writer, ".", cw);
+            } else {
+                try writePaddedCell(writer, &[_]u8{atom.altloc}, cw);
+            }
+        } else if (cm.label_comp_id != null and col == cm.label_comp_id.?) {
+            try writePaddedCell(writer, res.compIdSlice(), cw);
+        } else if (cm.label_asym_id != null and col == cm.label_asym_id.?) {
+            try writePaddedCell(writer, chain.labelSlice(), cw);
+        } else if (cm.label_entity_id != null and col == cm.label_entity_id.?) {
+            if (first_orig_row < orig_loop.length()) {
+                try writePaddedCifValue(writer, orig_loop.val(first_orig_row, col) orelse ".", cw);
+            } else {
+                try writePaddedCell(writer, ".", cw);
+            }
+        } else if (cm.label_seq_id != null and col == cm.label_seq_id.?) {
+            try writePaddedInt(writer, res.seq_id, cw);
+        } else if (cm.cartn_x != null and col == cm.cartn_x.?) {
+            try writePaddedFloat3(writer, atom.pos.x, cw);
+        } else if (cm.cartn_y != null and col == cm.cartn_y.?) {
+            try writePaddedFloat3(writer, atom.pos.y, cw);
+        } else if (cm.cartn_z != null and col == cm.cartn_z.?) {
+            try writePaddedFloat3(writer, atom.pos.z, cw);
+        } else if (cm.occupancy != null and col == cm.occupancy.?) {
+            try writePaddedFloat2(writer, atom.occupancy, cw);
+        } else if (cm.b_factor != null and col == cm.b_factor.?) {
+            try writePaddedFloat2(writer, atom.b_factor, cw);
+        } else if (cm.auth_seq_id != null and col == cm.auth_seq_id.?) {
+            if (first_orig_row < orig_loop.length()) {
+                try writePaddedCifValue(writer, orig_loop.val(first_orig_row, col) orelse ".", cw);
+            } else {
+                try writePaddedInt(writer, res.seq_id, cw);
+            }
+        } else if (cm.auth_comp_id != null and col == cm.auth_comp_id.?) {
+            try writePaddedCell(writer, res.compIdSlice(), cw);
+        } else if (cm.auth_asym_id != null and col == cm.auth_asym_id.?) {
+            try writePaddedCell(writer, chain.authSlice(), cw);
+        } else if (cm.auth_atom_id != null and col == cm.auth_atom_id.?) {
+            try writePaddedCell(writer, atom.nameSlice(), cw);
+        } else if (cm.pdb_model_num != null and col == cm.pdb_model_num.?) {
+            try writePaddedInt(writer, model.model_num, cw);
+        } else {
+            if (first_orig_row < orig_loop.length()) {
+                try writePaddedCifValue(writer, orig_loop.val(first_orig_row, col) orelse ".", cw);
+            } else {
+                try writePaddedCell(writer, ".", cw);
+            }
+        }
+    }
+    try writer.writeByte('\n');
+}
+
+// ── Public API ────────────────────────────────────────────────────────────────
+
 /// Write a model as mmCIF, preserving all original categories from the source document.
 /// The _atom_site loop is replaced with the model's atoms (including added H).
 /// If doc is null, writes atom_site only (atom-site-only mode).
@@ -151,6 +333,8 @@ pub fn writeMultiModelWithDocumentWithPolicy(
     try writer.writeAll("#\n");
 }
 
+// ── Internal writers ──────────────────────────────────────────────────────────
+
 /// Write _atom_site loop preserving the original column structure.
 /// Heavy atom rows are written from the original loop data.
 /// Added H atom rows fill known columns and use '.' for the rest.
@@ -164,50 +348,7 @@ fn writeAtomSitePreserving(writer: anytype, model: *const Model, orig_loop: *con
         try writer.print("{s}\n", .{tag});
     }
 
-    // Map column indices for H atom generation
-    const ColMap = struct {
-        group_pdb: ?usize = null,
-        id: ?usize = null,
-        type_symbol: ?usize = null,
-        label_atom_id: ?usize = null,
-        label_alt_id: ?usize = null,
-        label_comp_id: ?usize = null,
-        label_asym_id: ?usize = null,
-        label_entity_id: ?usize = null,
-        label_seq_id: ?usize = null,
-        cartn_x: ?usize = null,
-        cartn_y: ?usize = null,
-        cartn_z: ?usize = null,
-        occupancy: ?usize = null,
-        b_factor: ?usize = null,
-        auth_seq_id: ?usize = null,
-        auth_comp_id: ?usize = null,
-        auth_asym_id: ?usize = null,
-        auth_atom_id: ?usize = null,
-        pdb_model_num: ?usize = null,
-    };
-    var cm = ColMap{};
-    for (orig_loop.tags.items, 0..) |tag, i| {
-        if (std.ascii.eqlIgnoreCase(tag, "_atom_site.group_PDB")) cm.group_pdb = i;
-        if (std.ascii.eqlIgnoreCase(tag, "_atom_site.id")) cm.id = i;
-        if (std.ascii.eqlIgnoreCase(tag, "_atom_site.type_symbol")) cm.type_symbol = i;
-        if (std.ascii.eqlIgnoreCase(tag, "_atom_site.label_atom_id")) cm.label_atom_id = i;
-        if (std.ascii.eqlIgnoreCase(tag, "_atom_site.label_alt_id")) cm.label_alt_id = i;
-        if (std.ascii.eqlIgnoreCase(tag, "_atom_site.label_comp_id")) cm.label_comp_id = i;
-        if (std.ascii.eqlIgnoreCase(tag, "_atom_site.label_asym_id")) cm.label_asym_id = i;
-        if (std.ascii.eqlIgnoreCase(tag, "_atom_site.label_entity_id")) cm.label_entity_id = i;
-        if (std.ascii.eqlIgnoreCase(tag, "_atom_site.label_seq_id")) cm.label_seq_id = i;
-        if (std.ascii.eqlIgnoreCase(tag, "_atom_site.Cartn_x")) cm.cartn_x = i;
-        if (std.ascii.eqlIgnoreCase(tag, "_atom_site.Cartn_y")) cm.cartn_y = i;
-        if (std.ascii.eqlIgnoreCase(tag, "_atom_site.Cartn_z")) cm.cartn_z = i;
-        if (std.ascii.eqlIgnoreCase(tag, "_atom_site.occupancy")) cm.occupancy = i;
-        if (std.ascii.eqlIgnoreCase(tag, "_atom_site.B_iso_or_equiv")) cm.b_factor = i;
-        if (std.ascii.eqlIgnoreCase(tag, "_atom_site.auth_seq_id")) cm.auth_seq_id = i;
-        if (std.ascii.eqlIgnoreCase(tag, "_atom_site.auth_comp_id")) cm.auth_comp_id = i;
-        if (std.ascii.eqlIgnoreCase(tag, "_atom_site.auth_asym_id")) cm.auth_asym_id = i;
-        if (std.ascii.eqlIgnoreCase(tag, "_atom_site.auth_atom_id")) cm.auth_atom_id = i;
-        if (std.ascii.eqlIgnoreCase(tag, "_atom_site.pdbx_PDB_model_num")) cm.pdb_model_num = i;
-    }
+    const cm = buildColMap(orig_loop);
 
     // Compute column widths from original data for PDBx-styled alignment.
     const col_widths = try model.allocator.alloc(usize, w);
@@ -247,48 +388,15 @@ fn writeAtomSitePreserving(writer: anytype, model: *const Model, orig_loop: *con
         }
     }
 
+    // Pre-index added H atoms by residue_idx to avoid O(N*R) inner scan.
+    const h_index = try buildAddedHIndex(model);
+    defer h_index.deinit(model.allocator);
+
     // Track serial for renumbering
     var serial: u32 = 1;
 
-    // Pre-index added H atoms by residue_idx to avoid O(N*R) inner scan.
-    // Build a counting-sort index: added_indices[added_offsets[r]..added_offsets[r+1]]
-    // gives the atom indices for residue r, in original order.
-    const n_residues = model.residues.items.len;
-    const allocator = model.allocator;
-
-    // Phase 1: count added atoms per residue.
-    const added_counts = try allocator.alloc(u32, n_residues + 1);
-    defer allocator.free(added_counts);
-    @memset(added_counts, 0);
-    for (model.atoms.items) |atom| {
-        if (!atom.is_added) continue;
-        added_counts[atom.residue_idx] += 1;
-    }
-
-    // Phase 2: build prefix-sum offsets (length n_residues + 1).
-    const added_offsets = try allocator.alloc(u32, n_residues + 1);
-    defer allocator.free(added_offsets);
-    added_offsets[0] = 0;
-    for (0..n_residues) |r| {
-        added_offsets[r + 1] = added_offsets[r] + added_counts[r];
-    }
-    const total_added = added_offsets[n_residues];
-
-    // Phase 3: fill sorted atom indices (reuse added_counts as cursor).
-    const added_indices = try allocator.alloc(u32, total_added);
-    defer allocator.free(added_indices);
-    @memset(added_counts, 0);
-    for (model.atoms.items, 0..) |atom, atom_idx| {
-        if (!atom.is_added) continue;
-        const r = atom.residue_idx;
-        added_indices[added_offsets[r] + added_counts[r]] = @intCast(atom_idx);
-        added_counts[r] += 1;
-    }
-
     // Write rows grouped by residue: original heavy atoms then added H
     for (model.residues.items, 0..) |res, res_idx| {
-        const chain = model.chains.items[res.chain_idx];
-
         // Original heavy atoms: write rows from original loop data,
         // but use model atom coordinates (which may have been updated by
         // optimizers, e.g. amide flip swapping O/N positions).
@@ -316,126 +424,18 @@ fn writeAtomSitePreserving(writer: anytype, model: *const Model, orig_loop: *con
         }
 
         // Added H atoms for this residue — look up via pre-built index.
-        const h_start = added_offsets[res_idx];
-        const h_end = added_offsets[res_idx + 1];
-        for (added_indices[h_start..h_end]) |atom_idx| {
+        const h_start = h_index.offsets[res_idx];
+        const h_end = h_index.offsets[res_idx + 1];
+        for (h_index.indices[h_start..h_end]) |atom_idx| {
             const atom = model.atoms.items[atom_idx];
             // Skip absent H atoms (flipper sentinel)
             if (mover_mod.isAbsentH(atom)) continue;
 
-            for (0..w) |col| {
-                if (col > 0) try writer.writeByte(' ');
-                const cw = col_widths[col];
-                if (cm.group_pdb != null and col == cm.group_pdb.?) {
-                    try writePaddedCell(writer, "ATOM", cw);
-                } else if (cm.id != null and col == cm.id.?) {
-                    try writePaddedInt(writer, serial, cw);
-                } else if (cm.type_symbol != null and col == cm.type_symbol.?) {
-                    try writePaddedCell(writer, atomTypeSymbol(atom, output_isotope), cw);
-                } else if (cm.label_atom_id != null and col == cm.label_atom_id.?) {
-                    try writePaddedCell(writer, atom.nameSlice(), cw);
-                } else if (cm.label_alt_id != null and col == cm.label_alt_id.?) {
-                    if (atom.altloc == ' ') {
-                        try writePaddedCell(writer, ".", cw);
-                    } else {
-                        try writePaddedCell(writer, &[_]u8{atom.altloc}, cw);
-                    }
-                } else if (cm.label_comp_id != null and col == cm.label_comp_id.?) {
-                    try writePaddedCell(writer, res.compIdSlice(), cw);
-                } else if (cm.label_asym_id != null and col == cm.label_asym_id.?) {
-                    try writePaddedCell(writer, chain.labelSlice(), cw);
-                } else if (cm.label_entity_id != null and col == cm.label_entity_id.?) {
-                    const first_orig = res.atom_start;
-                    if (first_orig < orig_loop.length()) {
-                        try writePaddedCifValue(writer, orig_loop.val(first_orig, col) orelse ".", cw);
-                    } else {
-                        try writePaddedCell(writer, ".", cw);
-                    }
-                } else if (cm.label_seq_id != null and col == cm.label_seq_id.?) {
-                    try writePaddedInt(writer, res.seq_id, cw);
-                } else if (cm.cartn_x != null and col == cm.cartn_x.?) {
-                    try writePaddedFloat3(writer, atom.pos.x, cw);
-                } else if (cm.cartn_y != null and col == cm.cartn_y.?) {
-                    try writePaddedFloat3(writer, atom.pos.y, cw);
-                } else if (cm.cartn_z != null and col == cm.cartn_z.?) {
-                    try writePaddedFloat3(writer, atom.pos.z, cw);
-                } else if (cm.occupancy != null and col == cm.occupancy.?) {
-                    try writePaddedFloat2(writer, atom.occupancy, cw);
-                } else if (cm.b_factor != null and col == cm.b_factor.?) {
-                    try writePaddedFloat2(writer, atom.b_factor, cw);
-                } else if (cm.auth_seq_id != null and col == cm.auth_seq_id.?) {
-                    const first_orig = res.atom_start;
-                    if (first_orig < orig_loop.length()) {
-                        try writePaddedCifValue(writer, orig_loop.val(first_orig, col) orelse ".", cw);
-                    } else {
-                        try writePaddedInt(writer, res.seq_id, cw);
-                    }
-                } else if (cm.auth_comp_id != null and col == cm.auth_comp_id.?) {
-                    try writePaddedCell(writer, res.compIdSlice(), cw);
-                } else if (cm.auth_asym_id != null and col == cm.auth_asym_id.?) {
-                    try writePaddedCell(writer, chain.authSlice(), cw);
-                } else if (cm.auth_atom_id != null and col == cm.auth_atom_id.?) {
-                    try writePaddedCell(writer, atom.nameSlice(), cw);
-                } else if (cm.pdb_model_num != null and col == cm.pdb_model_num.?) {
-                    try writePaddedInt(writer, model.model_num, cw);
-                } else {
-                    const first_orig = res.atom_start;
-                    if (first_orig < orig_loop.length()) {
-                        try writePaddedCifValue(writer, orig_loop.val(first_orig, col) orelse ".", cw);
-                    } else {
-                        try writePaddedCell(writer, ".", cw);
-                    }
-                }
-            }
-            try writer.writeByte('\n');
+            const first_orig_row = res.atom_start;
+            try writeAddedHRow(writer, model, atom, res, serial, cm, col_widths, orig_loop, first_orig_row, output_isotope);
             serial += 1;
         }
     }
-}
-
-/// Write a cell value padded to min_width with trailing spaces.
-fn writePaddedCell(writer: anytype, val: []const u8, min_width: usize) !void {
-    try writer.writeAll(val);
-    var i: usize = val.len;
-    while (i < min_width) : (i += 1) {
-        try writer.writeByte(' ');
-    }
-}
-
-/// Write a CIF value with quoting, then pad to min_width.
-fn writePaddedCifValue(writer: anytype, val: []const u8, min_width: usize) !void {
-    var buf: [256]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
-    writeCifValueInLoop(fbs.writer(), val) catch {
-        // Value too large for buffer — write directly without padding
-        try writeCifValueInLoop(writer, val);
-        return;
-    };
-    try writePaddedCell(writer, fbs.getWritten(), min_width);
-}
-
-/// Write an integer value padded to min_width.
-fn writePaddedInt(writer: anytype, val: anytype, min_width: usize) !void {
-    var buf: [20]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
-    fbs.writer().print("{d}", .{val}) catch unreachable;
-    try writePaddedCell(writer, fbs.getWritten(), min_width);
-}
-
-/// Write a float3 value padded to min_width.
-fn writePaddedFloat3(writer: anytype, val: f32, min_width: usize) !void {
-    var buf: [64]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
-    format.writeFixedFloat3(fbs.writer(), val) catch unreachable;
-    try writePaddedCell(writer, fbs.getWritten(), min_width);
-}
-
-/// Write a float2 value padded to min_width.
-fn writePaddedFloat2(writer: anytype, val: f32, min_width: usize) !void {
-    var buf: [64]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
-    format.writeFixedFloat2(fbs.writer(), val) catch unreachable;
-    try writePaddedCell(writer, fbs.getWritten(), min_width);
 }
 
 /// Write _atom_site loop preserving the original column structure for multiple models.
@@ -460,50 +460,7 @@ fn writeMultiModelAtomSitePreserving(
         try writer.print("{s}\n", .{tag});
     }
 
-    // Map column indices (same as single-model version)
-    const ColMap = struct {
-        group_pdb: ?usize = null,
-        id: ?usize = null,
-        type_symbol: ?usize = null,
-        label_atom_id: ?usize = null,
-        label_alt_id: ?usize = null,
-        label_comp_id: ?usize = null,
-        label_asym_id: ?usize = null,
-        label_entity_id: ?usize = null,
-        label_seq_id: ?usize = null,
-        cartn_x: ?usize = null,
-        cartn_y: ?usize = null,
-        cartn_z: ?usize = null,
-        occupancy: ?usize = null,
-        b_factor: ?usize = null,
-        auth_seq_id: ?usize = null,
-        auth_comp_id: ?usize = null,
-        auth_asym_id: ?usize = null,
-        auth_atom_id: ?usize = null,
-        pdb_model_num: ?usize = null,
-    };
-    var cm = ColMap{};
-    for (orig_loop.tags.items, 0..) |tag, i| {
-        if (std.ascii.eqlIgnoreCase(tag, "_atom_site.group_PDB")) cm.group_pdb = i;
-        if (std.ascii.eqlIgnoreCase(tag, "_atom_site.id")) cm.id = i;
-        if (std.ascii.eqlIgnoreCase(tag, "_atom_site.type_symbol")) cm.type_symbol = i;
-        if (std.ascii.eqlIgnoreCase(tag, "_atom_site.label_atom_id")) cm.label_atom_id = i;
-        if (std.ascii.eqlIgnoreCase(tag, "_atom_site.label_alt_id")) cm.label_alt_id = i;
-        if (std.ascii.eqlIgnoreCase(tag, "_atom_site.label_comp_id")) cm.label_comp_id = i;
-        if (std.ascii.eqlIgnoreCase(tag, "_atom_site.label_asym_id")) cm.label_asym_id = i;
-        if (std.ascii.eqlIgnoreCase(tag, "_atom_site.label_entity_id")) cm.label_entity_id = i;
-        if (std.ascii.eqlIgnoreCase(tag, "_atom_site.label_seq_id")) cm.label_seq_id = i;
-        if (std.ascii.eqlIgnoreCase(tag, "_atom_site.Cartn_x")) cm.cartn_x = i;
-        if (std.ascii.eqlIgnoreCase(tag, "_atom_site.Cartn_y")) cm.cartn_y = i;
-        if (std.ascii.eqlIgnoreCase(tag, "_atom_site.Cartn_z")) cm.cartn_z = i;
-        if (std.ascii.eqlIgnoreCase(tag, "_atom_site.occupancy")) cm.occupancy = i;
-        if (std.ascii.eqlIgnoreCase(tag, "_atom_site.B_iso_or_equiv")) cm.b_factor = i;
-        if (std.ascii.eqlIgnoreCase(tag, "_atom_site.auth_seq_id")) cm.auth_seq_id = i;
-        if (std.ascii.eqlIgnoreCase(tag, "_atom_site.auth_comp_id")) cm.auth_comp_id = i;
-        if (std.ascii.eqlIgnoreCase(tag, "_atom_site.auth_asym_id")) cm.auth_asym_id = i;
-        if (std.ascii.eqlIgnoreCase(tag, "_atom_site.auth_atom_id")) cm.auth_atom_id = i;
-        if (std.ascii.eqlIgnoreCase(tag, "_atom_site.pdbx_PDB_model_num")) cm.pdb_model_num = i;
-    }
+    const cm = buildColMap(orig_loop);
 
     // Compute column widths from original data
     const col_widths = try allocator.alloc(usize, w);
@@ -550,35 +507,11 @@ fn writeMultiModelAtomSitePreserving(
         const cif_row_offset = entry.cif_row_start;
 
         // Pre-index added H atoms for this model
-        const n_residues = model.residues.items.len;
-        const added_counts = try allocator.alloc(u32, n_residues + 1);
-        defer allocator.free(added_counts);
-        @memset(added_counts, 0);
-        for (model.atoms.items) |atom| {
-            if (!atom.is_added) continue;
-            added_counts[atom.residue_idx] += 1;
-        }
-        const added_offsets = try allocator.alloc(u32, n_residues + 1);
-        defer allocator.free(added_offsets);
-        added_offsets[0] = 0;
-        for (0..n_residues) |r| {
-            added_offsets[r + 1] = added_offsets[r] + added_counts[r];
-        }
-        const total_added = added_offsets[n_residues];
-        const added_indices = try allocator.alloc(u32, total_added);
-        defer allocator.free(added_indices);
-        @memset(added_counts, 0);
-        for (model.atoms.items, 0..) |atom, atom_idx| {
-            if (!atom.is_added) continue;
-            const r = atom.residue_idx;
-            added_indices[added_offsets[r] + added_counts[r]] = @intCast(atom_idx);
-            added_counts[r] += 1;
-        }
+        const h_index = try buildAddedHIndex(model);
+        defer h_index.deinit(model.allocator);
 
         // Write rows grouped by residue
         for (model.residues.items, 0..) |res, res_idx| {
-            const chain = model.chains.items[res.chain_idx];
-
             // Original heavy atoms — use cif_row_offset for orig_loop access
             for (res.atom_start..res.atom_end) |local_idx| {
                 const orig_row_idx = cif_row_offset + @as(u32, @intCast(local_idx));
@@ -605,77 +538,14 @@ fn writeMultiModelAtomSitePreserving(
             }
 
             // Added H atoms for this residue
-            const h_start = added_offsets[res_idx];
-            const h_end = added_offsets[res_idx + 1];
-            for (added_indices[h_start..h_end]) |atom_idx| {
+            const h_start = h_index.offsets[res_idx];
+            const h_end = h_index.offsets[res_idx + 1];
+            for (h_index.indices[h_start..h_end]) |atom_idx| {
                 const atom = model.atoms.items[atom_idx];
                 if (mover_mod.isAbsentH(atom)) continue;
 
-                for (0..w) |col| {
-                    if (col > 0) try writer.writeByte(' ');
-                    const cw = col_widths[col];
-                    if (cm.group_pdb != null and col == cm.group_pdb.?) {
-                        try writePaddedCell(writer, "ATOM", cw);
-                    } else if (cm.id != null and col == cm.id.?) {
-                        try writePaddedInt(writer, serial, cw);
-                    } else if (cm.type_symbol != null and col == cm.type_symbol.?) {
-                        try writePaddedCell(writer, atomTypeSymbol(atom, output_isotope), cw);
-                    } else if (cm.label_atom_id != null and col == cm.label_atom_id.?) {
-                        try writePaddedCell(writer, atom.nameSlice(), cw);
-                    } else if (cm.label_alt_id != null and col == cm.label_alt_id.?) {
-                        if (atom.altloc == ' ') {
-                            try writePaddedCell(writer, ".", cw);
-                        } else {
-                            try writePaddedCell(writer, &[_]u8{atom.altloc}, cw);
-                        }
-                    } else if (cm.label_comp_id != null and col == cm.label_comp_id.?) {
-                        try writePaddedCell(writer, res.compIdSlice(), cw);
-                    } else if (cm.label_asym_id != null and col == cm.label_asym_id.?) {
-                        try writePaddedCell(writer, chain.labelSlice(), cw);
-                    } else if (cm.label_entity_id != null and col == cm.label_entity_id.?) {
-                        const first_orig_row = cif_row_offset + res.atom_start;
-                        if (first_orig_row < orig_loop.length()) {
-                            try writePaddedCifValue(writer, orig_loop.val(first_orig_row, col) orelse ".", cw);
-                        } else {
-                            try writePaddedCell(writer, ".", cw);
-                        }
-                    } else if (cm.label_seq_id != null and col == cm.label_seq_id.?) {
-                        try writePaddedInt(writer, res.seq_id, cw);
-                    } else if (cm.cartn_x != null and col == cm.cartn_x.?) {
-                        try writePaddedFloat3(writer, atom.pos.x, cw);
-                    } else if (cm.cartn_y != null and col == cm.cartn_y.?) {
-                        try writePaddedFloat3(writer, atom.pos.y, cw);
-                    } else if (cm.cartn_z != null and col == cm.cartn_z.?) {
-                        try writePaddedFloat3(writer, atom.pos.z, cw);
-                    } else if (cm.occupancy != null and col == cm.occupancy.?) {
-                        try writePaddedFloat2(writer, atom.occupancy, cw);
-                    } else if (cm.b_factor != null and col == cm.b_factor.?) {
-                        try writePaddedFloat2(writer, atom.b_factor, cw);
-                    } else if (cm.auth_seq_id != null and col == cm.auth_seq_id.?) {
-                        const first_orig_row = cif_row_offset + res.atom_start;
-                        if (first_orig_row < orig_loop.length()) {
-                            try writePaddedCifValue(writer, orig_loop.val(first_orig_row, col) orelse ".", cw);
-                        } else {
-                            try writePaddedInt(writer, res.seq_id, cw);
-                        }
-                    } else if (cm.auth_comp_id != null and col == cm.auth_comp_id.?) {
-                        try writePaddedCell(writer, res.compIdSlice(), cw);
-                    } else if (cm.auth_asym_id != null and col == cm.auth_asym_id.?) {
-                        try writePaddedCell(writer, chain.authSlice(), cw);
-                    } else if (cm.auth_atom_id != null and col == cm.auth_atom_id.?) {
-                        try writePaddedCell(writer, atom.nameSlice(), cw);
-                    } else if (cm.pdb_model_num != null and col == cm.pdb_model_num.?) {
-                        try writePaddedInt(writer, model.model_num, cw);
-                    } else {
-                        const first_orig_row = cif_row_offset + res.atom_start;
-                        if (first_orig_row < orig_loop.length()) {
-                            try writePaddedCifValue(writer, orig_loop.val(first_orig_row, col) orelse ".", cw);
-                        } else {
-                            try writePaddedCell(writer, ".", cw);
-                        }
-                    }
-                }
-                try writer.writeByte('\n');
+                const first_orig_row = cif_row_offset + res.atom_start;
+                try writeAddedHRow(writer, model, atom, res, serial, cm, col_widths, orig_loop, first_orig_row, output_isotope);
                 serial += 1;
             }
         }
@@ -743,32 +613,8 @@ fn writeAtomSite(writer: anytype, model: *const Model, output_isotope: place.Out
     // Write atoms grouped by residue: heavy atoms first, then added H atoms.
     // The placer appends H atoms at the end of model.atoms, so we need to
     // reorder output so each residue's H atoms follow its heavy atoms.
-    // Pre-index added H atoms by residue_idx to avoid O(N*R) inner scan.
-    const n_residues = model.residues.items.len;
-    const allocator = model.allocator;
-    const added_counts = try allocator.alloc(u32, n_residues + 1);
-    defer allocator.free(added_counts);
-    @memset(added_counts, 0);
-    for (model.atoms.items) |atom| {
-        if (!atom.is_added) continue;
-        added_counts[atom.residue_idx] += 1;
-    }
-    const added_offsets = try allocator.alloc(u32, n_residues + 1);
-    defer allocator.free(added_offsets);
-    added_offsets[0] = 0;
-    for (0..n_residues) |r| {
-        added_offsets[r + 1] = added_offsets[r] + added_counts[r];
-    }
-    const total_added = added_offsets[n_residues];
-    const added_indices = try allocator.alloc(u32, total_added);
-    defer allocator.free(added_indices);
-    @memset(added_counts, 0);
-    for (model.atoms.items, 0..) |atom, atom_idx| {
-        if (!atom.is_added) continue;
-        const r = atom.residue_idx;
-        added_indices[added_offsets[r] + added_counts[r]] = @intCast(atom_idx);
-        added_counts[r] += 1;
-    }
+    const h_index = try buildAddedHIndex(model);
+    defer h_index.deinit(model.allocator);
 
     var serial: u32 = 1;
     for (model.residues.items, 0..) |res, res_idx| {
@@ -778,9 +624,9 @@ fn writeAtomSite(writer: anytype, model: *const Model, output_isotope: place.Out
             serial += 1;
         }
         // Added H atoms for this residue — look up via pre-built index.
-        const h_start = added_offsets[res_idx];
-        const h_end = added_offsets[res_idx + 1];
-        for (added_indices[h_start..h_end]) |atom_idx| {
+        const h_start = h_index.offsets[res_idx];
+        const h_end = h_index.offsets[res_idx + 1];
+        for (h_index.indices[h_start..h_end]) |atom_idx| {
             const atom = model.atoms.items[atom_idx];
             // Skip absent H atoms (flipper sentinel position)
             if (mover_mod.isAbsentH(atom)) continue;
@@ -828,6 +674,55 @@ fn atomTypeSymbol(atom: Atom, output_isotope: place.OutputIsotope) []const u8 {
     if (output_isotope == .deuterium and atom.is_added and atom.is_hydrogen) return "D";
     return elementSymbol(atom.element_type);
 }
+
+// ── Padding helpers ───────────────────────────────────────────────────────────
+
+/// Write a cell value padded to min_width with trailing spaces.
+fn writePaddedCell(writer: anytype, val: []const u8, min_width: usize) !void {
+    try writer.writeAll(val);
+    var i: usize = val.len;
+    while (i < min_width) : (i += 1) {
+        try writer.writeByte(' ');
+    }
+}
+
+/// Write a CIF value with quoting, then pad to min_width.
+fn writePaddedCifValue(writer: anytype, val: []const u8, min_width: usize) !void {
+    var buf: [256]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buf);
+    writeCifValueInLoop(fbs.writer(), val) catch {
+        // Value too large for buffer — write directly without padding
+        try writeCifValueInLoop(writer, val);
+        return;
+    };
+    try writePaddedCell(writer, fbs.getWritten(), min_width);
+}
+
+/// Write an integer value padded to min_width.
+fn writePaddedInt(writer: anytype, val: anytype, min_width: usize) !void {
+    var buf: [20]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buf);
+    fbs.writer().print("{d}", .{val}) catch unreachable;
+    try writePaddedCell(writer, fbs.getWritten(), min_width);
+}
+
+/// Write a float3 value padded to min_width.
+fn writePaddedFloat3(writer: anytype, val: f32, min_width: usize) !void {
+    var buf: [64]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buf);
+    format.writeFixedFloat3(fbs.writer(), val) catch unreachable;
+    try writePaddedCell(writer, fbs.getWritten(), min_width);
+}
+
+/// Write a float2 value padded to min_width.
+fn writePaddedFloat2(writer: anytype, val: f32, min_width: usize) !void {
+    var buf: [64]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buf);
+    format.writeFixedFloat2(fbs.writer(), val) catch unreachable;
+    try writePaddedCell(writer, fbs.getWritten(), min_width);
+}
+
+// ── Optimization log ──────────────────────────────────────────────────────────
 
 /// Write optimization log as a custom mmCIF category.
 pub fn writeZreduceLog(
