@@ -45,29 +45,29 @@ pub fn writeWithDocumentWithPolicy(writer: anytype, model: *const Model, doc: ?*
             const block = &d.blocks.items[0];
             try writer.print("data_{s}\n", .{block.name});
 
-            // Write all items, replacing _atom_site loop
+            // Write all items, replacing _atom_site loop.
+            // Each item is preceded by a single '#' separator line.
             var atom_site_written = false;
             for (block.items.items) |item| {
+                try writer.writeAll("#\n");
                 switch (item) {
                     .pair => |p| {
                         try writePairValue(writer, p.tag, p.value);
                     },
                     .loop => |l| {
                         if (isAtomSiteLoop(&l)) {
-                            try writer.writeAll("#\n");
                             try writeAtomSitePreserving(writer, model, &l, bond_policy.output_isotope);
-                            try writer.writeAll("#\n");
                             atom_site_written = true;
                         } else {
-                            try writeLoop(writer, &l);
+                            try writeLoopBody(writer, &l);
                         }
                     },
                 }
             }
+            try writer.writeAll("#\n");
 
             // If no atom_site loop was found in original, append it
             if (!atom_site_written) {
-                try writer.writeAll("#\n");
                 try writeAtomSite(writer, model, bond_policy.output_isotope);
                 try writer.writeAll("#\n");
             }
@@ -305,9 +305,9 @@ fn writeAtomSitePreserving(writer: anytype, model: *const Model, orig_loop: *con
     }
 }
 
-/// Write a CIF loop as-is (non-atom_site categories).
-fn writeLoop(writer: anytype, loop: *const Loop) !void {
-    try writer.writeAll("#\nloop_\n");
+/// Write a CIF loop body (tags + data rows) without surrounding '#' separators.
+fn writeLoopBody(writer: anytype, loop: *const Loop) !void {
+    try writer.writeAll("loop_\n");
     for (loop.tags.items) |tag| {
         try writer.print("{s}\n", .{tag});
     }
@@ -322,7 +322,6 @@ fn writeLoop(writer: anytype, loop: *const Loop) !void {
             try writer.writeByte('\n');
         }
     }
-    try writer.writeAll("#\n");
 }
 
 /// Write the _atom_site loop with all atoms.
