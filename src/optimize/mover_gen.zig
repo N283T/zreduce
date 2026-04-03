@@ -286,9 +286,10 @@ pub fn generateMovers(
 
                 // Find all 3 H atoms with same (residue_idx, center, hint).
                 // Use both standard plan lookup and CCD fallback to match center.
+                // Scan only added atoms (atoms[original_atom_count..]) for efficiency.
                 var h_indices: [3]u32 = undefined;
                 var h_count: u32 = 0;
-                for (atoms, 0..) |*a, ai| {
+                for (atoms[mdl.original_atom_count..], mdl.original_atom_count..) |*a, ai| {
                     if (a.residue_idx == residue_idx and a.is_added and a.mover_hint == atom.mover_hint and a.altloc == target_altloc) {
                         // Resolve this H's center via standard plan or CCD
                         var a_center: [4]u8 = undefined;
