@@ -17,6 +17,15 @@ pub fn mergeFlags(a: AtomFlags, b: AtomFlags) AtomFlags {
     return @bitCast(@as(u8, @bitCast(a)) | @as(u8, @bitCast(b)));
 }
 
+pub const MoverHint = enum(u3) {
+    none,
+    rotate, // OH, SH
+    rotate_nh3, // NH3+
+    rotate_methyl, // CH3
+    flip_amide, // Asn/Gln
+    flip_his, // His
+};
+
 pub const AtomTypeInfo = struct {
     explicit_radius: f32,
     implicit_radius: f32,

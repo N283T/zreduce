@@ -20,14 +20,7 @@ pub const PlacementType = enum(u3) {
     hxy, // linear
 };
 
-pub const MoverHint = enum(u3) {
-    none,
-    rotate, // OH, SH
-    rotate_nh3, // NH3+
-    rotate_methyl, // CH3
-    flip_amide, // Asn/Gln
-    flip_his, // His
-};
+pub const MoverHint = element.MoverHint;
 
 pub const PlacementPlan = struct {
     h_name: [4]u8,
