@@ -174,6 +174,7 @@ pub fn findCliques(allocator: Allocator, graph: *const InteractionGraph) ![][]u3
         if (visited[i]) continue;
         // BFS from i
         var component = std.ArrayListUnmanaged(u32).empty;
+        errdefer component.deinit(allocator);
         var queue = std.ArrayListUnmanaged(u32).empty;
         defer queue.deinit(allocator);
 
