@@ -42,6 +42,7 @@ const AtomSiteColumns = struct {
     pdbx_PDB_ins_code: ?usize = null,
     label_entity_id: ?usize = null,
     auth_seq_id: ?usize = null,
+    pdbx_PDB_model_num: ?usize = null,
 };
 
 /// Compare a Chain's label_asym_id with a string from the CIF data.
@@ -178,6 +179,7 @@ pub fn parseModel(allocator: Allocator, source: []const u8) MmcifError!Model {
     cols.pdbx_PDB_ins_code = loop.findTag("_atom_site.pdbx_PDB_ins_code");
     cols.label_entity_id = loop.findTag("_atom_site.label_entity_id");
     cols.auth_seq_id = loop.findTag("_atom_site.auth_seq_id");
+    cols.pdbx_PDB_model_num = loop.findTag("_atom_site.pdbx_PDB_model_num");
 
     // Require x, y, z
     if (cols.cartn_x == null or cols.cartn_y == null or cols.cartn_z == null) {
@@ -199,7 +201,20 @@ pub fn parseModel(allocator: Allocator, source: []const u8) MmcifError!Model {
     var in_chain = false;
     var in_residue = false;
 
+    // Multi-model filter: only parse the first model
+    var first_model_num: ?[]const u8 = null;
+
     for (0..nrows) |row| {
+        // Skip rows that belong to models other than the first
+        if (cols.pdbx_PDB_model_num) |model_col| {
+            const model_str = cif.asString(loop.val(row, model_col) orelse "1");
+            if (first_model_num) |first| {
+                if (!std.mem.eql(u8, model_str, first)) break;
+            } else {
+                first_model_num = model_str;
+            }
+        }
+
         const x_str = loop.val(row, cols.cartn_x.?) orelse return MmcifError.InvalidCoordinateValue;
         const y_str = loop.val(row, cols.cartn_y.?) orelse return MmcifError.InvalidCoordinateValue;
         const z_str = loop.val(row, cols.cartn_z.?) orelse return MmcifError.InvalidCoordinateValue;
@@ -558,6 +573,19 @@ test "parseModel without _entity loop keeps entity_type unknown" {
     for (mdl.residues.items) |res| {
         try testing.expectEqual(EntityType.unknown, res.entity_type);
     }
+}
+
+test "parseModel extracts only the first model from multi-model mmCIF" {
+    const source = @embedFile("test_data/multi_model.cif");
+    var mdl = try parseModel(testing.allocator, source);
+    defer mdl.deinit();
+
+    // Only 4 atoms from model 1, not 8
+    try testing.expectEqual(@as(usize, 4), mdl.atoms.items.len);
+
+    // Verify coordinates are from model 1
+    try testing.expectApproxEqAbs(@as(f32, 1.0), mdl.atoms.items[0].pos.x, 0.01);
+    try testing.expectApproxEqAbs(@as(f32, 2.0), mdl.atoms.items[1].pos.x, 0.01);
 }
 
 test "entityTypeFromString maps correctly" {
