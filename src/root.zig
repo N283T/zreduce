@@ -5,6 +5,7 @@ pub const element = @import("element.zig");
 pub const cif = @import("cif.zig");
 pub const model = @import("model.zig");
 pub const mmcif = @import("mmcif.zig");
+pub const pdb = @import("pdb.zig");
 pub const place = @import("place.zig");
 pub const ccd = @import("ccd.zig");
 pub const ccd_binary = @import("ccd_binary.zig");
