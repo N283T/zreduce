@@ -72,8 +72,13 @@ pub const BatchResult = struct {
 // Directory scanning
 // ---------------------------------------------------------------------------
 
-fn isCifFile(name: []const u8) bool {
-    return std.mem.endsWith(u8, name, ".cif") or std.mem.endsWith(u8, name, ".cif.gz");
+fn isStructureFile(name: []const u8) bool {
+    return std.mem.endsWith(u8, name, ".cif") or
+        std.mem.endsWith(u8, name, ".cif.gz") or
+        std.mem.endsWith(u8, name, ".pdb") or
+        std.mem.endsWith(u8, name, ".pdb.gz") or
+        std.mem.endsWith(u8, name, ".ent") or
+        std.mem.endsWith(u8, name, ".ent.gz");
 }
 
 pub fn scanDirectory(allocator: Allocator, dir_path: []const u8) ![][]const u8 {
@@ -90,7 +95,7 @@ pub fn scanDirectory(allocator: Allocator, dir_path: []const u8) ![][]const u8 {
     while (try iter.next()) |entry| {
         if (entry.kind != .file) continue;
         if (entry.name.len == 0 or entry.name[0] == '.') continue;
-        if (!isCifFile(entry.name)) continue;
+        if (!isStructureFile(entry.name)) continue;
         const owned = try allocator.dupe(u8, entry.name);
         try names.append(allocator, owned);
     }
@@ -158,6 +163,7 @@ fn processFileInBatch(
         .protonation_path = config.protonation_path,
         .fix_path = config.fix_path,
         .strip_h = config.strip_h,
+        .format = run_mod.detectFormat(input_path),
     };
 
     var timer = try std.time.Timer.start();
@@ -526,11 +532,11 @@ pub fn run(allocator: Allocator, config: BatchConfig) !void {
     }
 
     if (files.len == 0) {
-        std.debug.print("Error: no .cif/.cif.gz files found in '{s}'\n", .{config.input_dir});
+        std.debug.print("Error: no structure files (.cif, .pdb, .ent, or .gz variants) found in '{s}'\n", .{config.input_dir});
         return error.NoFilesFound;
     }
 
-    std.debug.print("Found {d} .cif files in '{s}'\n", .{ files.len, config.input_dir });
+    std.debug.print("Found {d} structure files in '{s}'\n", .{ files.len, config.input_dir });
 
     // 3. Determine output directory
     const output_dir: []const u8 = if (config.output_dir) |od|
@@ -600,15 +606,18 @@ pub fn run(allocator: Allocator, config: BatchConfig) !void {
 // Tests
 // ---------------------------------------------------------------------------
 
-test "isCifFile" {
-    try std.testing.expect(isCifFile("test.cif"));
-    try std.testing.expect(isCifFile("path/to/file.cif"));
-    try std.testing.expect(isCifFile("test.cif.gz"));
-    try std.testing.expect(isCifFile("path/to/file.cif.gz"));
-    try std.testing.expect(!isCifFile("test.pdb"));
-    try std.testing.expect(!isCifFile("test.gz"));
-    try std.testing.expect(!isCifFile("cif"));
-    try std.testing.expect(!isCifFile(""));
+test "isStructureFile" {
+    try std.testing.expect(isStructureFile("test.cif"));
+    try std.testing.expect(isStructureFile("path/to/file.cif"));
+    try std.testing.expect(isStructureFile("test.cif.gz"));
+    try std.testing.expect(isStructureFile("path/to/file.cif.gz"));
+    try std.testing.expect(isStructureFile("test.pdb"));
+    try std.testing.expect(isStructureFile("test.pdb.gz"));
+    try std.testing.expect(isStructureFile("test.ent"));
+    try std.testing.expect(isStructureFile("test.ent.gz"));
+    try std.testing.expect(!isStructureFile("test.gz"));
+    try std.testing.expect(!isStructureFile("cif"));
+    try std.testing.expect(!isStructureFile(""));
 }
 
 test "writeJsonlLine ok result" {
@@ -652,7 +661,7 @@ test "scanDirectory finds cif files" {
         try std.testing.expect(std.mem.order(u8, a, b) == .lt);
     }
     for (files) |f| {
-        try std.testing.expect(isCifFile(f));
+        try std.testing.expect(isStructureFile(f));
     }
 }
 
