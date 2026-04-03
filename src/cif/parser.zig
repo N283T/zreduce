@@ -90,6 +90,13 @@ pub fn readString(allocator: Allocator, source: []const u8) !Document {
                     pending = next_tok;
                 }
 
+                // Validate that value count is divisible by tag count.
+                if (loop.tags.items.len > 0 and
+                    loop.values.items.len % loop.tags.items.len != 0)
+                {
+                    return error.LoopValueCountMismatch;
+                }
+
                 try block.items.append(allocator, .{ .loop = loop });
             },
 

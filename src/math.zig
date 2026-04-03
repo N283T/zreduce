@@ -217,7 +217,7 @@ test "angle 90 degrees" {
 /// Uses Schraudolph's integer-cast method. Max relative error ~6%.
 /// Suitable for contact scoring where relative ranking matters, not absolute values.
 pub fn fastExp(x: f32) f32 {
-    const clamped = @max(x, -87.0);
+    const clamped = @min(@max(x, -87.0), 88.0);
     const v: i32 = @intFromFloat(12102203.0 * clamped + 1065353216.0);
     return @bitCast(@as(u32, @intCast(@max(v, 0))));
 }

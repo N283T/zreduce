@@ -354,7 +354,7 @@ pub fn generateMovers(
                         axis_idx,
                         residue_idx,
                     ),
-                    else => unreachable,
+                    else => continue,
                 };
                 try movers.append(allocator, mover);
             },
@@ -479,7 +479,7 @@ pub fn generateMovers(
                 );
                 try movers.append(allocator, m);
             },
-            .none => unreachable,
+            .none => continue,
         }
     }
 
