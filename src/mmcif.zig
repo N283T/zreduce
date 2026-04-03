@@ -172,7 +172,9 @@ pub fn parseModel(allocator: Allocator, source: []const u8) MmcifError!Model {
     var entries = try parseModels(allocator, source, .first);
     defer {
         // Free all entries except index 0 (which we return)
-        for (entries.items[1..]) |*e| e.model.deinit();
+        if (entries.items.len > 1) {
+            for (entries.items[1..]) |*e| e.model.deinit();
+        }
         entries.deinit(allocator);
     }
     if (entries.items.len == 0) return MmcifError.NoAtomSiteLoop;

@@ -159,6 +159,11 @@ fn processFileMmcif(allocator: Allocator, config: ProcessConfig, source: []const
     }
 
     // 3a. Strip existing hydrogens if requested
+    // Note: when strip_h is active, cif_row_start/end in entries become stale
+    // after stripDocumentHydrogens compacts the doc's _atom_site loop. We set
+    // use_doc=false to use the non-preserving writer path, which doesn't depend
+    // on orig_loop row indices.
+    var use_doc_for_write = true;
     if (config.strip_h) {
         for (entries.items) |*entry| {
             const n_stripped = entry.model.stripHydrogens();
@@ -167,6 +172,10 @@ fn processFileMmcif(allocator: Allocator, config: ProcessConfig, source: []const
             }
         }
         stripDocumentHydrogens(&doc.blocks.items[0]);
+        // Invalidate preserving mode for multi-model to avoid stale row offsets
+        if (entries.items.len > 1) {
+            use_doc_for_write = false;
+        }
     }
 
     // 3b. Parse inline components (once — model-independent)
@@ -205,6 +214,10 @@ fn processFileMmcif(allocator: Allocator, config: ProcessConfig, source: []const
 
     for (entries.items) |*entry| {
         const mdl = &entry.model;
+
+        if (!config.quiet and entries.items.len > 1) {
+            std.debug.print("  Processing model {d} ({d} atoms)\n", .{ entry.model_num, mdl.atoms.items.len });
+        }
 
         // Build per-model atom lookup for bond parsing
         var atom_lookup = try zreduce.mmcif.buildAtomLookupForRange(allocator, block, entry.cif_row_start, entry.cif_row_end);
@@ -310,19 +323,19 @@ fn processFileMmcif(allocator: Allocator, config: ProcessConfig, source: []const
             var gw = try zreduce.gzip.GzipWriter.init(allocator, out_path);
             errdefer gw.close() catch {};
             const aw = gw.anyWriter();
-            try zreduce.writer.mmcif_writer.writeMultiModelWithDocumentWithPolicy(&aw, entries.items, &doc, config.bond_policy);
+            try zreduce.writer.mmcif_writer.writeMultiModelWithDocumentWithPolicy(&aw, entries.items, if (use_doc_for_write) &doc else null, config.bond_policy);
             try gw.close();
         } else {
             const file = try std.fs.cwd().createFile(out_path, .{});
             defer file.close();
             var fw = file.writer(&out_buf);
-            try zreduce.writer.mmcif_writer.writeMultiModelWithDocumentWithPolicy(&fw.interface, entries.items, &doc, config.bond_policy);
+            try zreduce.writer.mmcif_writer.writeMultiModelWithDocumentWithPolicy(&fw.interface, entries.items, if (use_doc_for_write) &doc else null, config.bond_policy);
             try fw.interface.flush();
         }
     } else {
         const stdout = std.fs.File.stdout();
         var sw = stdout.writer(&out_buf);
-        try zreduce.writer.mmcif_writer.writeMultiModelWithDocumentWithPolicy(&sw.interface, entries.items, &doc, config.bond_policy);
+        try zreduce.writer.mmcif_writer.writeMultiModelWithDocumentWithPolicy(&sw.interface, entries.items, if (use_doc_for_write) &doc else null, config.bond_policy);
         try sw.interface.flush();
     }
 
