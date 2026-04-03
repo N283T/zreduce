@@ -341,7 +341,7 @@ pub fn applyChemistryWithConfig(mdl: *Model, config: PlacementConfig) void {
             if (atom.is_hydrogen) continue;
 
             // Apply standard residue annotations (replace flags, but preserve bonded_inter_residue)
-            const has_std_ann = if (chemistry.getAnnotationWithOverride(comp_id, atom.name, protonation_state)) |ann| blk: {
+            const has_std_ann = if (chemistry.getAnnotationWithOverride(comp_id, atom.name.buf, protonation_state)) |ann| blk: {
                 atom.element_type = ann.atom_type;
                 const keep_bonded = atom.flags.bonded_inter_residue;
                 atom.flags = ann.flags;
@@ -352,7 +352,7 @@ pub fn applyChemistryWithConfig(mdl: *Model, config: PlacementConfig) void {
 
             // Apply terminal annotations (merge flags via OR)
             // Only set element_type/vdw_radius for atoms without standard annotation (e.g. OXT)
-            if (chemistry.getTerminalAnnotation(atom.name, is_real_nterm, is_cterm)) |term_ann| {
+            if (chemistry.getTerminalAnnotation(atom.name.buf, is_real_nterm, is_cterm)) |term_ann| {
                 atom.flags = element.mergeFlags(atom.flags, term_ann.flags);
                 if (!has_std_ann) {
                     atom.element_type = term_ann.atom_type;
@@ -384,7 +384,7 @@ fn shouldSkipPlanForProtonation(comp_id: []const u8, plan: *const standard.Place
 /// Returns the actual stored name bytes, which may differ from PDB-padded format.
 fn findAtomName(mdl: *const Model, res: Residue, name: [4]u8, target_altloc: u8) ?[4]u8 {
     const a = findAtom(mdl, res, name, target_altloc) orelse return null;
-    return a.name;
+    return a.name.buf;
 }
 
 /// Extend inter-residue atom names with implicit peptide bond atoms.
@@ -426,7 +426,7 @@ fn collectAtomNames(allocator: std.mem.Allocator, mdl: *const Model, res: Residu
     const atoms = mdl.atoms.items[res.atom_start..res.atom_end];
     const result = try allocator.alloc([4]u8, atoms.len);
     for (atoms, 0..) |a, i| {
-        result[i] = a.name;
+        result[i] = a.name.buf;
     }
     return result;
 }
@@ -442,11 +442,11 @@ fn collectInterResidueAtomNames(allocator: std.mem.Allocator, mdl: *const Model,
         if (bond.source == bond_mod.BondSource.struct_conn or bond.source == bond_mod.BondSource.branch_link) {
             if (bond.atom_1 >= res.atom_start and bond.atom_1 < res.atom_end) {
                 const atom = mdl.atoms.items[bond.atom_1];
-                if (!atom.is_hydrogen) try names.append(allocator, atom.name);
+                if (!atom.is_hydrogen) try names.append(allocator, atom.name.buf);
             }
             if (bond.atom_2 >= res.atom_start and bond.atom_2 < res.atom_end) {
                 const atom = mdl.atoms.items[bond.atom_2];
-                if (!atom.is_hydrogen) try names.append(allocator, atom.name);
+                if (!atom.is_hydrogen) try names.append(allocator, atom.name.buf);
             }
         }
     }

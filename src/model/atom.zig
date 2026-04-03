@@ -3,13 +3,14 @@
 const math = @import("../math.zig");
 const element = @import("../element.zig");
 const standard = @import("../place/standard.zig");
+const fixed_string = @import("fixed_string.zig");
 
 pub const AtomFlags = element.AtomFlags;
+pub const FixedString = fixed_string.FixedString;
 
 pub const Atom = struct {
     pos: math.Vec3(f32),
-    name: [4]u8 = .{ ' ', ' ', ' ', ' ' },
-    name_len: u4 = 0,
+    name: FixedString(4) = .{},
     element_type: element.AtomType = .unknown,
     residue_idx: u32 = 0,
     altloc: u8 = ' ',
@@ -23,14 +24,11 @@ pub const Atom = struct {
     mover_hint: standard.MoverHint = .none,
 
     pub fn nameSlice(self: *const Atom) []const u8 {
-        return self.name[0..@min(@as(usize, self.name_len), 4)];
+        return self.name.slice();
     }
 
-    pub fn setName(self: *Atom, name: []const u8) void {
-        const len: u4 = @intCast(@min(name.len, 4));
-        self.name = .{ ' ', ' ', ' ', ' ' };
-        for (0..len) |i| self.name[i] = name[i];
-        self.name_len = len;
+    pub fn setName(self: *Atom, n: []const u8) void {
+        self.name.set(n);
     }
 };
 
@@ -44,7 +42,7 @@ test "Atom setName and nameSlice" {
     };
     a.setName("CA");
     try std.testing.expectEqualStrings("CA", a.nameSlice());
-    try std.testing.expectEqual(@as(u4, 2), a.name_len);
+    try std.testing.expectEqual(@as(u3, 2), a.name.len);
 }
 
 test "Atom setName truncates at 4" {
@@ -53,5 +51,5 @@ test "Atom setName truncates at 4" {
     };
     a.setName("ABCDE");
     try std.testing.expectEqualStrings("ABCD", a.nameSlice());
-    try std.testing.expectEqual(@as(u4, 4), a.name_len);
+    try std.testing.expectEqual(@as(u3, 4), a.name.len);
 }
