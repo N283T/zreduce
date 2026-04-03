@@ -1,6 +1,7 @@
 //! PDB format parser: parses ATOM/HETATM records into a Model.
 //!
-//! Only MODEL 1 is parsed when MODEL/ENDMDL records are present.
+//! Supports multi-model PDB files via parseAll(). The single-model
+//! parse() function extracts only the first model.
 //! CONECT and MASTER records are dropped entirely.
 //! All other non-coordinate records are kept as raw_line passthrough.
 
@@ -10,6 +11,8 @@ const Allocator = std.mem.Allocator;
 const model_mod = @import("model.zig");
 const element = @import("element.zig");
 const math = @import("math.zig");
+const mmcif_mod = @import("mmcif.zig");
+pub const ModelFilter = mmcif_mod.ModelFilter;
 
 const Model = model_mod.Model;
 const Atom = model_mod.Atom;
@@ -36,6 +39,35 @@ pub const PdbParseResult = struct {
     pub fn deinit(self: *PdbParseResult, allocator: Allocator) void {
         self.model.deinit();
         self.records.deinit(allocator);
+    }
+};
+
+/// A single model entry from a multi-model PDB file.
+pub const PdbModelEntry = struct {
+    model_num: u32,
+    model: Model,
+    /// Per-model records (atom_site markers). Header records are stored
+    /// separately in PdbMultiModelResult.header_records.
+    records: std.ArrayListUnmanaged(PdbRecord),
+
+    pub fn deinit(self: *PdbModelEntry, allocator: Allocator) void {
+        self.model.deinit();
+        self.records.deinit(allocator);
+    }
+};
+
+/// Result from parsing a multi-model PDB file.
+pub const PdbMultiModelResult = struct {
+    entries: std.ArrayListUnmanaged(PdbModelEntry),
+    /// Records that appear before the first MODEL (HEADER, CRYST1, etc.)
+    /// and after the last ENDMDL (END, etc.) — shared across models.
+    header_records: std.ArrayListUnmanaged(PdbRecord),
+    source: []const u8,
+
+    pub fn deinit(self: *PdbMultiModelResult, allocator: Allocator) void {
+        for (self.entries.items) |*e| e.deinit(allocator);
+        self.entries.deinit(allocator);
+        self.header_records.deinit(allocator);
     }
 };
 
@@ -445,6 +477,152 @@ pub fn parseModel(allocator: Allocator, source: []const u8) PdbError!Model {
     return result.model;
 }
 
+/// Parse a multi-model PDB file, returning one PdbModelEntry per model.
+/// For single-model files (no MODEL records), returns one entry.
+pub fn parseAll(allocator: Allocator, source: []const u8, filter: ModelFilter) PdbError!PdbMultiModelResult {
+    var entries = std.ArrayListUnmanaged(PdbModelEntry){};
+    errdefer {
+        for (entries.items) |*e| e.deinit(allocator);
+        entries.deinit(allocator);
+    }
+
+    var header_records = std.ArrayListUnmanaged(PdbRecord){};
+    errdefer header_records.deinit(allocator);
+
+    var state = ParseState.init(allocator);
+    errdefer state.deinit();
+
+    var cur_records = std.ArrayListUnmanaged(PdbRecord){};
+    errdefer cur_records.deinit(allocator);
+
+    var in_model_block = false;
+    var has_model_records = false; // true if any MODEL record was seen
+    var cur_model_num: u32 = 1;
+
+    var iter = std.mem.splitScalar(u8, source, '\n');
+    while (iter.next()) |raw_line| {
+        const line = stripCR(raw_line);
+        if (line.len == 0) continue;
+
+        const rec_type = safeSlice(line, 0, 6);
+
+        // MODEL record: start a new model block
+        if (std.mem.startsWith(u8, rec_type, "MODEL ") or std.mem.eql(u8, std.mem.trim(u8, rec_type, " "), "MODEL")) {
+            has_model_records = true;
+
+            // Parse model serial number from columns 10-14
+            var model_num: u32 = 1;
+            if (line.len >= 14) {
+                const num_str = std.mem.trim(u8, safeSlice(line, 10, 14), " ");
+                model_num = std.fmt.parseInt(u32, num_str, 10) catch 1;
+            }
+
+            // Check filter: should we process this model?
+            const want = switch (filter) {
+                .all => true,
+                .first => entries.items.len == 0,
+                .specific => |target| model_num == target,
+            };
+
+            if (want) {
+                // Free previous state/records before overwriting
+                // (handles consecutive MODEL without ENDMDL)
+                state.deinit();
+                cur_records.deinit(allocator);
+                in_model_block = true;
+                cur_model_num = model_num;
+                state = ParseState.init(allocator);
+                cur_records = .{};
+            }
+            continue;
+        }
+
+        // ENDMDL: finalize current model
+        if (std.mem.startsWith(u8, rec_type, "ENDMDL")) {
+            if (in_model_block) {
+                try state.finalize();
+                state.mdl.model_num = cur_model_num;
+
+                try entries.append(allocator, .{
+                    .model_num = cur_model_num,
+                    .model = state.mdl,
+                    .records = cur_records,
+                });
+
+                // Reset for next model (don't deinit — ownership transferred)
+                state = ParseState.init(allocator);
+                cur_records = .{};
+                in_model_block = false;
+
+                // For .first, stop after one model
+                if (filter == .first) break;
+                // For .specific, stop after finding the target
+                switch (filter) {
+                    .specific => {
+                        if (entries.items.len > 0) break;
+                    },
+                    else => {},
+                }
+            }
+            continue;
+        }
+
+        // Drop CONECT and MASTER records
+        if (std.mem.startsWith(u8, rec_type, "CONECT") or
+            std.mem.startsWith(u8, rec_type, "MASTER"))
+        {
+            continue;
+        }
+
+        // Coordinate records
+        if (std.mem.startsWith(u8, rec_type, "ATOM  ") or
+            std.mem.startsWith(u8, rec_type, "HETATM"))
+        {
+            if (in_model_block or !has_model_records) {
+                try state.processAtomLine(line);
+                try cur_records.append(allocator, .atom_site);
+            }
+            continue;
+        }
+
+        // TER record
+        if (std.mem.startsWith(u8, rec_type, "TER")) {
+            if (in_model_block or !has_model_records) {
+                try state.flushChain();
+                try cur_records.append(allocator, .{ .raw_line = line });
+            }
+            continue;
+        }
+
+        // Non-coordinate records before first MODEL → header
+        if (!has_model_records and !in_model_block) {
+            try header_records.append(allocator, .{ .raw_line = line });
+        }
+    }
+
+    // For single-model files (no MODEL records), finalize and add the one model
+    if (!has_model_records and state.mdl.atoms.items.len > 0) {
+        try state.finalize();
+        try entries.append(allocator, .{
+            .model_num = 1,
+            .model = state.mdl,
+            .records = cur_records,
+        });
+        state = ParseState.init(allocator);
+        cur_records = .{};
+    }
+
+    // Clean up spare state
+    state.deinit();
+    cur_records.deinit(allocator);
+
+    return PdbMultiModelResult{
+        .entries = entries,
+        .header_records = header_records,
+        .source = source,
+    };
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -511,6 +689,59 @@ test "parse MODEL 1 only from multi-model PDB" {
     try testing.expectEqual(@as(usize, 2), mdl.atoms.items.len);
     // Coordinates should be from MODEL 1, not MODEL 2
     try testing.expectApproxEqAbs(mdl.atoms.items[0].pos.x, 1.0, 1e-3);
+}
+
+test "parseAll returns all models" {
+    const source =
+        \\MODEL        1
+        \\ATOM      1  N   ALA A   1       1.000   2.000   3.000  1.00 10.00           N
+        \\ATOM      2  CA  ALA A   1       2.000   3.000   4.000  1.00 10.00           C
+        \\ENDMDL
+        \\MODEL        2
+        \\ATOM      1  N   ALA A   1       9.000   9.000   9.000  1.00 10.00           N
+        \\ATOM      2  CA  ALA A   1       8.000   8.000   8.000  1.00 10.00           C
+        \\ENDMDL
+        \\END
+    ;
+    var result = try parseAll(testing.allocator, source, .all);
+    defer result.deinit(testing.allocator);
+
+    try testing.expectEqual(@as(usize, 2), result.entries.items.len);
+    try testing.expectEqual(@as(u32, 1), result.entries.items[0].model_num);
+    try testing.expectEqual(@as(u32, 2), result.entries.items[1].model_num);
+    try testing.expectEqual(@as(usize, 2), result.entries.items[0].model.atoms.items.len);
+    try testing.expectEqual(@as(usize, 2), result.entries.items[1].model.atoms.items.len);
+    try testing.expectApproxEqAbs(@as(f32, 1.0), result.entries.items[0].model.atoms.items[0].pos.x, 0.01);
+    try testing.expectApproxEqAbs(@as(f32, 9.0), result.entries.items[1].model.atoms.items[0].pos.x, 0.01);
+}
+
+test "parseAll with specific filter" {
+    const source =
+        \\MODEL        1
+        \\ATOM      1  N   ALA A   1       1.000   2.000   3.000  1.00 10.00           N
+        \\ENDMDL
+        \\MODEL        2
+        \\ATOM      1  N   ALA A   1       9.000   9.000   9.000  1.00 10.00           N
+        \\ENDMDL
+    ;
+    var result = try parseAll(testing.allocator, source, .{ .specific = 2 });
+    defer result.deinit(testing.allocator);
+
+    try testing.expectEqual(@as(usize, 1), result.entries.items.len);
+    try testing.expectEqual(@as(u32, 2), result.entries.items[0].model_num);
+    try testing.expectApproxEqAbs(@as(f32, 9.0), result.entries.items[0].model.atoms.items[0].pos.x, 0.01);
+}
+
+test "parseAll single-model PDB (no MODEL records)" {
+    const source =
+        \\ATOM      1  N   ALA A   1       1.000   2.000   3.000  1.00 10.00           N
+        \\END
+    ;
+    var result = try parseAll(testing.allocator, source, .all);
+    defer result.deinit(testing.allocator);
+
+    try testing.expectEqual(@as(usize, 1), result.entries.items.len);
+    try testing.expectEqual(@as(u32, 1), result.entries.items[0].model_num);
 }
 
 test "parse altloc" {

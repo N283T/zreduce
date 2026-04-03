@@ -182,7 +182,7 @@ pub fn parseModel(allocator: Allocator, source: []const u8) MmcifError!Model {
 }
 
 /// Parse an mmCIF source string and extract _atom_site records into Models.
-/// Returns one ModelEntry per model found (filtered by ModelFilter).
+/// Convenience wrapper that parses the CIF document internally.
 pub fn parseModels(allocator: Allocator, source: []const u8, filter: ModelFilter) MmcifError!std.ArrayListUnmanaged(ModelEntry) {
     var doc = cif.readString(allocator, source) catch |err| switch (err) {
         error.OutOfMemory => return MmcifError.OutOfMemory,
@@ -191,8 +191,13 @@ pub fn parseModels(allocator: Allocator, source: []const u8, filter: ModelFilter
     defer doc.deinit();
 
     if (doc.blocks.items.len == 0) return MmcifError.NoAtomSiteLoop;
+    return parseModelsFromBlock(allocator, &doc.blocks.items[0], filter);
+}
 
-    const block = &doc.blocks.items[0];
+/// Extract _atom_site records from a pre-parsed CIF block into Models.
+/// Returns one ModelEntry per model found (filtered by ModelFilter).
+/// Row indices in returned entries correspond to the block's _atom_site loop.
+pub fn parseModelsFromBlock(allocator: Allocator, block: *const cif.Block, filter: ModelFilter) MmcifError!std.ArrayListUnmanaged(ModelEntry) {
     const loop = block.findLoop("_atom_site.Cartn_x") orelse return MmcifError.NoAtomSiteLoop;
 
     // Map column indices
@@ -802,6 +807,78 @@ test "parseModels without model column returns single entry" {
 
     try testing.expectEqual(@as(usize, 1), entries.items.len);
     try testing.expectEqual(@as(u32, 1), entries.items[0].model_num);
+}
+
+test "parseModelsFromBlock works with pre-parsed document" {
+    const source = @embedFile("test_data/multi_model.cif");
+    var doc = try cif.readString(testing.allocator, source);
+    defer doc.deinit();
+
+    var entries = try parseModelsFromBlock(testing.allocator, &doc.blocks.items[0], .all);
+    defer {
+        for (entries.items) |*e| e.model.deinit();
+        entries.deinit(testing.allocator);
+    }
+
+    try testing.expectEqual(@as(usize, 2), entries.items.len);
+    try testing.expectEqual(@as(u32, 1), entries.items[0].model_num);
+    try testing.expectEqual(@as(u32, 2), entries.items[1].model_num);
+}
+
+test "parseModelsFromBlock with strip_h produces consistent row indices" {
+    const source = @embedFile("test_data/multi_model_with_h.cif");
+    var doc = try cif.readString(testing.allocator, source);
+    defer doc.deinit();
+
+    // Strip H from doc first (like processFileMmcif does)
+    const block = &doc.blocks.items[0];
+    const loop = block.findLoopMut("_atom_site.type_symbol").?;
+    const type_col = loop.findTag("_atom_site.type_symbol").?;
+    const w = loop.width();
+    const n_rows = loop.length();
+    var write: usize = 0;
+    var read: usize = 0;
+    while (read < n_rows) : (read += 1) {
+        const type_sym = loop.val(read, type_col) orelse {
+            if (write != read) {
+                for (0..w) |col| {
+                    loop.values.items[write * w + col] = loop.values.items[read * w + col];
+                }
+            }
+            write += 1;
+            continue;
+        };
+        if (std.ascii.eqlIgnoreCase(type_sym, "H") or std.ascii.eqlIgnoreCase(type_sym, "D")) continue;
+        if (write != read) {
+            for (0..w) |col| {
+                loop.values.items[write * w + col] = loop.values.items[read * w + col];
+            }
+        }
+        write += 1;
+    }
+    loop.values.items.len = write * w;
+
+    // Now parse from the stripped block
+    var entries = try parseModelsFromBlock(testing.allocator, block, .all);
+    defer {
+        for (entries.items) |*e| e.model.deinit();
+        entries.deinit(testing.allocator);
+    }
+
+    // 6 rows total, 2 H stripped → 4 heavy atoms: 2 per model
+    try testing.expectEqual(@as(usize, 2), entries.items.len);
+    try testing.expectEqual(@as(usize, 2), entries.items[0].model.atoms.items.len);
+    try testing.expectEqual(@as(usize, 2), entries.items[1].model.atoms.items.len);
+
+    // cif_row indices should be consistent with the stripped loop (4 rows total)
+    try testing.expectEqual(@as(u32, 0), entries.items[0].cif_row_start);
+    try testing.expectEqual(@as(u32, 2), entries.items[0].cif_row_end);
+    try testing.expectEqual(@as(u32, 2), entries.items[1].cif_row_start);
+    try testing.expectEqual(@as(u32, 4), entries.items[1].cif_row_end);
+
+    // Coordinates should be from the correct models
+    try testing.expectApproxEqAbs(@as(f32, 1.0), entries.items[0].model.atoms.items[0].pos.x, 0.01);
+    try testing.expectApproxEqAbs(@as(f32, 11.0), entries.items[1].model.atoms.items[0].pos.x, 0.01);
 }
 
 test "entityTypeFromString maps correctly" {

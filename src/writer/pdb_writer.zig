@@ -301,6 +301,41 @@ const AddedHIndex = struct {
 /// Write a Model to PDB format, interleaving passthrough records from the
 /// original parse and inserting added hydrogen atoms residue-by-residue.
 ///
+/// Write multiple models with MODEL/ENDMDL records.
+/// Header records are written first, then each model is wrapped with MODEL/ENDMDL.
+pub fn writeMultiModel(
+    writer: anytype,
+    entries: []const pdb_mod.PdbModelEntry,
+    header_records: []const PdbRecord,
+    output_isotope: place.OutputIsotope,
+) !void {
+    // Write header records (HEADER, CRYST1, etc.)
+    for (header_records) |rec| {
+        switch (rec) {
+            .raw_line => |line| {
+                // Skip END record in header — we'll write our own at the end
+                if (line.len >= 3 and std.mem.eql(u8, std.mem.trimRight(u8, line, " "), "END")) continue;
+                try writer.print("{s}\n", .{line});
+            },
+            .atom_site => {},
+        }
+    }
+
+    const multi = entries.len > 1;
+    for (entries) |entry| {
+        if (multi) {
+            try writer.print("MODEL     {d:>4}\n", .{entry.model_num});
+        }
+        // Use writeModel for each entry's per-model records (atoms + TER).
+        try writeModel(writer, &entry.model, entry.records.items, output_isotope);
+        if (multi) {
+            try writer.writeAll("ENDMDL\n");
+        }
+    }
+
+    try writer.writeAll("END\n");
+}
+
 /// `records` must match the original parse order: `atom_site` tags mark where
 /// coordinate atoms were parsed; `raw_line` entries are written verbatim.
 /// TER records in `records` are replaced with fresh TER lines at chain boundaries.
