@@ -452,3 +452,34 @@ test "parseStructConn skips non-covalent connections" {
     try testing.expectEqualStrings("SG", a1.nameSlice());
     try testing.expectEqualStrings("SG", a2.nameSlice());
 }
+
+test "buildAtomLookupForRange returns local indices" {
+    const source = @embedFile("../test_data/multi_model.cif");
+    var doc = try cif.readString(testing.allocator, source);
+    defer doc.deinit();
+    const block = &doc.blocks.items[0];
+
+    // Model 2 occupies rows 4-8 in the _atom_site loop
+    var lookup = try buildAtomLookupForRange(testing.allocator, block, 4, 8);
+    defer lookup.deinit();
+
+    // First atom of model 2 (row 4) should map to local index 0
+    const key_n = AtomLookupKey{
+        .label_asym_id = "A",
+        .seq_id = "1",
+        .atom_name = "N",
+    };
+    const idx = lookup.get(key_n);
+    try testing.expect(idx != null);
+    try testing.expectEqual(@as(u32, 0), idx.?);
+
+    // Second atom (row 5) should map to local index 1
+    const key_ca = AtomLookupKey{
+        .label_asym_id = "A",
+        .seq_id = "1",
+        .atom_name = "CA",
+    };
+    const idx_ca = lookup.get(key_ca);
+    try testing.expect(idx_ca != null);
+    try testing.expectEqual(@as(u32, 1), idx_ca.?);
+}

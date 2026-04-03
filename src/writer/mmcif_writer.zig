@@ -1233,3 +1233,62 @@ test "writeZreduceLog produces expected output" {
     try testing.expect(std.mem.indexOf(u8, output, "flip_amide") != null);
     try testing.expect(std.mem.indexOf(u8, output, "A.ASN.5") != null);
 }
+
+test "writeMultiModelWithDocumentWithPolicy round-trip preserves model numbers" {
+    const allocator = std.testing.allocator;
+    const source = @embedFile("../test_data/multi_model.cif");
+
+    // Parse document and models
+    var doc = try cif.readString(allocator, source);
+    defer doc.deinit();
+
+    var entries = try mmcif.parseModelsFromBlock(allocator, &doc.blocks.items[0], .all);
+    defer {
+        for (entries.items) |*e| e.model.deinit();
+        entries.deinit(allocator);
+    }
+
+    // Write multi-model output
+    var buf = std.ArrayList(u8).empty;
+    defer buf.deinit(allocator);
+
+    try writeMultiModelWithDocumentWithPolicy(buf.writer(allocator), entries.items, &doc, .{});
+
+    const output = buf.items;
+
+    // Verify both model numbers appear in output
+    const model1_count = blk: {
+        var count: usize = 0;
+        var pos: usize = 0;
+        while (std.mem.indexOfPos(u8, output, pos, " 1\n")) |idx| {
+            count += 1;
+            pos = idx + 1;
+        }
+        break :blk count;
+    };
+    // Model 1 should have at least 4 atom rows ending with " 1\n"
+    try testing.expect(model1_count >= 4);
+
+    // Re-parse and verify atom count
+    var doc2 = try cif.readString(allocator, output);
+    defer doc2.deinit();
+
+    var entries2 = try mmcif.parseModelsFromBlock(allocator, &doc2.blocks.items[0], .all);
+    defer {
+        for (entries2.items) |*e| e.model.deinit();
+        entries2.deinit(allocator);
+    }
+
+    // Should have 2 models with 4 atoms each
+    try testing.expectEqual(@as(usize, 2), entries2.items.len);
+    try testing.expectEqual(@as(usize, 4), entries2.items[0].model.atoms.items.len);
+    try testing.expectEqual(@as(usize, 4), entries2.items[1].model.atoms.items.len);
+
+    // Verify model numbers
+    try testing.expectEqual(@as(u32, 1), entries2.items[0].model_num);
+    try testing.expectEqual(@as(u32, 2), entries2.items[1].model_num);
+
+    // Verify coordinates preserved
+    try testing.expectApproxEqAbs(@as(f32, 1.0), entries2.items[0].model.atoms.items[0].pos.x, 0.01);
+    try testing.expectApproxEqAbs(@as(f32, 11.0), entries2.items[1].model.atoms.items[0].pos.x, 0.01);
+}

@@ -1,0 +1,23 @@
+data_test_multi_model_h
+#
+loop_
+_atom_site.group_PDB
+_atom_site.id
+_atom_site.type_symbol
+_atom_site.label_atom_id
+_atom_site.label_comp_id
+_atom_site.label_asym_id
+_atom_site.label_seq_id
+_atom_site.Cartn_x
+_atom_site.Cartn_y
+_atom_site.Cartn_z
+_atom_site.occupancy
+_atom_site.B_iso_or_equiv
+_atom_site.pdbx_PDB_model_num
+ATOM 1  N N   ALA A 1  1.000  2.000  3.000 1.00 10.0 1
+ATOM 2  C CA  ALA A 1  2.000  3.000  4.000 1.00 10.0 1
+ATOM 3  H HA  ALA A 1  2.500  3.500  4.500 1.00 10.0 1
+ATOM 4  N N   ALA A 1 11.000 12.000 13.000 1.00 10.0 2
+ATOM 5  C CA  ALA A 1 12.000 13.000 14.000 1.00 10.0 2
+ATOM 6  H HA  ALA A 1 12.500 13.500 14.500 1.00 10.0 2
+#
