@@ -9,7 +9,7 @@ A Zig implementation of the [reduce](https://github.com/rlabduke/reduce) hydroge
 ```bash
 zig build                           # Debug build
 zig build -Doptimize=ReleaseFast    # Optimized build
-zig build test --summary all        # Run all tests (253+)
+zig build test --summary all        # Run all tests (400+)
 ```
 
 ## Run
@@ -37,17 +37,51 @@ src/
   validate.zig          Post-placement model validation
   math.zig              Vec3, rotation, dihedral
   element.zig           AtomType, VDW radii, AtomFlags, mergeFlags
+  gzip.zig              Gzip I/O via C zlib (workaround for Zig std lib bug)
+  integration_test.zig  End-to-end pipeline integration tests
+  real_file_test.zig    End-to-end tests with real PDB structures
+  cif.zig               CIF module re-exports
   cif/                  CIF parser (zero-copy tokenizer)
+    char_table.zig      Character classification table
+    parser.zig          CIF document parser
+    tokenizer.zig       Zero-copy CIF tokenizer
+    types.zig           CIF data types (Document, Block, Loop, Pair)
+    value.zig           CIF value helpers (null, float, int parsing)
   mmcif.zig             _atom_site + _pdbx_poly_seq_scheme + _pdbx_unobs_or_zero_occ_atoms
+  mmcif/
+    conn.zig            _struct_conn and _pdbx_entity_branch_link parsing
+    inline_comp.zig     Inline component dictionary and leaving atom flags
   ccd.zig               CCD component dictionary (streaming parser)
+  ccd_binary.zig        Binary format for fast CCD load/save
+  pdb.zig               PDB format parser (ATOM/HETATM records)
+  model.zig             Model module re-exports
   model/                Atom, Residue, Chain, Bond, CellList
+    atom.zig            Atom struct and helpers
+    bond.zig            Bond struct
+    chain.zig           Chain struct
+    fixed_string.zig    Fixed-capacity space-padded PDB-style identifiers
+    model.zig           Aggregate model container
+    neighbor.zig        Spatial cell list for neighbor lookups
+    residue.zig         Residue struct
+  place.zig             Place module re-exports
   place/                Hydrogen placement
     placer.zig          Main placement logic (conformer-aware, altloc)
+    placer_test.zig     Placement pipeline integration tests
     standard.zig        20 AA placement plans + MoverHint
-    het.zig             CCD-derived placement with hybridization analysis
+    ccd_derive.zig      CCD-derived placement plan generation
+    nucleotide.zig      DNA/RNA nucleotide placement plans
+    modified.zig        Modified amino acid placement plans (MSE, SEP, etc.)
     topology.zig        Bond topology tables for 20 AAs
     chemistry.zig       Residue/atom-specific chemical annotations
+    geometry.zig        Hydrogen placement geometry functions (Types 1-6)
+    execute.zig         Plan execution and geometry dispatch
+    lookup.zig          Atom lookup utilities for placement
+    bond_policy.zig     Bond length policies (X-ray vs neutron)
+    protonation.zig     Protonation state overrides
+    terminal.zig        N-terminal and 3'-terminal H placement
+    water.zig           Water hydrogen placement
   optimize/             Optimization engine
+    optimize.zig        Optimize module re-exports
     optimizer.zig       Clique-based search + fine angular search + multithreaded optimization
     scoring.zig         CellList-based scoring with SoA layout + centroid early-exit
     scorer.zig          Dot-sphere bump/H-bond scoring
@@ -55,10 +89,16 @@ src/
     rotator.zig         OH/SH, NH3+, methyl rotators + fine orientations
     flipper.zig         Asn/Gln amide flip, His ring flip
     mover_gen.zig       Mover generation from placed atoms (standard + CCD)
+    fix.zig             Mover state override from fix file
     clique.zig          Interaction graph + connected components
     dot_sphere.zig      Concentric ring dot generation
-  writer/               mmCIF + JSON output
-  test_data/            Test CIF fixtures
+  writer.zig            Writer module re-exports
+  writer/               mmCIF + PDB + JSON output
+    mmcif_writer.zig    mmCIF format output
+    pdb_writer.zig      PDB format output
+    json_writer.zig     JSON optimization log output
+    format.zig          Value formatting and fixed-point float helpers
+  test_data/            Test CIF/PDB fixtures
 examples/
   data/                 Input structures (AF models, fold_test2)
   result/               zreduce output
@@ -77,8 +117,8 @@ examples/
 
 ## Testing
 
-- `zig build test` runs all tests (~225)
-- Test fixtures in `src/test_data/`: tiny.cif, multi_chain.cif, ala_with_h.cif, ala_altloc.cif, ala_stretched.cif, ala_cterm.cif, gap_chain.cif, ins_code.cif, asn.cif, his.cif
+- `zig build test` runs all tests (~400)
+- Test fixtures in `src/test_data/`: tiny.cif, tiny.pdb, multi_chain.cif, multi_chain.pdb, multi_model.cif, multi_model_null.cif, multi_model_with_h.cif, ala_with_h.cif, ala_altloc.cif, ala_stretched.cif, ala_cterm.cif, gap_chain.cif, ins_code.cif, asn.cif, his.cif, hetatm.pdb, disulfide.cif, disulfide_with_hbond.cif, branch_link.cif, entity_type.cif, inline_comp.cif, leaving_atom.cif, nterm_disorder.cif
 - Real-world test data in `examples/data/` (AF models, fold_test2 with DNA/RNA/glycan)
 
 ## Performance
