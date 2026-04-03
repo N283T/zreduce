@@ -205,9 +205,12 @@ pub fn parseModel(allocator: Allocator, source: []const u8) MmcifError!Model {
     var first_model_num: ?[]const u8 = null;
 
     for (0..nrows) |row| {
-        // Skip rows that belong to models other than the first
+        // Multi-model filter: only parse the first model.
+        // Models are contiguous per mmCIF convention; break on model change.
         if (cols.pdbx_PDB_model_num) |model_col| {
-            const model_str = cif.asString(loop.val(row, model_col) orelse "1");
+            const raw = loop.val(row, model_col);
+            const model_str = if (raw) |r| cif.asString(r) else "";
+            if (model_str.len == 0) continue; // missing or CIF-null ('?'/'.') model number
             if (first_model_num) |first| {
                 if (!std.mem.eql(u8, model_str, first)) break;
             } else {
@@ -586,6 +589,20 @@ test "parseModel extracts only the first model from multi-model mmCIF" {
     // Verify coordinates are from model 1
     try testing.expectApproxEqAbs(@as(f32, 1.0), mdl.atoms.items[0].pos.x, 0.01);
     try testing.expectApproxEqAbs(@as(f32, 2.0), mdl.atoms.items[1].pos.x, 0.01);
+}
+
+test "parseModel skips CIF-null model numbers and filters by first real model" {
+    const source = @embedFile("test_data/multi_model_null.cif");
+    var mdl = try parseModel(testing.allocator, source);
+    defer mdl.deinit();
+
+    // Row 1: model '?' -> skipped (CIF null)
+    // Row 2: model '1' -> first_model_num = "1", included
+    // Row 3: model '1' -> matches, included
+    // Row 4: model '2' -> break
+    try testing.expectEqual(@as(usize, 2), mdl.atoms.items.len);
+    try testing.expectApproxEqAbs(@as(f32, 2.0), mdl.atoms.items[0].pos.x, 0.01);
+    try testing.expectApproxEqAbs(@as(f32, 3.0), mdl.atoms.items[1].pos.x, 0.01);
 }
 
 test "entityTypeFromString maps correctly" {
