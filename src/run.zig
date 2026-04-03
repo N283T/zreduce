@@ -21,6 +21,7 @@ pub const ProcessConfig = struct {
     fix_path: ?[]const u8 = null,
     dump_movers_path: ?[]const u8 = null,
     strip_h: bool = false,
+    format: InputFormat = .mmcif,
 };
 
 pub const ProcessResult = struct {
@@ -39,6 +40,23 @@ pub const ProcessResult = struct {
         return self.n_skipped_existing + self.n_skipped_inter_residue + self.n_skipped_missing_ref + self.n_skipped_quality_filter;
     }
 };
+
+pub const InputFormat = enum {
+    mmcif,
+    pdb,
+};
+
+/// Detect input format from file extension.
+pub fn detectFormat(path: []const u8) InputFormat {
+    if (std.mem.endsWith(u8, path, ".pdb") or
+        std.mem.endsWith(u8, path, ".pdb.gz") or
+        std.mem.endsWith(u8, path, ".ent") or
+        std.mem.endsWith(u8, path, ".ent.gz"))
+    {
+        return .pdb;
+    }
+    return .mmcif;
+}
 
 pub fn readFile(allocator: Allocator, path: []const u8) ![]const u8 {
     if (std.mem.endsWith(u8, path, ".gz")) {
@@ -100,19 +118,45 @@ fn countAddedHydrogens(mdl: *const zreduce.model.Model) u32 {
     return count;
 }
 
-/// Process a single mmCIF file through the full pipeline.
+/// Process a single structure file (mmCIF or PDB) through the full pipeline.
 /// Errors are returned (not exit'd) -- the caller decides how to handle them.
 pub fn processFile(allocator: Allocator, config: ProcessConfig) !ProcessResult {
-    // 1. Read input mmCIF
+    // 1. Read input
     const source = try readFile(allocator, config.input_path);
     defer allocator.free(source);
 
-    // 2. Parse CIF document (for preserving non-atom_site categories in output)
-    var doc = try zreduce.cif.readString(allocator, source);
-    defer doc.deinit();
+    // 2-3. Parse based on format
+    // mmCIF-specific objects (only used when format == .mmcif)
+    var doc: ?zreduce.cif.types.Document = null;
+    defer if (doc) |*d| d.deinit();
 
-    // 3. Extract model from CIF
-    var mdl = try zreduce.mmcif.parseModel(allocator, source);
+    var inline_dict: ?zreduce.ccd.ComponentDict = null;
+    defer if (inline_dict) |*d| d.deinit();
+
+    var atom_lookup: ?zreduce.mmcif.AtomLookup = null;
+    defer if (atom_lookup) |*al| al.deinit();
+
+    // PDB-specific objects (only used when format == .pdb)
+    var pdb_result: ?zreduce.pdb.PdbParseResult = null;
+    defer if (pdb_result) |*r| {
+        // Only free records; model is moved into mdl below.
+        r.records.deinit(allocator);
+    };
+
+    var mdl: zreduce.model.Model = switch (config.format) {
+        .mmcif => blk: {
+            // 2. Parse CIF document (for preserving non-atom_site categories in output)
+            doc = try zreduce.cif.readString(allocator, source);
+
+            // 3. Extract model from CIF
+            break :blk try zreduce.mmcif.parseModel(allocator, source);
+        },
+        .pdb => blk: {
+            // 2-3. Parse PDB file
+            pdb_result = try zreduce.pdb.parse(allocator, source);
+            break :blk pdb_result.?.model;
+        },
+    };
     defer mdl.deinit();
 
     // 3a. Strip existing hydrogens if requested
@@ -123,14 +167,20 @@ pub fn processFile(allocator: Allocator, config: ProcessConfig) !ProcessResult {
         }
         // Also strip H rows from the CIF document's _atom_site loop so that
         // the writer's orig_loop row indices stay in sync with the model.
-        stripDocumentHydrogens(&doc.blocks.items[0]);
+        if (doc) |*d| {
+            stripDocumentHydrogens(&d.blocks.items[0]);
+        }
     }
 
-    const block = &doc.blocks.items[0];
+    // 3b-4a. mmCIF-specific: inline dict, atom lookup, struct_conn, branch links
+    if (config.format == .mmcif) {
+        const block = &doc.?.blocks.items[0];
 
-    // 3b. Parse inline component dictionary (takes priority over external CCD per component)
-    var inline_dict = try zreduce.mmcif.parseInlineComponents(allocator, block);
-    defer if (inline_dict) |*d| d.deinit();
+        inline_dict = try zreduce.mmcif.parseInlineComponents(allocator, block);
+
+        // Build atom lookup once for bond parsing
+        atom_lookup = try zreduce.mmcif.buildAtomLookup(allocator, block);
+    }
 
     var protonation_overrides: ?zreduce.place.ProtonationOverrides = null;
     defer if (protonation_overrides) |*ov| ov.deinit();
@@ -155,18 +205,14 @@ pub fn processFile(allocator: Allocator, config: ProcessConfig) !ProcessResult {
         .protonation = if (protonation_overrides) |*ov| ov else null,
     });
 
-    // Build atom lookup once for bond parsing
-    var atom_lookup = try zreduce.mmcif.buildAtomLookup(allocator, block);
-    defer atom_lookup.deinit();
+    // 4a-4c. mmCIF-specific bond parsing (after applyChemistry which replaces atom.flags)
+    if (config.format == .mmcif) {
+        const block = &doc.?.blocks.items[0];
 
-    // 4a. Parse inter-residue bonds AFTER applyChemistry (which replaces atom.flags)
-    try zreduce.mmcif.parseStructConn(&mdl, block, &atom_lookup);
-
-    // 4b. Parse branch links AFTER applyChemistry
-    try zreduce.mmcif.parseBranchLinks(allocator, &mdl, block, &atom_lookup);
-
-    // 4c. Flag CCD leaving atoms on bonded residues
-    zreduce.mmcif.flagLeavingAtoms(&mdl, if (inline_dict) |*d| d else null, config.dict);
+        try zreduce.mmcif.parseStructConn(&mdl, block, &atom_lookup.?);
+        try zreduce.mmcif.parseBranchLinks(allocator, &mdl, block, &atom_lookup.?);
+        zreduce.mmcif.flagLeavingAtoms(&mdl, if (inline_dict) |*d| d else null, config.dict);
+    }
 
     // 5. Place hydrogens (per-component fallback: inline dict first, then external CCD)
     const place_result = try zreduce.place.addHydrogensWithConfig(
@@ -271,26 +317,26 @@ pub fn processFile(allocator: Allocator, config: ProcessConfig) !ProcessResult {
         }
     }
 
-    // 9. Write output mmCIF (plain or gzip-compressed based on extension)
+    // 9. Write output (format-aware, plain or gzip-compressed based on extension)
     var out_buf: [4096]u8 = undefined;
     if (config.output_path) |out_path| {
         if (std.mem.endsWith(u8, out_path, ".gz")) {
             var gw = try zreduce.gzip.GzipWriter.init(allocator, out_path);
             errdefer gw.close() catch {};
             const aw = gw.anyWriter();
-            try zreduce.writer.mmcif_writer.writeWithDocumentWithPolicy(&aw, &mdl, &doc, config.bond_policy);
+            try dispatchWriter(&aw, &mdl, config, &doc, &pdb_result);
             try gw.close();
         } else {
             const file = try std.fs.cwd().createFile(out_path, .{});
             defer file.close();
             var fw = file.writer(&out_buf);
-            try zreduce.writer.mmcif_writer.writeWithDocumentWithPolicy(&fw.interface, &mdl, &doc, config.bond_policy);
+            try dispatchWriter(&fw.interface, &mdl, config, &doc, &pdb_result);
             try fw.interface.flush();
         }
     } else {
         const stdout = std.fs.File.stdout();
         var sw = stdout.writer(&out_buf);
-        try zreduce.writer.mmcif_writer.writeWithDocumentWithPolicy(&sw.interface, &mdl, &doc, config.bond_policy);
+        try dispatchWriter(&sw.interface, &mdl, config, &doc, &pdb_result);
         try sw.interface.flush();
     }
 
@@ -314,4 +360,26 @@ pub fn processFile(allocator: Allocator, config: ProcessConfig) !ProcessResult {
     }
 
     return result;
+}
+
+/// Dispatch to the correct writer based on input format.
+fn dispatchWriter(
+    writer: anytype,
+    mdl: *const zreduce.model.Model,
+    config: ProcessConfig,
+    doc: *const ?zreduce.cif.types.Document,
+    pdb_result: *const ?zreduce.pdb.PdbParseResult,
+) !void {
+    switch (config.format) {
+        .mmcif => {
+            try zreduce.writer.mmcif_writer.writeWithDocumentWithPolicy(writer, mdl, if (doc.*) |*d| d else null, config.bond_policy);
+        },
+        .pdb => {
+            if (pdb_result.*) |pr| {
+                try zreduce.writer.pdb_writer.writeModel(writer, mdl, pr.records.items, config.bond_policy.output_isotope);
+            } else {
+                try zreduce.writer.mmcif_writer.writeWithDocumentWithPolicy(writer, mdl, null, config.bond_policy);
+            }
+        },
+    }
 }

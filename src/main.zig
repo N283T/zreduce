@@ -224,14 +224,14 @@ fn parseRunArgs(args: []const []const u8) ?RunConfig {
 
 fn printUsage(program_name: []const u8) void {
     std.debug.print(
-        \\zreduce {s} - Hydrogen placement for mmCIF structures
+        \\zreduce {s} - Hydrogen placement for mmCIF/PDB structures
         \\
         \\USAGE:
         \\    {s} <command> [OPTIONS] <args>
         \\
         \\COMMANDS:
-        \\    run           Process a single mmCIF file
-        \\    batch         Process all mmCIF files in a directory
+        \\    run           Process a single mmCIF or PDB file
+        \\    batch         Process all mmCIF/PDB files in a directory
         \\    compile-dict  Pre-compile CCD dictionary to binary format
         \\
         \\GLOBAL OPTIONS:
@@ -246,7 +246,7 @@ fn printUsage(program_name: []const u8) void {
 fn printRunUsage() void {
     std.debug.print(
         \\USAGE:
-        \\    zreduce run [OPTIONS] <input.cif>
+        \\    zreduce run [OPTIONS] <input.cif|input.pdb>
         \\
         \\OPTIONS:
         \\    -h, --help         Show this help message
@@ -569,6 +569,7 @@ fn runSubcommand(allocator: Allocator, args: []const []const u8) void {
         .fix_path = config.fix_path,
         .dump_movers_path = config.dump_movers_path,
         .strip_h = config.strip_h,
+        .format = zreduce.run.detectFormat(config.input_path),
     };
 
     const result = zreduce.run.processFile(allocator, proc_config) catch |err| {
