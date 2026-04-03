@@ -137,11 +137,13 @@ fn processFileInBatch(
     const input_path = try std.fs.path.join(allocator, &.{ input_dir, filename });
     defer allocator.free(input_path);
 
+    // Use only the basename to prevent directory traversal via crafted filenames.
+    const safe_filename = std.fs.path.basename(filename);
     // Determine output filename: strip .gz if present, re-add if gzip_output requested.
-    const base_name = if (std.mem.endsWith(u8, filename, ".gz"))
-        filename[0 .. filename.len - 3]
+    const base_name = if (std.mem.endsWith(u8, safe_filename, ".gz"))
+        safe_filename[0 .. safe_filename.len - 3]
     else
-        filename;
+        safe_filename;
     const out_name = if (config.gzip_output)
         try std.fmt.allocPrint(allocator, "{s}.gz", .{base_name})
     else

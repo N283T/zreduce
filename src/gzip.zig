@@ -12,8 +12,8 @@ pub const GzipError = error{ GzipOpenFailed, GzipReadFailed, GzipCorruptData, Fi
 
 const CHUNK_SIZE = 64 * 1024; // 64 KB read chunks
 
-/// Default max decompressed size: 4 GB
-pub const DEFAULT_MAX_SIZE: usize = 4 * 1024 * 1024 * 1024;
+/// Default max decompressed size: 1 GB (matches plain file read limit in run.zig)
+pub const DEFAULT_MAX_SIZE: usize = 1024 * 1024 * 1024;
 
 /// Decompress a gzip file using C zlib. Caller owns the returned slice.
 pub fn readGzip(allocator: std.mem.Allocator, path: []const u8) GzipError![]u8 {

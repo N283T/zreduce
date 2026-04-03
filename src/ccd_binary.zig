@@ -221,6 +221,7 @@ pub const ReadError = error{
     UnsupportedVersion,
     UnexpectedEof,
     OutOfMemory,
+    CountTooLarge,
 };
 
 /// Deserialize a ComponentDict from reader. Caller owns the returned dict.
@@ -237,6 +238,8 @@ pub fn readDict(allocator: Allocator, reader: anytype) ReadError!ComponentDict {
     reader.readNoEof(&reserved) catch return error.UnexpectedEof;
 
     const count = reader.readInt(u32, .little) catch return error.UnexpectedEof;
+    // Sanity check: real CCD has ~40,000 components; 500,000 is a generous upper bound.
+    if (count > 500_000) return error.CountTooLarge;
 
     var dict = ComponentDict{
         .components = std.StringHashMap(Component).init(allocator),
@@ -262,6 +265,8 @@ pub fn readDict(allocator: Allocator, reader: anytype) ReadError!ComponentDict {
 
         // atoms
         const atom_count = reader.readInt(u16, .little) catch return error.UnexpectedEof;
+        // Sanity check: no real CCD component has more than 1000 atoms.
+        if (atom_count > 1000) return error.CountTooLarge;
         const atoms = allocator.alloc(CompAtom, atom_count) catch return error.OutOfMemory;
         errdefer allocator.free(atoms);
         for (atoms) |*atom| {
@@ -272,6 +277,8 @@ pub fn readDict(allocator: Allocator, reader: anytype) ReadError!ComponentDict {
 
         // bonds
         const bond_count = reader.readInt(u16, .little) catch return error.UnexpectedEof;
+        // Sanity check: no real CCD component has more than 1000 bonds.
+        if (bond_count > 1000) return error.CountTooLarge;
         const bonds = allocator.alloc(CompBond, bond_count) catch return error.OutOfMemory;
         errdefer allocator.free(bonds);
         for (bonds) |*bond| {
