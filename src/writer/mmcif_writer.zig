@@ -158,6 +158,44 @@ fn writeAtomSitePreserving(writer: anytype, model: *const Model, orig_loop: *con
         if (std.ascii.eqlIgnoreCase(tag, "_atom_site.pdbx_PDB_model_num")) cm.pdb_model_num = i;
     }
 
+    // Compute column widths from original data for PDBx-styled alignment.
+    const col_widths = try model.allocator.alloc(usize, w);
+    defer model.allocator.free(col_widths);
+    @memset(col_widths, 0);
+    for (0..orig_loop.length()) |row| {
+        for (0..w) |col| {
+            const val = orig_loop.val(row, col) orelse ".";
+            if (val.len > col_widths[col]) col_widths[col] = val.len;
+        }
+    }
+    // Ensure minimum widths for columns we generate (serial, coords, etc.)
+    // Serial number width: estimate from total atom count.
+    const total_atoms = model.atoms.items.len;
+    const serial_width = blk: {
+        var digits: usize = 1;
+        var n = total_atoms;
+        while (n >= 10) : (n /= 10) digits += 1;
+        break :blk digits;
+    };
+    if (cm.id) |c| col_widths[c] = @max(col_widths[c], serial_width);
+    // Coordinate columns: up to 8 chars (e.g. "-123.456")
+    if (cm.cartn_x) |c| col_widths[c] = @max(col_widths[c], 8);
+    if (cm.cartn_y) |c| col_widths[c] = @max(col_widths[c], 8);
+    if (cm.cartn_z) |c| col_widths[c] = @max(col_widths[c], 8);
+    // Occupancy/B-factor: up to 6 chars (e.g. "100.00")
+    if (cm.occupancy) |c| col_widths[c] = @max(col_widths[c], 6);
+    if (cm.b_factor) |c| col_widths[c] = @max(col_widths[c], 6);
+    // Account for added H atom names which may be wider than original names
+    // (e.g. "HG11" = 4 chars vs original max of 3 chars like "CG1").
+    if (cm.label_atom_id != null or cm.auth_atom_id != null) {
+        for (model.atoms.items) |atom| {
+            if (!atom.is_added) continue;
+            const name_len = atom.nameSlice().len;
+            if (cm.label_atom_id) |c| col_widths[c] = @max(col_widths[c], name_len);
+            if (cm.auth_atom_id) |c| col_widths[c] = @max(col_widths[c], name_len);
+        }
+    }
+
     // Track serial for renumbering
     var serial: u32 = 1;
 
@@ -209,16 +247,16 @@ fn writeAtomSitePreserving(writer: anytype, model: *const Model, orig_loop: *con
                 for (0..w) |col| {
                     if (col > 0) try writer.writeByte(' ');
                     if (cm.id != null and col == cm.id.?) {
-                        try writer.print("{d}", .{serial});
+                        try writePaddedInt(writer, serial, col_widths[col]);
                     } else if (cm.cartn_x != null and col == cm.cartn_x.?) {
-                        try writer.print("{d:.3}", .{atom.pos.x});
+                        try writePaddedFloat3(writer, atom.pos.x, col_widths[col]);
                     } else if (cm.cartn_y != null and col == cm.cartn_y.?) {
-                        try writer.print("{d:.3}", .{atom.pos.y});
+                        try writePaddedFloat3(writer, atom.pos.y, col_widths[col]);
                     } else if (cm.cartn_z != null and col == cm.cartn_z.?) {
-                        try writer.print("{d:.3}", .{atom.pos.z});
+                        try writePaddedFloat3(writer, atom.pos.z, col_widths[col]);
                     } else {
                         const val = orig_loop.val(orig_row_idx, col) orelse ".";
-                        try writeCifValueInLoop(writer, val);
+                        try writePaddedCifValue(writer, val, col_widths[col]);
                     }
                 }
                 try writer.writeByte('\n');
@@ -236,66 +274,65 @@ fn writeAtomSitePreserving(writer: anytype, model: *const Model, orig_loop: *con
 
             for (0..w) |col| {
                 if (col > 0) try writer.writeByte(' ');
+                const cw = col_widths[col];
                 if (cm.group_pdb != null and col == cm.group_pdb.?) {
-                    try writer.writeAll("ATOM");
+                    try writePaddedCell(writer, "ATOM", cw);
                 } else if (cm.id != null and col == cm.id.?) {
-                    try writer.print("{d}", .{serial});
+                    try writePaddedInt(writer, serial, cw);
                 } else if (cm.type_symbol != null and col == cm.type_symbol.?) {
-                    try writer.writeAll(atomTypeSymbol(atom, output_isotope));
+                    try writePaddedCell(writer, atomTypeSymbol(atom, output_isotope), cw);
                 } else if (cm.label_atom_id != null and col == cm.label_atom_id.?) {
-                    try writeAtomName(writer, atom.nameSlice());
+                    try writePaddedCell(writer, atom.nameSlice(), cw);
                 } else if (cm.label_alt_id != null and col == cm.label_alt_id.?) {
-                    try writeAltId(writer, atom.altloc);
+                    if (atom.altloc == ' ') {
+                        try writePaddedCell(writer, ".", cw);
+                    } else {
+                        try writePaddedCell(writer, &[_]u8{atom.altloc}, cw);
+                    }
                 } else if (cm.label_comp_id != null and col == cm.label_comp_id.?) {
-                    try writer.writeAll(res.compIdSlice());
+                    try writePaddedCell(writer, res.compIdSlice(), cw);
                 } else if (cm.label_asym_id != null and col == cm.label_asym_id.?) {
-                    try writer.writeAll(chain.labelSlice());
+                    try writePaddedCell(writer, chain.labelSlice(), cw);
                 } else if (cm.label_entity_id != null and col == cm.label_entity_id.?) {
-                    // Copy from first original row of this residue if available
                     const first_orig = res.atom_start;
                     if (first_orig < orig_loop.length()) {
-                        const val = orig_loop.val(first_orig, col) orelse ".";
-                        try writeCifValueInLoop(writer, val);
+                        try writePaddedCifValue(writer, orig_loop.val(first_orig, col) orelse ".", cw);
                     } else {
-                        try writer.writeAll(".");
+                        try writePaddedCell(writer, ".", cw);
                     }
                 } else if (cm.label_seq_id != null and col == cm.label_seq_id.?) {
-                    try writer.print("{d}", .{res.seq_id});
+                    try writePaddedInt(writer, res.seq_id, cw);
                 } else if (cm.cartn_x != null and col == cm.cartn_x.?) {
-                    try writeFixedFloat3(writer, atom.pos.x);
+                    try writePaddedFloat3(writer, atom.pos.x, cw);
                 } else if (cm.cartn_y != null and col == cm.cartn_y.?) {
-                    try writeFixedFloat3(writer, atom.pos.y);
+                    try writePaddedFloat3(writer, atom.pos.y, cw);
                 } else if (cm.cartn_z != null and col == cm.cartn_z.?) {
-                    try writeFixedFloat3(writer, atom.pos.z);
+                    try writePaddedFloat3(writer, atom.pos.z, cw);
                 } else if (cm.occupancy != null and col == cm.occupancy.?) {
-                    try writeFixedFloat2(writer, atom.occupancy);
+                    try writePaddedFloat2(writer, atom.occupancy, cw);
                 } else if (cm.b_factor != null and col == cm.b_factor.?) {
-                    try writeFixedFloat2(writer, atom.b_factor);
+                    try writePaddedFloat2(writer, atom.b_factor, cw);
                 } else if (cm.auth_seq_id != null and col == cm.auth_seq_id.?) {
-                    // Copy from first original row of this residue
                     const first_orig = res.atom_start;
                     if (first_orig < orig_loop.length()) {
-                        const val = orig_loop.val(first_orig, col) orelse ".";
-                        try writeCifValueInLoop(writer, val);
+                        try writePaddedCifValue(writer, orig_loop.val(first_orig, col) orelse ".", cw);
                     } else {
-                        try writer.print("{d}", .{res.seq_id});
+                        try writePaddedInt(writer, res.seq_id, cw);
                     }
                 } else if (cm.auth_comp_id != null and col == cm.auth_comp_id.?) {
-                    try writer.writeAll(res.compIdSlice());
+                    try writePaddedCell(writer, res.compIdSlice(), cw);
                 } else if (cm.auth_asym_id != null and col == cm.auth_asym_id.?) {
-                    try writer.writeAll(chain.authSlice());
+                    try writePaddedCell(writer, chain.authSlice(), cw);
                 } else if (cm.auth_atom_id != null and col == cm.auth_atom_id.?) {
-                    try writeAtomName(writer, atom.nameSlice());
+                    try writePaddedCell(writer, atom.nameSlice(), cw);
                 } else if (cm.pdb_model_num != null and col == cm.pdb_model_num.?) {
-                    try writer.writeAll("1");
+                    try writePaddedCell(writer, "1", cw);
                 } else {
-                    // Unknown column — copy from first atom of residue or use '.'
                     const first_orig = res.atom_start;
                     if (first_orig < orig_loop.length()) {
-                        const val = orig_loop.val(first_orig, col) orelse ".";
-                        try writeCifValueInLoop(writer, val);
+                        try writePaddedCifValue(writer, orig_loop.val(first_orig, col) orelse ".", cw);
                     } else {
-                        try writer.writeAll(".");
+                        try writePaddedCell(writer, ".", cw);
                     }
                 }
             }
@@ -303,6 +340,51 @@ fn writeAtomSitePreserving(writer: anytype, model: *const Model, orig_loop: *con
             serial += 1;
         }
     }
+}
+
+/// Write a cell value padded to min_width with trailing spaces.
+fn writePaddedCell(writer: anytype, val: []const u8, min_width: usize) !void {
+    try writer.writeAll(val);
+    var i: usize = val.len;
+    while (i < min_width) : (i += 1) {
+        try writer.writeByte(' ');
+    }
+}
+
+/// Write a CIF value with quoting, then pad to min_width.
+fn writePaddedCifValue(writer: anytype, val: []const u8, min_width: usize) !void {
+    var buf: [256]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buf);
+    writeCifValueInLoop(fbs.writer(), val) catch {
+        // Value too large for buffer — write directly without padding
+        try writeCifValueInLoop(writer, val);
+        return;
+    };
+    try writePaddedCell(writer, fbs.getWritten(), min_width);
+}
+
+/// Write an integer value padded to min_width.
+fn writePaddedInt(writer: anytype, val: anytype, min_width: usize) !void {
+    var buf: [20]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buf);
+    fbs.writer().print("{d}", .{val}) catch unreachable;
+    try writePaddedCell(writer, fbs.getWritten(), min_width);
+}
+
+/// Write a float3 value padded to min_width.
+fn writePaddedFloat3(writer: anytype, val: f32, min_width: usize) !void {
+    var buf: [64]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buf);
+    format.writeFixedFloat3(fbs.writer(), val) catch unreachable;
+    try writePaddedCell(writer, fbs.getWritten(), min_width);
+}
+
+/// Write a float2 value padded to min_width.
+fn writePaddedFloat2(writer: anytype, val: f32, min_width: usize) !void {
+    var buf: [64]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buf);
+    format.writeFixedFloat2(fbs.writer(), val) catch unreachable;
+    try writePaddedCell(writer, fbs.getWritten(), min_width);
 }
 
 /// Write a CIF loop body (tags + data rows) without surrounding '#' separators.
