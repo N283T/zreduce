@@ -182,7 +182,7 @@ pub fn parseModel(allocator: Allocator, source: []const u8) MmcifError!Model {
 }
 
 /// Parse an mmCIF source string and extract _atom_site records into Models.
-/// Returns one ModelEntry per model found (filtered by ModelFilter).
+/// Convenience wrapper that parses the CIF document internally.
 pub fn parseModels(allocator: Allocator, source: []const u8, filter: ModelFilter) MmcifError!std.ArrayListUnmanaged(ModelEntry) {
     var doc = cif.readString(allocator, source) catch |err| switch (err) {
         error.OutOfMemory => return MmcifError.OutOfMemory,
@@ -191,8 +191,13 @@ pub fn parseModels(allocator: Allocator, source: []const u8, filter: ModelFilter
     defer doc.deinit();
 
     if (doc.blocks.items.len == 0) return MmcifError.NoAtomSiteLoop;
+    return parseModelsFromBlock(allocator, &doc.blocks.items[0], filter);
+}
 
-    const block = &doc.blocks.items[0];
+/// Extract _atom_site records from a pre-parsed CIF block into Models.
+/// Returns one ModelEntry per model found (filtered by ModelFilter).
+/// Row indices in returned entries correspond to the block's _atom_site loop.
+pub fn parseModelsFromBlock(allocator: Allocator, block: *const cif.Block, filter: ModelFilter) MmcifError!std.ArrayListUnmanaged(ModelEntry) {
     const loop = block.findLoop("_atom_site.Cartn_x") orelse return MmcifError.NoAtomSiteLoop;
 
     // Map column indices

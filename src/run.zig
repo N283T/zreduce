@@ -140,8 +140,17 @@ fn processFileMmcif(allocator: Allocator, config: ProcessConfig, source: []const
     var doc = try zreduce.cif.readString(allocator, source);
     defer doc.deinit();
 
-    // 3. Extract models from CIF
-    var entries = try zreduce.mmcif.parseModels(allocator, source, config.model_filter);
+    // 2a. Strip existing hydrogens from the document BEFORE parsing models.
+    // This ensures cif_row_start/end in ModelEntry are consistent with the
+    // (possibly stripped) document loop used by the writer and atom lookup.
+    if (config.strip_h) {
+        stripDocumentHydrogens(&doc.blocks.items[0]);
+    }
+
+    // 3. Extract models from CIF block (shares the same doc — no double parse).
+    // When strip_h is active, models are parsed from the already-stripped loop,
+    // so they contain no H atoms and row indices match the stripped document.
+    var entries = try zreduce.mmcif.parseModelsFromBlock(allocator, &doc.blocks.items[0], config.model_filter);
     defer {
         for (entries.items) |*e| e.model.deinit();
         entries.deinit(allocator);
@@ -158,24 +167,11 @@ fn processFileMmcif(allocator: Allocator, config: ProcessConfig, source: []const
         };
     }
 
-    // 3a. Strip existing hydrogens if requested
-    // Note: when strip_h is active, cif_row_start/end in entries become stale
-    // after stripDocumentHydrogens compacts the doc's _atom_site loop. We set
-    // use_doc=false to use the non-preserving writer path, which doesn't depend
-    // on orig_loop row indices.
-    var use_doc_for_write = true;
-    if (config.strip_h) {
-        for (entries.items) |*entry| {
-            const n_stripped = entry.model.stripHydrogens();
-            if (!config.quiet and n_stripped > 0) {
-                std.debug.print("  Model {d}: stripped {d} existing H atoms\n", .{ entry.model_num, n_stripped });
-            }
-        }
-        stripDocumentHydrogens(&doc.blocks.items[0]);
-        // Invalidate preserving mode for multi-model to avoid stale row offsets
-        if (entries.items.len > 1) {
-            use_doc_for_write = false;
-        }
+    if (config.strip_h and !config.quiet) {
+        // Count how many H atoms were in the original source (before strip)
+        // by comparing original_atom_count with a hypothetical full parse.
+        // Since we stripped the doc before parsing, the models already lack H.
+        std.debug.print("  Stripped existing H atoms from document\n", .{});
     }
 
     // 3b. Parse inline components (once — model-independent)
@@ -323,19 +319,19 @@ fn processFileMmcif(allocator: Allocator, config: ProcessConfig, source: []const
             var gw = try zreduce.gzip.GzipWriter.init(allocator, out_path);
             errdefer gw.close() catch {};
             const aw = gw.anyWriter();
-            try zreduce.writer.mmcif_writer.writeMultiModelWithDocumentWithPolicy(&aw, entries.items, if (use_doc_for_write) &doc else null, config.bond_policy);
+            try zreduce.writer.mmcif_writer.writeMultiModelWithDocumentWithPolicy(&aw, entries.items, &doc, config.bond_policy);
             try gw.close();
         } else {
             const file = try std.fs.cwd().createFile(out_path, .{});
             defer file.close();
             var fw = file.writer(&out_buf);
-            try zreduce.writer.mmcif_writer.writeMultiModelWithDocumentWithPolicy(&fw.interface, entries.items, if (use_doc_for_write) &doc else null, config.bond_policy);
+            try zreduce.writer.mmcif_writer.writeMultiModelWithDocumentWithPolicy(&fw.interface, entries.items, &doc, config.bond_policy);
             try fw.interface.flush();
         }
     } else {
         const stdout = std.fs.File.stdout();
         var sw = stdout.writer(&out_buf);
-        try zreduce.writer.mmcif_writer.writeMultiModelWithDocumentWithPolicy(&sw.interface, entries.items, if (use_doc_for_write) &doc else null, config.bond_policy);
+        try zreduce.writer.mmcif_writer.writeMultiModelWithDocumentWithPolicy(&sw.interface, entries.items, &doc, config.bond_policy);
         try sw.interface.flush();
     }
 
