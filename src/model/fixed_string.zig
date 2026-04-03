@@ -23,7 +23,7 @@ pub fn FixedString(comptime N: comptime_int) type {
 
         /// Return the active slice (first `len` bytes of the buffer).
         pub fn slice(self: *const Self) []const u8 {
-            return self.buf[0..@min(@as(usize, self.len), N)];
+            return self.buf[0..self.len];
         }
 
         /// Copy `value` into the buffer, truncating to N characters.
