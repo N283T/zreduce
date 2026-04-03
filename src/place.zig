@@ -31,4 +31,5 @@ pub const derivePlans = ccd_derive.derivePlans;
 
 test {
     @import("std").testing.refAllDecls(@This());
+    _ = @import("place/placer_test.zig");
 }
