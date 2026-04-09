@@ -72,7 +72,7 @@ pub fn readFile(allocator: Allocator, path: []const u8) ![]const u8 {
 
 /// Remove hydrogen rows from the CIF document's _atom_site loop.
 /// This keeps the document in sync with the model after stripHydrogens().
-fn stripDocumentHydrogens(block: *zreduce.cif.Block) void {
+pub fn stripDocumentHydrogens(block: *zreduce.cif.Block) void {
     const loop = block.findLoopMut("_atom_site.type_symbol") orelse return;
     const type_col = loop.findTag("_atom_site.type_symbol") orelse return;
     const w = loop.width();
@@ -565,4 +565,225 @@ test "detectFormat identifies PDB extensions" {
     try std.testing.expectEqual(InputFormat.mmcif, detectFormat("input.cif"));
     try std.testing.expectEqual(InputFormat.mmcif, detectFormat("input.cif.gz"));
     try std.testing.expectEqual(InputFormat.mmcif, detectFormat("input.mmcif"));
+}
+
+test "detectFormat defaults to mmcif for unknown/ambiguous extensions" {
+    // Ambiguous extension: no path match → mmcif default
+    try std.testing.expectEqual(InputFormat.mmcif, detectFormat("structure.txt"));
+    // No extension at all
+    try std.testing.expectEqual(InputFormat.mmcif, detectFormat("noextension"));
+    // .mmcif extension
+    try std.testing.expectEqual(InputFormat.mmcif, detectFormat("data.mmcif"));
+    // Uppercase: detectFormat is case-sensitive per std.mem.endsWith, so ".PDB" is mmcif
+    try std.testing.expectEqual(InputFormat.mmcif, detectFormat("input.PDB"));
+    // Partial match: "something.pdb.bak" is not a PDB extension
+    try std.testing.expectEqual(InputFormat.mmcif, detectFormat("input.pdb.bak"));
+}
+
+test "ProcessResult.totalSkipped aggregates all skip categories" {
+    const r = ProcessResult{
+        .n_placed = 100,
+        .n_residues = 50,
+        .n_skipped_existing = 3,
+        .n_skipped_inter_residue = 7,
+        .n_skipped_missing_ref = 5,
+        .n_skipped_quality_filter = 2,
+    };
+    try std.testing.expectEqual(@as(u32, 17), r.totalSkipped());
+}
+
+test "ProcessResult.totalSkipped is zero when nothing skipped" {
+    const r = ProcessResult{
+        .n_placed = 10,
+        .n_residues = 2,
+        .n_skipped_existing = 0,
+        .n_skipped_inter_residue = 0,
+        .n_skipped_missing_ref = 0,
+    };
+    try std.testing.expectEqual(@as(u32, 0), r.totalSkipped());
+}
+
+test "stripDocumentHydrogens removes H and D rows from _atom_site loop" {
+    // Build a minimal CIF block with a 3-column _atom_site loop:
+    //   type_symbol, label_atom_id, id
+    // Rows: N(1), H(2), CA(3), D(4), C(5)
+    // After strip: N(1), CA(3), C(5) — 3 rows remain.
+    const allocator = std.testing.allocator;
+
+    var block = zreduce.cif.Block{ .name = "TEST", .items = .empty };
+    defer block.deinit(allocator);
+
+    // Append a loop item
+    var loop = zreduce.cif.Loop{};
+
+    try loop.tags.append(allocator, "_atom_site.type_symbol");
+    try loop.tags.append(allocator, "_atom_site.label_atom_id");
+    try loop.tags.append(allocator, "_atom_site.id");
+
+    // Row 1: N
+    try loop.values.append(allocator, "N");
+    try loop.values.append(allocator, "N");
+    try loop.values.append(allocator, "1");
+    // Row 2: H
+    try loop.values.append(allocator, "H");
+    try loop.values.append(allocator, "H");
+    try loop.values.append(allocator, "2");
+    // Row 3: C (heavy — keep)
+    try loop.values.append(allocator, "C");
+    try loop.values.append(allocator, "CA");
+    try loop.values.append(allocator, "3");
+    // Row 4: D (deuterium — remove)
+    try loop.values.append(allocator, "D");
+    try loop.values.append(allocator, "D");
+    try loop.values.append(allocator, "4");
+    // Row 5: C (heavy — keep)
+    try loop.values.append(allocator, "C");
+    try loop.values.append(allocator, "C");
+    try loop.values.append(allocator, "5");
+
+    try block.items.append(allocator, .{ .loop = loop });
+
+    stripDocumentHydrogens(&block);
+
+    const result_loop = block.findLoop("_atom_site.type_symbol").?;
+    try std.testing.expectEqual(@as(usize, 3), result_loop.length());
+
+    // Verify the surviving rows are the heavy atoms in original order
+    const type_col = result_loop.findTag("_atom_site.type_symbol").?;
+    const id_col = result_loop.findTag("_atom_site.id").?;
+    try std.testing.expectEqualStrings("N", result_loop.val(0, type_col).?);
+    try std.testing.expectEqualStrings("1", result_loop.val(0, id_col).?);
+    try std.testing.expectEqualStrings("C", result_loop.val(1, type_col).?);
+    try std.testing.expectEqualStrings("3", result_loop.val(1, id_col).?);
+    try std.testing.expectEqualStrings("C", result_loop.val(2, type_col).?);
+    try std.testing.expectEqualStrings("5", result_loop.val(2, id_col).?);
+}
+
+test "stripDocumentHydrogens is no-op when loop has no H atoms" {
+    const allocator = std.testing.allocator;
+
+    var block = zreduce.cif.Block{ .name = "TEST", .items = .empty };
+    defer block.deinit(allocator);
+
+    var loop = zreduce.cif.Loop{};
+    try loop.tags.append(allocator, "_atom_site.type_symbol");
+    try loop.tags.append(allocator, "_atom_site.id");
+
+    try loop.values.append(allocator, "N");
+    try loop.values.append(allocator, "1");
+    try loop.values.append(allocator, "C");
+    try loop.values.append(allocator, "2");
+
+    try block.items.append(allocator, .{ .loop = loop });
+
+    stripDocumentHydrogens(&block);
+
+    const result_loop = block.findLoop("_atom_site.type_symbol").?;
+    try std.testing.expectEqual(@as(usize, 2), result_loop.length());
+}
+
+test "processFile processes tiny.cif via mmcif path" {
+    const allocator = std.testing.allocator;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    // Write the tiny.cif fixture to a temp file
+    const cif_content = @embedFile("test_data/tiny.cif");
+    try tmp_dir.dir.writeFile(.{ .sub_path = "tiny.cif", .data = cif_content });
+
+    const input_path = try tmp_dir.dir.realpathAlloc(allocator, "tiny.cif");
+    defer allocator.free(input_path);
+    const output_path = try tmp_dir.dir.realpathAlloc(allocator, ".");
+    defer allocator.free(output_path);
+    const out_cif = try std.fmt.allocPrint(allocator, "{s}/out.cif", .{output_path});
+    defer allocator.free(out_cif);
+
+    const result = try processFile(allocator, .{
+        .input_path = input_path,
+        .output_path = out_cif,
+        .format = .mmcif,
+        .no_opt = true,
+        .quiet = true,
+    });
+
+    // ALA has heavy atoms → some H should be placed
+    try std.testing.expect(result.n_placed > 0);
+    try std.testing.expectEqual(@as(u32, 1), result.n_residues);
+
+    // Output file must exist
+    const out_file = try tmp_dir.dir.openFile("out.cif", .{});
+    out_file.close();
+}
+
+test "processFile processes tiny.pdb via pdb path" {
+    const allocator = std.testing.allocator;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    const pdb_content = @embedFile("test_data/tiny.pdb");
+    try tmp_dir.dir.writeFile(.{ .sub_path = "tiny.pdb", .data = pdb_content });
+
+    const input_path = try tmp_dir.dir.realpathAlloc(allocator, "tiny.pdb");
+    defer allocator.free(input_path);
+    const output_path = try tmp_dir.dir.realpathAlloc(allocator, ".");
+    defer allocator.free(output_path);
+    const out_pdb = try std.fmt.allocPrint(allocator, "{s}/out.pdb", .{output_path});
+    defer allocator.free(out_pdb);
+
+    const result = try processFile(allocator, .{
+        .input_path = input_path,
+        .output_path = out_pdb,
+        .format = .pdb,
+        .no_opt = true,
+        .quiet = true,
+    });
+
+    try std.testing.expect(result.n_placed > 0);
+    try std.testing.expectEqual(@as(u32, 1), result.n_residues);
+
+    const out_file = try tmp_dir.dir.openFile("out.pdb", .{});
+    out_file.close();
+}
+
+test "processFile strip_h removes existing hydrogens before placement" {
+    const allocator = std.testing.allocator;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    // ala_with_h.cif already contains a pre-placed HA — strip_h should remove it
+    const cif_content = @embedFile("test_data/ala_with_h.cif");
+    try tmp_dir.dir.writeFile(.{ .sub_path = "ala_with_h.cif", .data = cif_content });
+
+    const input_path = try tmp_dir.dir.realpathAlloc(allocator, "ala_with_h.cif");
+    defer allocator.free(input_path);
+    const out_dir = try tmp_dir.dir.realpathAlloc(allocator, ".");
+    defer allocator.free(out_dir);
+    const out_path = try std.fmt.allocPrint(allocator, "{s}/out.cif", .{out_dir});
+    defer allocator.free(out_path);
+
+    // Without strip_h: the existing H should be counted as skipped_existing
+    const result_keep = try processFile(allocator, .{
+        .input_path = input_path,
+        .output_path = out_path,
+        .format = .mmcif,
+        .no_opt = true,
+        .quiet = true,
+    });
+    try std.testing.expect(result_keep.n_skipped_existing > 0);
+
+    // With strip_h: the existing H is removed first, so n_skipped_existing drops to 0
+    const result_strip = try processFile(allocator, .{
+        .input_path = input_path,
+        .output_path = out_path,
+        .format = .mmcif,
+        .no_opt = true,
+        .quiet = true,
+        .strip_h = true,
+    });
+    try std.testing.expectEqual(@as(u32, 0), result_strip.n_skipped_existing);
+    // And fresh H atoms should be placed
+    try std.testing.expect(result_strip.n_placed > 0);
 }
