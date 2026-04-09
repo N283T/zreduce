@@ -27,6 +27,7 @@ pub const BondLengthMode = bond_policy.BondLengthMode;
 pub const OutputIsotope = bond_policy.OutputIsotope;
 pub const BondPolicy = bond_policy.BondPolicy;
 pub const ProtonationOverrides = protonation.ProtonationOverrides;
+pub const NtermMode = terminal_placement.NtermMode;
 pub const derivePlans = ccd_derive.derivePlans;
 
 test {

@@ -115,6 +115,17 @@ zreduce uses subcommands: `run` for single files, `batch` for directories.
 | `--water-phantom` | Allow zero-occupancy phantom water hydrogens |
 | `--water-occ-cutoff N` | Skip waters with occupancy below `N` |
 | `--water-b-cutoff N` | Skip waters with B-factor above `N` |
+| `--nterm MODE` | N-terminal protonation: `auto` (default), `aggressive`, or `neutral` |
+
+#### `--nterm` modes
+
+| Mode | Behavior | Equivalent |
+|------|----------|------------|
+| `auto` | NH3+ (or NH2+ on PRO) only on real chain-first residues; residues after an observed chain break keep a single backbone amide H | ChimeraX `addh` / current default |
+| `aggressive` | NH3+/NH2+ on both chain-first AND chain-break residues | reduce2 `first_in_chain` mode |
+| `neutral` | Non-PRO real N-termini get a neutral NH2 (H2, H3) with no positive charge flag. PRO is an exception: it keeps the default NH2+ (the secondary amine is protonated at physiological pH) and retains the positive charge flag. Chain-break residues in `neutral` mode still keep a single break-amide H — use `aggressive` if you want them promoted. | reduce2 `no_charge` (approximate) |
+
+Default `auto` matches the prior behavior — existing pipelines are unaffected.
 
 ### `zreduce batch` — directory
 
@@ -134,6 +145,7 @@ zreduce uses subcommands: `run` for single files, `batch` for directories.
 | `--water-phantom` | Allow zero-occupancy phantom water hydrogens |
 | `--water-occ-cutoff N` | Skip waters with occupancy below `N` |
 | `--water-b-cutoff N` | Skip waters with B-factor above `N` |
+| `--nterm MODE` | N-terminal protonation: `auto` (default), `aggressive`, or `neutral` (see `run` table above) |
 
 ### Global flags
 

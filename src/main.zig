@@ -14,6 +14,7 @@ const RunConfig = struct {
     validate: bool = false,
     water: zreduce.place.WaterConfig = .{},
     bond_policy: zreduce.place.BondPolicy = .{},
+    nterm_mode: zreduce.place.NtermMode = .auto,
     protonation_path: ?[]const u8 = null,
     fix_path: ?[]const u8 = null,
     dump_movers_path: ?[]const u8 = null,
@@ -27,6 +28,7 @@ const CommonOptions = struct {
     no_flip: bool = false,
     water: zreduce.place.WaterConfig = .{},
     bond_policy: zreduce.place.BondPolicy = .{},
+    nterm_mode: zreduce.place.NtermMode = .auto,
     protonation_path: ?[]const u8 = null,
     fix_path: ?[]const u8 = null,
     strip_h: bool = false,
@@ -111,6 +113,18 @@ fn parseCommonOption(args: []const []const u8, i: *usize, common: *CommonOptions
             std.process.exit(1);
         };
         common.bond_policy.mode = parsed;
+        return true;
+    } else if (std.mem.eql(u8, arg, "--nterm")) {
+        i.* += 1;
+        if (i.* >= args.len) {
+            std.debug.print("Error: --nterm requires 'auto', 'aggressive', or 'neutral'\n", .{});
+            std.process.exit(1);
+        }
+        const parsed = zreduce.place.NtermMode.fromString(args[i.*]) orelse {
+            std.debug.print("Error: invalid --nterm '{s}' (expected auto|aggressive|neutral)\n", .{args[i.*]});
+            std.process.exit(1);
+        };
+        common.nterm_mode = parsed;
         return true;
     } else if (std.mem.eql(u8, arg, "--isotope")) {
         i.* += 1;
@@ -234,6 +248,7 @@ fn parseRunArgs(args: []const []const u8) ?RunConfig {
     config.no_flip = common.no_flip;
     config.water = common.water;
     config.bond_policy = common.bond_policy;
+    config.nterm_mode = common.nterm_mode;
     config.protonation_path = common.protonation_path;
     config.fix_path = common.fix_path;
     config.strip_h = common.strip_h;
@@ -286,6 +301,11 @@ fn printRunUsage() void {
         \\    --bond-mode MODE   Bond-length mode: neutron|xray (default: neutron)
         \\    --isotope NAME     Output isotope for added H: hydrogen|h|deuterium|d (default: hydrogen)
         \\    --deuterium        Shortcut for --isotope deuterium
+        \\    --nterm MODE       N-terminal protonation: auto|aggressive|neutral (default: auto)
+        \\                         auto       NH3+/NH2+ on real chain-first residues only (ChimeraX-compatible)
+        \\                         aggressive also NH3+/NH2+ on chain-break residues (reduce2 first_in_chain)
+        \\                         neutral    NH2 (no + flag) on non-PRO real N-termini; PRO keeps NH2+
+        \\                                    chain-break residues keep the single break-amide H in auto/neutral
         \\    --strip-h          Remove existing H atoms before placement
         \\    --model VALUE      Model selection: 'all' (default) or a model number
         \\
@@ -402,6 +422,7 @@ fn parseBatchArgs(args: []const []const u8) ?zreduce.batch.BatchConfig {
     config.no_flip = common.no_flip;
     config.water = common.water;
     config.bond_policy = common.bond_policy;
+    config.nterm_mode = common.nterm_mode;
     config.protonation_path = common.protonation_path;
     config.fix_path = common.fix_path;
     config.strip_h = common.strip_h;
@@ -433,6 +454,7 @@ fn printBatchUsage() void {
         \\    --bond-mode MODE   Bond-length mode: neutron|xray (default: neutron)
         \\    --isotope NAME     Output isotope for added H: hydrogen|h|deuterium|d (default: hydrogen)
         \\    --deuterium        Shortcut for --isotope deuterium
+        \\    --nterm MODE       N-terminal protonation: auto|aggressive|neutral (default: auto)
         \\    --strip-h          Remove existing H atoms before placement
         \\    --model VALUE      Model selection: 'all' (default) or a model number
         \\    --gz               Write gzip-compressed output (.cif.gz)
@@ -588,6 +610,7 @@ fn runSubcommand(allocator: Allocator, args: []const []const u8) void {
         .validate_flag = config.validate,
         .water = config.water,
         .bond_policy = config.bond_policy,
+        .nterm_mode = config.nterm_mode,
         .protonation_path = config.protonation_path,
         .fix_path = config.fix_path,
         .dump_movers_path = config.dump_movers_path,
