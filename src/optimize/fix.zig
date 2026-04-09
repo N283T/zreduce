@@ -213,7 +213,7 @@ pub fn moverTargetName(mdl: *const Model, m: *const Mover) []const u8 {
     return switch (m.kind) {
         .amide_flip => "amide",
         .his_flip => "his",
-        .single_h_rotator, .nh3_rotator, .methyl_rotator, .aromatic_methyl => blk: {
+        .single_h_rotator, .nh3_rotator, .nh2_rotator, .methyl_rotator, .aromatic_methyl => blk: {
             const center_idx = m.center_idx orelse break :blk "unknown";
             break :blk mdl.atoms.items[center_idx].nameSlice();
         },

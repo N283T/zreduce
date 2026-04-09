@@ -17,6 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 - N-terminal PRO residues now actually receive NH2+ hydrogens (H2, H3) during hydrogen placement. Previously the dispatch required a backbone amide plan in the residue's standard plan list, but PRO has no such plan (its N is already bonded to CA and CD), so `placeNtermNH2Pro` was effectively dead code and N-terminal PRO received no backbone H at all. Uncovered during review of #252.
+- N-terminal NH2 groups are now optimized as rigid-body pairs instead of as two independent single-H rotators (#253). A new `rotate_nh2` mover hint and `nh2_rotator` mover kind bundle H2/H3 so both atoms rotate together around the N-CA axis. Previously `placeNtermNH2Pro` and `placeNtermNH2Neutral` tagged each H with `.rotate`, causing `mover_gen` to emit two independent single-H rotators that sampled the same axis independently and destroyed the HNH angle set by the placer. The fix applies to both N-terminal PRO (all modes) and non-PRO neutral N-termini.
+- `NtermResult` now carries a `missing_ref` counter that the placer tallies into `PlacementResult.n_skipped_missing_ref` (#254). Previously `placeNtermNH3`, `placeNtermNH2Pro`, `placeNtermNH2Neutral`, and `place3primeOH` silently returned `{ 0, 0 }` when required backbone atoms were missing at the target altloc, so the terminal-H shortfall was invisible in the run summary. The existing "N H skipped due to missing reference atoms" warning now covers the N-terminal path too.
 
 ## [0.3.0] - 2026-03-30
 
