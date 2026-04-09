@@ -1,5 +1,7 @@
 //! Dot-sphere bump/H-bond scoring for probe-based contact evaluation.
-//! Direct port of the original reduce scoring logic (probe.cpp / ScoreContact).
+//! Reimplementation of the original reduce scoring algorithm — see
+//! Word et al. (1999) and reduce's `probe.cpp` / `ScoreContact` for the
+//! reference. No source code is copied; this is an independent Zig implementation.
 
 const std = @import("std");
 const math_mod = @import("../math.zig");
