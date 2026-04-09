@@ -261,6 +261,70 @@ pub fn generateMovers(
                 );
                 try movers.append(allocator, mover);
             },
+            .rotate_nh2 => {
+                // Group rotator for NH2 (non-PRO neutral N-term or PRO NH2+).
+                // 2 H atoms share the same N center and axis CA. Unlike
+                // .rotate_nh3, there are only 2 H to bundle and we use 12
+                // orientations at 30° (no 3-fold symmetry).
+                var center_name_raw: [4]u8 = undefined;
+                var axis_name_buf: [4]u8 = undefined;
+                var center_name: []const u8 = undefined;
+                var axis_name: []const u8 = undefined;
+
+                if (resolveNtermRotatorAtoms(h_name, &center_name_raw, &axis_name_buf)) {
+                    center_name = trimName(&center_name_raw);
+                    axis_name = trimName(&axis_name_buf);
+                } else {
+                    log.warn("no N-terminal resolver for NH2 H '{s}' in {s} (res {d}), skipping rotator", .{ h_name, comp_id, residue_idx });
+                    n_skipped += 1;
+                    continue;
+                }
+
+                // Dedup key — one mover per (residue, N center, altloc)
+                const group_key = GroupKey{ .residue_idx = residue_idx, .center_name = normalizeNameKey(center_name_raw), .altloc = target_altloc };
+                const gop = try seen_groups.getOrPut(allocator, group_key);
+                if (gop.found_existing) continue;
+
+                const center_idx = findAtomIdx(atoms, res, residue_idx, center_name, target_altloc, mdl.original_atom_count) orelse {
+                    log.warn("center atom '{s}' not found for NH2 group in {s} (res {d}), skipping", .{ center_name, comp_id, residue_idx });
+                    n_skipped += 1;
+                    continue;
+                };
+                const axis_idx = findAtomIdx(atoms, res, residue_idx, axis_name, target_altloc, mdl.original_atom_count) orelse {
+                    log.warn("axis atom '{s}' not found for NH2 group in {s} (res {d}), skipping", .{ axis_name, comp_id, residue_idx });
+                    n_skipped += 1;
+                    continue;
+                };
+
+                // Collect exactly the 2 NH2 H atoms for this residue+altloc.
+                var h_indices: [2]u32 = undefined;
+                var h_count: u32 = 0;
+                for (atoms[mdl.original_atom_count..], mdl.original_atom_count..) |*a, ai| {
+                    if (a.residue_idx != residue_idx) continue;
+                    if (!a.is_added) continue;
+                    if (a.mover_hint != .rotate_nh2) continue;
+                    if (a.altloc != target_altloc) continue;
+                    if (h_count < 2) {
+                        h_indices[h_count] = @intCast(ai);
+                    }
+                    h_count += 1;
+                }
+                if (h_count != 2) {
+                    log.warn("expected 2 H for NH2 group in {s} (res {d}), found {d}, skipping", .{ comp_id, residue_idx, h_count });
+                    n_skipped += 1;
+                    continue;
+                }
+
+                const mover = try rotator.createNH2Rotator(
+                    allocator,
+                    atoms,
+                    h_indices,
+                    center_idx,
+                    axis_idx,
+                    residue_idx,
+                );
+                try movers.append(allocator, mover);
+            },
             .rotate_methyl, .rotate_nh3 => {
                 if (residue_state) |state| {
                     if (state == .lys and state.lys == .neutral and atom.mover_hint == .rotate_nh3) continue;
@@ -785,5 +849,136 @@ test "generateMovers skips fixed His override" {
 
     for (movers) |m| {
         try testing.expect(m.kind != .his_flip);
+    }
+}
+
+// ── NH2 group rotator (issue #253) ───────────────────────────────────────────
+
+test "generateMovers creates a single nh2_rotator for N-terminal PRO" {
+    // Inline minimal PRO N-terminal fixture. N-terminal PRO should yield
+    // one nh2_rotator covering H2 and H3 together, not two independent
+    // single_h_rotators.
+    const source =
+        \\data_PRO_NH2
+        \\#
+        \\loop_
+        \\_atom_site.group_PDB
+        \\_atom_site.id
+        \\_atom_site.type_symbol
+        \\_atom_site.label_atom_id
+        \\_atom_site.label_comp_id
+        \\_atom_site.label_asym_id
+        \\_atom_site.label_seq_id
+        \\_atom_site.Cartn_x
+        \\_atom_site.Cartn_y
+        \\_atom_site.Cartn_z
+        \\_atom_site.occupancy
+        \\_atom_site.B_iso_or_equiv
+        \\_atom_site.label_alt_id
+        \\_atom_site.auth_asym_id
+        \\ATOM 1 N N   PRO A 1 1.458 0.000 0.000 1.00 10.0 . A
+        \\ATOM 2 C CA  PRO A 1 0.000 0.000 0.000 1.00 10.0 . A
+        \\ATOM 3 C C   PRO A 1 -0.523 1.413 0.000 1.00 10.0 . A
+        \\ATOM 4 O O   PRO A 1 -1.742 1.560 0.000 1.00 10.0 . A
+        \\ATOM 5 C CB  PRO A 1 -0.700 -1.100 1.800 1.00 10.0 . A
+        \\ATOM 6 C CG  PRO A 1 0.200 -1.900 2.500 1.00 10.0 . A
+        \\ATOM 7 C CD  PRO A 1 1.500 -1.200 2.200 1.00 10.0 . A
+        \\#
+    ;
+    var mdl = try mmcif.parseModel(testing.allocator, source);
+    defer mdl.deinit();
+
+    placer.applyChemistry(&mdl);
+    _ = try placer.addHydrogens(&mdl, null, null);
+
+    const gen_result = try generateMovers(testing.allocator, &mdl, false, null, null, null, .neutron);
+    const movers = gen_result.movers;
+    defer {
+        for (0..movers.len) |i| @constCast(&movers[i]).deinit();
+        testing.allocator.free(movers);
+    }
+
+    var nh2_count: u32 = 0;
+    var single_h_count: u32 = 0;
+    for (movers) |m| {
+        if (m.kind == .nh2_rotator) nh2_count += 1;
+        if (m.kind == .single_h_rotator) single_h_count += 1;
+    }
+    // Exactly one nh2_rotator covering both H, no single-H rotators for
+    // the backbone amine (would indicate the old per-H pattern).
+    try testing.expectEqual(@as(u32, 1), nh2_count);
+    try testing.expectEqual(@as(u32, 0), single_h_count);
+
+    // The nh2_rotator controls exactly 2 H atoms at 12 orientations.
+    for (movers) |m| {
+        if (m.kind != .nh2_rotator) continue;
+        try testing.expectEqual(@as(usize, 2), m.atom_indices.len);
+        try testing.expectEqual(@as(usize, 12), m.orientations.len);
+        try testing.expect(m.center_idx != null);
+        try testing.expect(m.axis_idx != null);
+    }
+}
+
+test "generateMovers creates nh2_rotator for non-PRO neutral N-term" {
+    const source = @embedFile("../test_data/ala_stretched.cif");
+    var mdl = try mmcif.parseModel(testing.allocator, source);
+    defer mdl.deinit();
+
+    placer.applyChemistryWithConfig(&mdl, .{ .nterm_mode = .neutral });
+    _ = try placer.addHydrogensWithConfig(&mdl, null, null, .{ .nterm_mode = .neutral });
+
+    const gen_result = try generateMovers(testing.allocator, &mdl, false, null, null, null, .neutron);
+    const movers = gen_result.movers;
+    defer {
+        for (0..movers.len) |i| @constCast(&movers[i]).deinit();
+        testing.allocator.free(movers);
+    }
+
+    var nh2_count: u32 = 0;
+    for (movers) |m| {
+        if (m.kind == .nh2_rotator) nh2_count += 1;
+    }
+    try testing.expectEqual(@as(u32, 1), nh2_count);
+}
+
+test "nh2_rotator preserves HNH angle across all orientations" {
+    // Critical regression test for the pre-existing bug fixed by this change:
+    // two independent single-H rotators would let H2 and H3 rotate freely
+    // around the same N-CA axis and destroy the fixed HNH angle. A group
+    // rotator must preserve the relative positions of both H atoms.
+    const source = @embedFile("../test_data/ala_stretched.cif");
+    var mdl = try mmcif.parseModel(testing.allocator, source);
+    defer mdl.deinit();
+
+    placer.applyChemistryWithConfig(&mdl, .{ .nterm_mode = .neutral });
+    _ = try placer.addHydrogensWithConfig(&mdl, null, null, .{ .nterm_mode = .neutral });
+
+    const gen_result = try generateMovers(testing.allocator, &mdl, false, null, null, null, .neutron);
+    const movers = gen_result.movers;
+    defer {
+        for (0..movers.len) |i| @constCast(&movers[i]).deinit();
+        testing.allocator.free(movers);
+    }
+
+    // Grab the nh2_rotator.
+    var target: ?*const mover_mod.Mover = null;
+    for (movers) |*m| {
+        if (m.kind == .nh2_rotator) {
+            target = m;
+            break;
+        }
+    }
+    try testing.expect(target != null);
+    const m = target.?;
+
+    // Reference HNH distance from the initial orientation.
+    const ref_h2 = m.orientations[0].positions[0];
+    const ref_h3 = m.orientations[0].positions[1];
+    const ref_d2 = ref_h2.distance(ref_h3);
+
+    // Every orientation must preserve the same H2-H3 distance (rigid body).
+    for (m.orientations) |orient| {
+        const d2 = orient.positions[0].distance(orient.positions[1]);
+        try testing.expectApproxEqAbs(ref_d2, d2, 0.005);
     }
 }

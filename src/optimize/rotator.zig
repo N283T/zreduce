@@ -122,6 +122,65 @@ pub fn createNH3Rotator(
     };
 }
 
+/// Create an NH2 rotator mover for a neutral primary amine or a PRO NH2+
+/// secondary ammonium. Rotates a rigid pair of H atoms together around the
+/// N-CA bond so the intrinsic HNH angle (set by the placer) is preserved.
+/// h_indices: indices of the 2 hydrogen atoms
+/// center_idx: the N atom index
+/// axis_idx: the atom defining the rotation axis (CA)
+/// Produces 12 orientations at 30° intervals. No penalty for any orientation.
+/// Unlike NH3+, there is no 3-fold symmetry to exploit — every angle yields
+/// a distinct configuration of the (H, H, lone pair) tetrahedron.
+pub fn createNH2Rotator(
+    allocator: std.mem.Allocator,
+    atoms: []const Atom,
+    h_indices: [2]u32,
+    center_idx: u32,
+    axis_idx: u32,
+    residue_idx: u32,
+) !Mover {
+    const n_orientations = 12;
+    const n_atoms_per = 2;
+
+    const center = atoms[center_idx].pos;
+    const axis_atom = atoms[axis_idx].pos;
+    const axis_dir = center.sub(axis_atom);
+
+    // Allocate one contiguous block for all orientation positions.
+    const all_positions = try allocator.alloc(Vec3(f32), n_orientations * n_atoms_per);
+    errdefer allocator.free(all_positions);
+
+    const orientations = try allocator.alloc(Orientation, n_orientations);
+    errdefer allocator.free(orientations);
+
+    for (0..n_orientations) |i| {
+        const angle: f32 = @as(f32, @floatFromInt(i)) * 30.0;
+        const slice = all_positions[i * n_atoms_per .. (i + 1) * n_atoms_per];
+        for (0..n_atoms_per) |j| {
+            const h_pos = atoms[h_indices[j]].pos;
+            slice[j] = math_mod.rotateAroundAxis(f32, h_pos, center, axis_dir, angle);
+        }
+        orientations[i] = .{ .positions = slice, .penalty = 0.0 };
+    }
+
+    const atom_indices = try allocator.alloc(u32, 2);
+    errdefer allocator.free(atom_indices);
+    for (0..2) |i| {
+        atom_indices[i] = h_indices[i];
+    }
+
+    return Mover{
+        .kind = .nh2_rotator,
+        .residue_idx = residue_idx,
+        .atom_indices = atom_indices,
+        .orientations = orientations,
+        .allocator = allocator,
+        .center_idx = center_idx,
+        .axis_idx = axis_idx,
+        .positions_backing = all_positions,
+    };
+}
+
 /// Create a methyl rotator mover (CH3).
 /// h_indices: indices of the 3 hydrogen atoms
 /// center_idx: the C atom index
@@ -194,7 +253,7 @@ pub fn generateFineOrientations(
 
     // Determine base angle from coarse_best_idx
     const base_angle: f32 = switch (m.kind) {
-        .single_h_rotator => @as(f32, @floatFromInt(coarse_best_idx)) * 30.0,
+        .single_h_rotator, .nh2_rotator => @as(f32, @floatFromInt(coarse_best_idx)) * 30.0,
         .nh3_rotator, .methyl_rotator, .aromatic_methyl => blk: {
             const offsets = [3]f32{ 0.0, 60.0, -60.0 };
             break :blk offsets[coarse_best_idx];
@@ -204,11 +263,11 @@ pub fn generateFineOrientations(
 
     // Fine search parameters depend on kind
     const half_range: f32 = switch (m.kind) {
-        .single_h_rotator => 15.0,
+        .single_h_rotator, .nh2_rotator => 15.0,
         else => 30.0,
     };
     const step: f32 = switch (m.kind) {
-        .single_h_rotator => 5.0,
+        .single_h_rotator, .nh2_rotator => 5.0,
         else => 10.0,
     };
 

@@ -200,7 +200,10 @@ pub fn placeNtermNH2Pro(mdl: *Model, res: Residue, res_idx: u32, target_altloc: 
 
         const h64 = geometry.placeH2XR2(n64, ca64, cd64, bond_len, angle_deg, dihedral);
         const h_pos = Vec3f32{ .x = @floatCast(h64.x), .y = @floatCast(h64.y), .z = @floatCast(h64.z) };
-        try appendNtermH(mdl, h_pos, name, res_idx, meta, .rotate);
+        // Use .rotate_nh2 so the two H rotate together as a rigid group
+        // around the N-CA axis; otherwise mover_gen would emit two
+        // independent single-H rotators and the HNH angle would drift.
+        try appendNtermH(mdl, h_pos, name, res_idx, meta, .rotate_nh2);
         placed += 1;
     }
     return .{ .placed = placed, .skipped = skipped };
@@ -243,9 +246,11 @@ pub fn placeNtermNH2Neutral(mdl: *Model, res: Residue, res_idx: u32, target_altl
 
         const h64 = geometry.placeH3XR(n64, ca64, c64, bond_len, angle_deg, dihedral);
         const h_pos = Vec3f32{ .x = @floatCast(h64.x), .y = @floatCast(h64.y), .z = @floatCast(h64.z) };
-        // Use .rotate so the neutral NH2 rotates freely around the N-CA axis
-        // (no dedicated neutral-amine mover exists; .rotate_nh3 is for NH3+).
-        try appendNtermH(mdl, h_pos, name, res_idx, meta, .rotate);
+        // Use .rotate_nh2 so the two H rotate together as a rigid group
+        // around the N-CA axis. Using `.rotate` here would cause mover_gen
+        // to emit two independent single-H rotators that sample the axis
+        // independently, destroying the HNH angle set above.
+        try appendNtermH(mdl, h_pos, name, res_idx, meta, .rotate_nh2);
         placed += 1;
     }
     return .{ .placed = placed, .skipped = skipped };
@@ -408,8 +413,9 @@ test "placeNtermNH2Neutral places exactly 2 H atoms with gauche dihedrals" {
         const name = atom.nameSlice();
         const is_neutral_nh2 = std.mem.eql(u8, name, "H2") or std.mem.eql(u8, name, "H3");
         if (!is_neutral_nh2) continue;
-        // Neutral NH2 rotates but is not an NH3+ rotator group.
-        try testing.expectEqual(standard.MoverHint.rotate, atom.mover_hint);
+        // Both H atoms share the NH2 group-rotator hint so mover_gen bundles
+        // them into a single rigid rotator instead of two independent ones.
+        try testing.expectEqual(standard.MoverHint.rotate_nh2, atom.mover_hint);
         h_count += 1;
     }
     try testing.expectEqual(@as(u32, 2), h_count);
@@ -421,7 +427,7 @@ test "placeNtermNH2Neutral places exactly 2 H atoms with gauche dihedrals" {
     }
 }
 
-test "placeNtermNH2Pro sets rotate mover_hint on both H atoms" {
+test "placeNtermNH2Pro sets rotate_nh2 mover_hint on both H atoms" {
     // Build a minimal PRO-like model with N, CA, CD atoms
     var mdl = try mmcif.parseModel(testing.allocator,
         \\data_PRO_TEST
@@ -458,7 +464,7 @@ test "placeNtermNH2Pro sets rotate mover_hint on both H atoms" {
         const name = atom.nameSlice();
         const is_pro_nterm = std.mem.eql(u8, name, "H2") or std.mem.eql(u8, name, "H3");
         if (!is_pro_nterm) continue;
-        try testing.expectEqual(standard.MoverHint.rotate, atom.mover_hint);
+        try testing.expectEqual(standard.MoverHint.rotate_nh2, atom.mover_hint);
         h_count += 1;
     }
     try testing.expectEqual(@as(u32, 2), h_count);
