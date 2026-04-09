@@ -17,6 +17,7 @@ pub const ProcessConfig = struct {
     quiet: bool = false, // suppress diagnostic prints (batch mode)
     water: zreduce.place.WaterConfig = .{},
     bond_policy: zreduce.place.BondPolicy = .{},
+    nterm_mode: zreduce.place.NtermMode = .auto,
     protonation_path: ?[]const u8 = null,
     fix_path: ?[]const u8 = null,
     dump_movers_path: ?[]const u8 = null,
@@ -138,6 +139,7 @@ fn processModelShared(
     // Apply chemistry annotations
     zreduce.place.applyChemistryWithConfig(mdl, .{
         .protonation = protonation_overrides,
+        .nterm_mode = config.nterm_mode,
     });
 
     // Place hydrogens
@@ -149,6 +151,7 @@ fn processModelShared(
             .water = config.water,
             .bond_policy = config.bond_policy,
             .protonation = protonation_overrides,
+            .nterm_mode = config.nterm_mode,
         },
     );
 

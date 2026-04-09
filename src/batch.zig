@@ -22,6 +22,7 @@ pub const BatchConfig = struct {
     json_version: []const u8 = "", // passed from main
     water: zreduce.place.WaterConfig = .{},
     bond_policy: zreduce.place.BondPolicy = .{},
+    nterm_mode: zreduce.place.NtermMode = .auto,
     protonation_path: ?[]const u8 = null,
     fix_path: ?[]const u8 = null,
     strip_h: bool = false,
@@ -163,6 +164,7 @@ fn processFileInBatch(
         .quiet = true, // suppress per-file diagnostics in batch mode
         .water = config.water,
         .bond_policy = config.bond_policy,
+        .nterm_mode = config.nterm_mode,
         .protonation_path = config.protonation_path,
         .fix_path = config.fix_path,
         .strip_h = config.strip_h,

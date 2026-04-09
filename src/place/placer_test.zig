@@ -1248,3 +1248,108 @@ test "place hydrogens on RNA adenosine (A)" {
     }
     try testing.expect(n_h >= 4);
 }
+
+// ── N-terminal mode tests (issue #251) ───────────────────────────────────────
+
+const BackboneHCounts = struct { h: u32, h1: u32, h2: u32, h3: u32 };
+
+fn countAddedBackboneHOnResidue(mdl: *const Model, residue_idx: u32) BackboneHCounts {
+    var counts = BackboneHCounts{ .h = 0, .h1 = 0, .h2 = 0, .h3 = 0 };
+    for (mdl.atoms.items) |atom| {
+        if (atom.residue_idx != residue_idx) continue;
+        if (!atom.is_added) continue;
+        const name = atom.nameSlice();
+        if (std.mem.eql(u8, name, "H")) counts.h += 1;
+        if (std.mem.eql(u8, name, "H1")) counts.h1 += 1;
+        if (std.mem.eql(u8, name, "H2")) counts.h2 += 1;
+        if (std.mem.eql(u8, name, "H3")) counts.h3 += 1;
+    }
+    return counts;
+}
+
+test "nterm auto (default) places NH3+ on real N-term only, break-amide on gap" {
+    const source = @embedFile("../test_data/gap_chain.cif");
+    var mdl = try mmcif.parseModel(testing.allocator, source);
+    defer mdl.deinit();
+
+    applyChemistryWithConfig(&mdl, .{});
+    _ = try addHydrogensWithConfig(&mdl, null, null, .{});
+
+    // Residue 0: real N-term → H1/H2/H3 (NH3+), no single H
+    const r0 = countAddedBackboneHOnResidue(&mdl, 0);
+    try testing.expectEqual(@as(u32, 0), r0.h);
+    try testing.expectEqual(@as(u32, 1), r0.h1);
+    try testing.expectEqual(@as(u32, 1), r0.h2);
+    try testing.expectEqual(@as(u32, 1), r0.h3);
+
+    // Residue 1: post-gap break → single H (break-amide), no NH3+
+    const r1 = countAddedBackboneHOnResidue(&mdl, 1);
+    try testing.expectEqual(@as(u32, 1), r1.h);
+    try testing.expectEqual(@as(u32, 0), r1.h1);
+    try testing.expectEqual(@as(u32, 0), r1.h2);
+    try testing.expectEqual(@as(u32, 0), r1.h3);
+}
+
+test "nterm aggressive places NH3+ on both real N-term and chain-break residue" {
+    const source = @embedFile("../test_data/gap_chain.cif");
+    var mdl = try mmcif.parseModel(testing.allocator, source);
+    defer mdl.deinit();
+
+    applyChemistryWithConfig(&mdl, .{ .nterm_mode = .aggressive });
+    _ = try addHydrogensWithConfig(&mdl, null, null, .{ .nterm_mode = .aggressive });
+
+    const r0 = countAddedBackboneHOnResidue(&mdl, 0);
+    try testing.expectEqual(@as(u32, 0), r0.h);
+    try testing.expectEqual(@as(u32, 1), r0.h1);
+    try testing.expectEqual(@as(u32, 1), r0.h2);
+    try testing.expectEqual(@as(u32, 1), r0.h3);
+
+    // In aggressive mode, the post-gap residue also gets NH3+ instead of a single H.
+    const r1 = countAddedBackboneHOnResidue(&mdl, 1);
+    try testing.expectEqual(@as(u32, 0), r1.h);
+    try testing.expectEqual(@as(u32, 1), r1.h1);
+    try testing.expectEqual(@as(u32, 1), r1.h2);
+    try testing.expectEqual(@as(u32, 1), r1.h3);
+}
+
+test "nterm neutral places NH2 (H2/H3 only) on real non-PRO N-term" {
+    const source = @embedFile("../test_data/tiny.cif");
+    var mdl = try mmcif.parseModel(testing.allocator, source);
+    defer mdl.deinit();
+
+    applyChemistryWithConfig(&mdl, .{ .nterm_mode = .neutral });
+    _ = try addHydrogensWithConfig(&mdl, null, null, .{ .nterm_mode = .neutral });
+
+    const r0 = countAddedBackboneHOnResidue(&mdl, 0);
+    // No single backbone H (still skipped) and no H1 — only H2/H3 for NH2 neutral.
+    try testing.expectEqual(@as(u32, 0), r0.h);
+    try testing.expectEqual(@as(u32, 0), r0.h1);
+    try testing.expectEqual(@as(u32, 1), r0.h2);
+    try testing.expectEqual(@as(u32, 1), r0.h3);
+
+    // Backbone N must NOT carry the positive-charge flag in neutral mode.
+    for (mdl.atoms.items) |atom| {
+        if (atom.residue_idx != 0) continue;
+        if (!std.mem.eql(u8, atom.nameSlice(), "N")) continue;
+        try testing.expect(atom.flags.donor);
+        try testing.expect(!atom.flags.positive);
+    }
+}
+
+test "nterm auto keeps positive charge flag on N-terminal backbone N" {
+    // Sanity check: the default mode should still set the N positive flag so
+    // the regression compared to pre-issue-251 behavior is detectable.
+    const source = @embedFile("../test_data/tiny.cif");
+    var mdl = try mmcif.parseModel(testing.allocator, source);
+    defer mdl.deinit();
+
+    applyChemistryWithConfig(&mdl, .{});
+    _ = try addHydrogensWithConfig(&mdl, null, null, .{});
+
+    for (mdl.atoms.items) |atom| {
+        if (atom.residue_idx != 0) continue;
+        if (!std.mem.eql(u8, atom.nameSlice(), "N")) continue;
+        try testing.expect(atom.flags.donor);
+        try testing.expect(atom.flags.positive);
+    }
+}

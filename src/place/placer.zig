@@ -68,6 +68,7 @@ pub const PlacementConfig = struct {
     water: WaterConfig = .{},
     protonation: ?*const protonation.ProtonationOverrides = null,
     bond_policy: bond_policy.BondPolicy = .{},
+    nterm_mode: terminal.NtermMode = .auto,
 };
 
 const AltlocSet = struct { locs: [10]u8, count: usize };
@@ -192,11 +193,19 @@ pub fn addHydrogensWithConfig(
         // The first residue in a chain is always a real N-terminus (gets NH3+/NH2+),
         // even if is_chain_break_before is set due to unobserved leading residues.
         // Mid-chain residues after a gap are terminal for bond topology but keep
-        // a single backbone amide H (no NH3+/NH2+ protonation).
+        // a single backbone amide H (no NH3+/NH2+ protonation) unless the user
+        // requested `--nterm aggressive`.
         const chain = mdl.chains.items[res.chain_idx];
         const is_real_nterm = (res_idx == chain.residue_start);
         const is_break_nterm = res.is_chain_break_before and (res_idx != chain.residue_start);
         const is_nterm_for_bonding = is_real_nterm or is_break_nterm;
+        // Whether this residue should receive N-terminal amine placement
+        // (NH3+/NH2+/NH2). `aggressive` mode additionally treats chain-break
+        // residues as N-termini.
+        const treat_as_nterm = switch (config.nterm_mode) {
+            .auto, .neutral => is_real_nterm,
+            .aggressive => is_real_nterm or is_break_nterm,
+        };
         const is_cterm = (res_idx == chain.residue_end - 1) or
             (res_idx + 1 < n_residues and mdl.residues.items[res_idx + 1].is_chain_break_before);
 
@@ -221,20 +230,28 @@ pub fn addHydrogensWithConfig(
             for (targets) |alt| {
                 for (plans) |plan| {
                     if (shouldSkipPlanForProtonation(comp_id, &plan, protonation_state)) continue;
-                    // Skip backbone amide H only on real N-termini (NH3+/NH2+, not NH).
-                    // After a chain break, keep the single amide H.
-                    if (is_real_nterm and terminal.isBackboneH(&plan)) continue;
+                    // Skip the single backbone amide H only when this residue
+                    // will receive an N-terminal amine (NH3+/NH2+/NH2). In the
+                    // default `auto` mode this matches `is_real_nterm`; in
+                    // `aggressive` mode chain-break residues are also covered.
+                    if (treat_as_nterm and terminal.isBackboneH(&plan)) continue;
 
                     result.tally(try execute.executePlan(mdl, res, @intCast(res_idx), &plan, bonds, alt, config.bond_policy.mode));
                 }
 
-                // Real N-terminal peptide residues: place NH3+/NH2+ instead of single backbone H.
-                // Residues after a chain break keep a single break-amide H.
-                if (is_real_nterm and has_backbone) {
-                    const nterm = if (std.mem.eql(u8, comp_id, "PRO"))
+                // Place the N-terminal amine hydrogens according to the
+                // configured mode. `neutral` falls back to NH2+ on PRO since
+                // the neutral form of a secondary amine is a single H and is
+                // better modeled by the existing NH2Pro geometry than by a
+                // new dedicated primary-amine path.
+                if (treat_as_nterm and has_backbone) {
+                    const is_pro = std.mem.eql(u8, comp_id, "PRO");
+                    const nterm = if (is_pro)
                         try terminal.placeNtermNH2Pro(mdl, res, @intCast(res_idx), alt, config.bond_policy.mode)
-                    else
-                        try terminal.placeNtermNH3(mdl, res, @intCast(res_idx), alt, config.bond_policy.mode);
+                    else switch (config.nterm_mode) {
+                        .auto, .aggressive => try terminal.placeNtermNH3(mdl, res, @intCast(res_idx), alt, config.bond_policy.mode),
+                        .neutral => try terminal.placeNtermNH2Neutral(mdl, res, @intCast(res_idx), alt, config.bond_policy.mode),
+                    };
                     result.n_placed += nterm.placed;
                     result.n_skipped_existing += nterm.skipped;
                 }
@@ -329,10 +346,19 @@ pub fn applyChemistryWithConfig(mdl: *Model, config: PlacementConfig) void {
         const protonation_state = if (config.protonation) |overrides| overrides.find(mdl, res_idx) else null;
 
         // Detect terminal residues.
-        // N-terminal positive charge applies only at real chain starts (first residue).
+        // N-terminal positive charge applies to residues that receive an
+        // NH3+/NH2+ placement (see dispatch above). In `aggressive` mode this
+        // includes chain-break residues; in `neutral` mode the backbone N stays
+        // donor-only (no POS flag).
         // C-terminal negative charge applies at chain ends and before chain breaks.
         const chain = mdl.chains.items[res.chain_idx];
         const is_real_nterm = (res_idx == chain.residue_start);
+        const is_break_nterm = res.is_chain_break_before and (res_idx != chain.residue_start);
+        const is_positive_nterm = switch (config.nterm_mode) {
+            .auto => is_real_nterm,
+            .aggressive => is_real_nterm or is_break_nterm,
+            .neutral => false,
+        };
         const is_cterm = (res_idx == chain.residue_end - 1) or
             (res_idx + 1 < n_residues and mdl.residues.items[res_idx + 1].is_chain_break_before);
 
@@ -352,7 +378,7 @@ pub fn applyChemistryWithConfig(mdl: *Model, config: PlacementConfig) void {
 
             // Apply terminal annotations (merge flags via OR)
             // Only set element_type/vdw_radius for atoms without standard annotation (e.g. OXT)
-            if (chemistry.getTerminalAnnotation(atom.nameRaw(), is_real_nterm, is_cterm)) |term_ann| {
+            if (chemistry.getTerminalAnnotation(atom.nameRaw(), is_positive_nterm, is_cterm)) |term_ann| {
                 atom.flags = element.mergeFlags(atom.flags, term_ann.flags);
                 if (!has_std_ann) {
                     atom.element_type = term_ann.atom_type;

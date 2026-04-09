@@ -5,6 +5,16 @@ All notable changes to zreduce will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- `--nterm MODE` flag on `run` and `batch` to control N-terminal protonation (#251)
+  - `auto` (default): NH3+/NH2+ on chain-first residues only, break-amide on gaps (matches ChimeraX addh, unchanged from prior behavior)
+  - `aggressive`: NH3+/NH2+ on both chain-first and chain-break residues (matches reduce2 `first_in_chain`)
+  - `neutral`: non-PRO real N-termini get a neutral NH2 (H2/H3 at gauche ±60°, no positive charge flag)
+- `placeNtermNH2Neutral` in `src/place/terminal.zig` for neutral primary amine placement
+- `NtermMode` enum re-exported from `zreduce.place` for library callers
+
 ## [0.3.0] - 2026-03-30
 
 ### Added
