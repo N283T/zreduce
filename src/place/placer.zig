@@ -259,6 +259,7 @@ pub fn addHydrogensWithConfig(
                     };
                     result.n_placed += nterm.placed;
                     result.n_skipped_existing += nterm.skipped;
+                    result.n_skipped_missing_ref += nterm.missing_ref;
                 }
 
                 // 3' terminal nucleotide: place HO3' (leaving atom, absent mid-chain).
@@ -266,6 +267,7 @@ pub fn addHydrogensWithConfig(
                     const oh = try terminal.place3primeOH(mdl, res, @intCast(res_idx), alt, config.bond_policy.mode);
                     result.n_placed += oh.placed;
                     result.n_skipped_existing += oh.skipped;
+                    result.n_skipped_missing_ref += oh.missing_ref;
                 }
 
                 if (try execute.placeOverrideHydrogen(mdl, res, @intCast(res_idx), alt, protonation_state, config.bond_policy.mode)) |place_result| {
@@ -324,6 +326,7 @@ pub fn addHydrogensWithConfig(
                         const oh = try terminal.place3primeOH(mdl, res, @intCast(res_idx), ' ', config.bond_policy.mode);
                         result.n_placed += oh.placed;
                         result.n_skipped_existing += oh.skipped;
+                        result.n_skipped_missing_ref += oh.missing_ref;
                     }
                 }
 
