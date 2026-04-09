@@ -119,14 +119,27 @@ pub fn appendNtermH(mdl: *Model, h_pos: Vec3f32, name: []const u8, res_idx: u32,
     try mdl.atoms.append(mdl.allocator, atom);
 }
 
-pub const NtermResult = struct { placed: u32, skipped: u32 };
+/// Result of a terminal placement attempt.
+///
+/// - `placed`: number of H atoms actually appended to the model
+/// - `skipped`: number of plans skipped because an equivalent H already exists
+/// - `missing_ref`: number of placements aborted because a required reference
+///   atom (N, CA, C, CD, O3', C3', C4') could not be resolved at the target
+///   altloc. Callers should tally this into `PlacementResult.n_skipped_missing_ref`
+///   so the final run summary surfaces the shortfall instead of silently
+///   dropping it (see #254).
+pub const NtermResult = struct {
+    placed: u32,
+    skipped: u32,
+    missing_ref: u32 = 0,
+};
 
 /// Place NH3+ hydrogens (H1, H2, H3) on the N-terminal residue.
 /// Uses h3xr (dihedral-controlled) placement around the N-CA bond.
 pub fn placeNtermNH3(mdl: *Model, res: Residue, res_idx: u32, target_altloc: u8, mode: bond_policy.BondLengthMode) !NtermResult {
-    const n_atom = findAtom(mdl, res, .{ ' ', 'N', ' ', ' ' }, target_altloc) orelse return .{ .placed = 0, .skipped = 0 };
-    const ca_pos = findAtomPos(mdl, res, .{ ' ', 'C', 'A', ' ' }, target_altloc) orelse return .{ .placed = 0, .skipped = 0 };
-    const c_pos = findAtomPos(mdl, res, .{ ' ', 'C', ' ', ' ' }, target_altloc) orelse return .{ .placed = 0, .skipped = 0 };
+    const n_atom = findAtom(mdl, res, .{ ' ', 'N', ' ', ' ' }, target_altloc) orelse return .{ .placed = 0, .skipped = 0, .missing_ref = 1 };
+    const ca_pos = findAtomPos(mdl, res, .{ ' ', 'C', 'A', ' ' }, target_altloc) orelse return .{ .placed = 0, .skipped = 0, .missing_ref = 1 };
+    const c_pos = findAtomPos(mdl, res, .{ ' ', 'C', ' ', ' ' }, target_altloc) orelse return .{ .placed = 0, .skipped = 0, .missing_ref = 1 };
 
     var meta = ParentMeta.fromAtom(n_atom);
     if (target_altloc != ' ') meta.altloc = target_altloc;
@@ -159,9 +172,9 @@ pub fn placeNtermNH3(mdl: *Model, res: Residue, res_idx: u32, target_altloc: u8,
 /// Place NH2+ hydrogens (H2, H3) on N-terminal PRO.
 /// PRO has CD bonded to N (secondary amine), so only 2 H positions.
 pub fn placeNtermNH2Pro(mdl: *Model, res: Residue, res_idx: u32, target_altloc: u8, mode: bond_policy.BondLengthMode) !NtermResult {
-    const n_atom = findAtom(mdl, res, .{ ' ', 'N', ' ', ' ' }, target_altloc) orelse return .{ .placed = 0, .skipped = 0 };
-    const ca_pos = findAtomPos(mdl, res, .{ ' ', 'C', 'A', ' ' }, target_altloc) orelse return .{ .placed = 0, .skipped = 0 };
-    const cd_pos = findAtomPos(mdl, res, .{ ' ', 'C', 'D', ' ' }, target_altloc) orelse return .{ .placed = 0, .skipped = 0 };
+    const n_atom = findAtom(mdl, res, .{ ' ', 'N', ' ', ' ' }, target_altloc) orelse return .{ .placed = 0, .skipped = 0, .missing_ref = 1 };
+    const ca_pos = findAtomPos(mdl, res, .{ ' ', 'C', 'A', ' ' }, target_altloc) orelse return .{ .placed = 0, .skipped = 0, .missing_ref = 1 };
+    const cd_pos = findAtomPos(mdl, res, .{ ' ', 'C', 'D', ' ' }, target_altloc) orelse return .{ .placed = 0, .skipped = 0, .missing_ref = 1 };
 
     var meta = ParentMeta.fromAtom(n_atom);
     if (target_altloc != ' ') meta.altloc = target_altloc;
@@ -201,9 +214,9 @@ pub fn placeNtermNH2Pro(mdl: *Model, res: Residue, res_idx: u32, target_altloc: 
 /// empty for the nitrogen lone pair. The backbone N is treated as a
 /// primary amine with one heavy neighbor, two H, and one lone pair.
 pub fn placeNtermNH2Neutral(mdl: *Model, res: Residue, res_idx: u32, target_altloc: u8, mode: bond_policy.BondLengthMode) !NtermResult {
-    const n_atom = findAtom(mdl, res, .{ ' ', 'N', ' ', ' ' }, target_altloc) orelse return .{ .placed = 0, .skipped = 0 };
-    const ca_pos = findAtomPos(mdl, res, .{ ' ', 'C', 'A', ' ' }, target_altloc) orelse return .{ .placed = 0, .skipped = 0 };
-    const c_pos = findAtomPos(mdl, res, .{ ' ', 'C', ' ', ' ' }, target_altloc) orelse return .{ .placed = 0, .skipped = 0 };
+    const n_atom = findAtom(mdl, res, .{ ' ', 'N', ' ', ' ' }, target_altloc) orelse return .{ .placed = 0, .skipped = 0, .missing_ref = 1 };
+    const ca_pos = findAtomPos(mdl, res, .{ ' ', 'C', 'A', ' ' }, target_altloc) orelse return .{ .placed = 0, .skipped = 0, .missing_ref = 1 };
+    const c_pos = findAtomPos(mdl, res, .{ ' ', 'C', ' ', ' ' }, target_altloc) orelse return .{ .placed = 0, .skipped = 0, .missing_ref = 1 };
 
     var meta = ParentMeta.fromAtom(n_atom);
     if (target_altloc != ' ') meta.altloc = target_altloc;
@@ -242,9 +255,9 @@ pub fn placeNtermNH2Neutral(mdl: *Model, res: Residue, res_idx: u32, target_altl
 /// O3' is sp3 with 2 heavy-atom neighbors (C3', and normally the next P — absent at 3' terminus).
 /// Uses h3xr geometry: O3' center, C3' and C4' as references, tetrahedral angle.
 pub fn place3primeOH(mdl: *Model, res: Residue, res_idx: u32, target_altloc: u8, mode: bond_policy.BondLengthMode) !NtermResult {
-    const o3_atom = findAtom(mdl, res, .{ ' ', 'O', '3', '\'' }, target_altloc) orelse return .{ .placed = 0, .skipped = 0 };
-    const c3_pos = findAtomPos(mdl, res, .{ ' ', 'C', '3', '\'' }, target_altloc) orelse return .{ .placed = 0, .skipped = 0 };
-    const c4_pos = findAtomPos(mdl, res, .{ ' ', 'C', '4', '\'' }, target_altloc) orelse return .{ .placed = 0, .skipped = 0 };
+    const o3_atom = findAtom(mdl, res, .{ ' ', 'O', '3', '\'' }, target_altloc) orelse return .{ .placed = 0, .skipped = 0, .missing_ref = 1 };
+    const c3_pos = findAtomPos(mdl, res, .{ ' ', 'C', '3', '\'' }, target_altloc) orelse return .{ .placed = 0, .skipped = 0, .missing_ref = 1 };
+    const c4_pos = findAtomPos(mdl, res, .{ ' ', 'C', '4', '\'' }, target_altloc) orelse return .{ .placed = 0, .skipped = 0, .missing_ref = 1 };
 
     var meta = ParentMeta.fromAtom(o3_atom);
     if (target_altloc != ' ') meta.altloc = target_altloc;

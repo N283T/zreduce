@@ -1447,3 +1447,92 @@ test "nterm aggressive on N-terminal PRO places NH2+ with positive flag" {
     try testing.expectEqual(@as(u32, 1), r0.h3);
     try expectBackboneNFlags(&mdl, 0, true, true);
 }
+
+// ── NtermResult.missing_ref surfacing (issue #254) ───────────────────────────
+
+test "N-terminal placement tallies missing_ref when backbone C is absent" {
+    // First residue has no backbone C atom — placeNtermNH3 cannot compute
+    // its h3xr dihedral reference and must report the failure through
+    // NtermResult.missing_ref so the caller can surface it instead of
+    // silently dropping the terminus.
+    const source =
+        \\data_MISSING_C
+        \\#
+        \\loop_
+        \\_atom_site.group_PDB
+        \\_atom_site.id
+        \\_atom_site.type_symbol
+        \\_atom_site.label_atom_id
+        \\_atom_site.label_comp_id
+        \\_atom_site.label_asym_id
+        \\_atom_site.label_seq_id
+        \\_atom_site.Cartn_x
+        \\_atom_site.Cartn_y
+        \\_atom_site.Cartn_z
+        \\_atom_site.occupancy
+        \\_atom_site.B_iso_or_equiv
+        \\_atom_site.label_alt_id
+        \\_atom_site.auth_asym_id
+        \\ATOM 1 N N   ALA A 1 1.458 0.000 0.000 1.00 10.0 . A
+        \\ATOM 2 C CA  ALA A 1 0.000 0.000 0.000 1.00 10.0 . A
+        \\ATOM 3 O O   ALA A 1 -1.742 1.560 0.000 1.00 10.0 . A
+        \\ATOM 4 C CB  ALA A 1 -0.700 -1.100 1.800 1.00 10.0 . A
+        \\#
+    ;
+    var mdl = try mmcif.parseModel(testing.allocator, source);
+    defer mdl.deinit();
+
+    const result = try addHydrogensWithConfig(&mdl, null, null, .{});
+
+    // The missing C backbone reference must surface through the summary
+    // counter so a caller like main.zig can warn the user.
+    try testing.expect(result.n_skipped_missing_ref > 0);
+
+    // No H1/H2/H3 should have been placed for the broken N-terminal residue.
+    const r0 = countAddedBackboneHOnResidue(&mdl, 0);
+    try testing.expectEqual(@as(u32, 0), r0.h1);
+    try testing.expectEqual(@as(u32, 0), r0.h2);
+    try testing.expectEqual(@as(u32, 0), r0.h3);
+}
+
+test "N-terminal PRO placement tallies missing_ref when CD is absent" {
+    // PRO requires both CA and CD to compute the NH2Pro geometry. If CD is
+    // missing, placeNtermNH2Pro must surface the skip through missing_ref.
+    const source =
+        \\data_PRO_NO_CD
+        \\#
+        \\loop_
+        \\_atom_site.group_PDB
+        \\_atom_site.id
+        \\_atom_site.type_symbol
+        \\_atom_site.label_atom_id
+        \\_atom_site.label_comp_id
+        \\_atom_site.label_asym_id
+        \\_atom_site.label_seq_id
+        \\_atom_site.Cartn_x
+        \\_atom_site.Cartn_y
+        \\_atom_site.Cartn_z
+        \\_atom_site.occupancy
+        \\_atom_site.B_iso_or_equiv
+        \\_atom_site.label_alt_id
+        \\_atom_site.auth_asym_id
+        \\ATOM 1 N N   PRO A 1 1.458 0.000 0.000 1.00 10.0 . A
+        \\ATOM 2 C CA  PRO A 1 0.000 0.000 0.000 1.00 10.0 . A
+        \\ATOM 3 C C   PRO A 1 -0.523 1.413 0.000 1.00 10.0 . A
+        \\ATOM 4 O O   PRO A 1 -1.742 1.560 0.000 1.00 10.0 . A
+        \\ATOM 5 C CB  PRO A 1 -0.700 -1.100 1.800 1.00 10.0 . A
+        \\#
+    ;
+    var mdl = try mmcif.parseModel(testing.allocator, source);
+    defer mdl.deinit();
+
+    const result = try addHydrogensWithConfig(&mdl, null, null, .{});
+
+    try testing.expect(result.n_skipped_missing_ref > 0);
+
+    // No H2/H3 should be placed on backbone N without CD.
+    const r0 = countAddedBackboneHOnResidue(&mdl, 0);
+    try testing.expectEqual(@as(u32, 0), r0.h1);
+    try testing.expectEqual(@as(u32, 0), r0.h2);
+    try testing.expectEqual(@as(u32, 0), r0.h3);
+}
