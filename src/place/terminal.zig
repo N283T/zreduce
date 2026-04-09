@@ -12,13 +12,20 @@ const std = @import("std");
 ///   amide H. Matches ChimeraX addh and the behavior documented in #118.
 /// - `aggressive`: Place NH3+/NH2+ on both real chain-first residues and
 ///   residues following a chain break. Matches reduce2's `first_in_chain`
-///   mode and explains the additional NH3 placed by reduce2 on AlphaFold
-///   models (see #114, #118).
-/// - `neutral`: Place a neutral NH2 (two H, no formal positive charge) at
-///   non-PRO real N-termini. PRO falls back to NH2+ (secondary amine with
-///   two H) since the neutral form collapses to a single amine H and is
-///   better served by the existing NH2Pro placement. Matches the spirit of
-///   reduce2's `no_charge` mode for the common case.
+///   mode and likely explains the additional NH3 placed by reduce2 on
+///   AlphaFold models with chain breaks (#118 lists the reduce2 default as
+///   an open question; see #114).
+/// - `neutral`: Place a neutral NH2 (two H, no positive charge flag) at
+///   non-PRO real N-termini. PRO is an exception: its backbone N is a
+///   secondary amine (bonded to CA and CD), which under physiological
+///   conditions is protonated to NH2+. PRO therefore keeps the default
+///   NH2+ placement and the associated positive charge flag even in
+///   `neutral` mode — making a full neutral secondary amine would require
+///   a single-H placement path that does not exist today.
+///
+/// Residues after an observed chain break are **only** treated as N-termini
+/// under `aggressive`; `auto` and `neutral` leave them with a single break
+/// amide H regardless of mode.
 pub const NtermMode = enum {
     auto,
     aggressive,
@@ -31,6 +38,23 @@ pub const NtermMode = enum {
         if (std.ascii.eqlIgnoreCase(s, "aggressive")) return .aggressive;
         if (std.ascii.eqlIgnoreCase(s, "neutral")) return .neutral;
         return null;
+    }
+
+    /// True iff residues after an observed chain break should be treated as
+    /// N-termini (skip the single amide H and place NH3+/NH2+ instead).
+    pub fn treatsBreakAsNterm(self: NtermMode) bool {
+        return self == .aggressive;
+    }
+
+    /// True iff the backbone N of an N-terminal residue should carry the
+    /// formal positive charge flag. The `is_pro` parameter captures the PRO
+    /// exception: `neutral` mode still lets PRO be protonated because the
+    /// placer keeps the NH2+ geometry for PRO (see dispatch in `placer.zig`).
+    pub fn placesPositiveCharge(self: NtermMode, is_pro: bool) bool {
+        return switch (self) {
+            .auto, .aggressive => true,
+            .neutral => is_pro,
+        };
     }
 };
 
@@ -170,10 +194,12 @@ pub fn placeNtermNH2Pro(mdl: *Model, res: Residue, res_idx: u32, target_altloc: 
 }
 
 /// Place neutral NH2 hydrogens (H2, H3) on a non-PRO N-terminal residue.
-/// Same h3xr geometry as NH3+ but skips the anti position (180°) so that the
-/// two H sit at the gauche ±60° dihedrals relative to the N-CA-C plane. The
-/// backbone N is treated as a primary amine (1 heavy neighbor + 2 H + lone
-/// pair), approximating a tetrahedral sp3 geometry.
+/// Same h3xr geometry as NH3+ (tetrahedral 109.5° angle, reused for code
+/// simplicity even though a real primary amine is slightly different) but
+/// skips the anti position. The resulting C-CA-N-H dihedrals are +60° and
+/// -60° (both gauche to the backbone carbonyl C), leaving the 180° slot
+/// empty for the nitrogen lone pair. The backbone N is treated as a
+/// primary amine with one heavy neighbor, two H, and one lone pair.
 pub fn placeNtermNH2Neutral(mdl: *Model, res: Residue, res_idx: u32, target_altloc: u8, mode: bond_policy.BondLengthMode) !NtermResult {
     const n_atom = findAtom(mdl, res, .{ ' ', 'N', ' ', ' ' }, target_altloc) orelse return .{ .placed = 0, .skipped = 0 };
     const ca_pos = findAtomPos(mdl, res, .{ ' ', 'C', 'A', ' ' }, target_altloc) orelse return .{ .placed = 0, .skipped = 0 };
@@ -188,8 +214,9 @@ pub fn placeNtermNH2Neutral(mdl: *Model, res: Residue, res_idx: u32, target_altl
 
     const bond_len: f64 = bond_policy.adjustedBondLength(mode, 1.00, n_atom.element_type, .Hpol);
     const angle_deg: f64 = 109.5;
-    // Use H2/H3 at the gauche positions (±60°), skipping H1 at the anti (180°).
-    // Same naming convention as placeNtermNH2Pro for internal consistency.
+    // H2/H3 are placed at the two gauche C-CA-N-H dihedrals (+60°, -60°),
+    // skipping the anti (180°) slot so the N lone pair sits trans to C'.
+    // Same H naming convention as `placeNtermNH2Pro` for internal consistency.
     const names = [2][]const u8{ "H2", "H3" };
     const dihedrals = [2]f64{ 60.0, -60.0 };
 
@@ -310,7 +337,9 @@ test "NtermMode.fromString parses canonical names case-insensitively" {
 }
 
 test "placeNtermNH2Neutral places exactly 2 H atoms with gauche dihedrals" {
-    const source = @embedFile("../test_data/tiny.cif");
+    // Use ala_stretched.cif (non-collinear N-CA-C backbone); tiny.cif has
+    // a collinear backbone that degenerates h3xr dihedral placement.
+    const source = @embedFile("../test_data/ala_stretched.cif");
     var mdl = try mmcif.parseModel(testing.allocator, source);
     defer mdl.deinit();
 
@@ -318,6 +347,47 @@ test "placeNtermNH2Neutral places exactly 2 H atoms with gauche dihedrals" {
     const result = try placeNtermNH2Neutral(&mdl, res, 0, ' ', .neutron);
     try testing.expectEqual(@as(u32, 2), result.placed);
     try testing.expectEqual(@as(u32, 0), result.skipped);
+
+    // Collect heavy-atom reference positions for geometric validation.
+    var n_pos: ?Vec3f32 = null;
+    var ca_pos: ?Vec3f32 = null;
+    var c_pos: ?Vec3f32 = null;
+    var h2_pos: ?Vec3f32 = null;
+    var h3_pos: ?Vec3f32 = null;
+    for (mdl.atoms.items) |atom| {
+        const name = atom.nameSlice();
+        if (std.mem.eql(u8, name, "N")) n_pos = atom.pos;
+        if (std.mem.eql(u8, name, "CA")) ca_pos = atom.pos;
+        if (std.mem.eql(u8, name, "C")) c_pos = atom.pos;
+        if (atom.is_added and std.mem.eql(u8, name, "H2")) h2_pos = atom.pos;
+        if (atom.is_added and std.mem.eql(u8, name, "H3")) h3_pos = atom.pos;
+    }
+    try testing.expect(n_pos != null and ca_pos != null and c_pos != null);
+    try testing.expect(h2_pos != null and h3_pos != null);
+
+    // Both H must be placed, non-NaN, and distinct from each other.
+    try testing.expect(!std.math.isNan(h2_pos.?.x));
+    try testing.expect(!std.math.isNan(h3_pos.?.x));
+    try testing.expect(h2_pos.?.distance(h3_pos.?) > 0.1);
+
+    // N-H bond length ≈ 1.00 Å (neutron mode, no isotope scaling).
+    const nh2_len = n_pos.?.distance(h2_pos.?);
+    const nh3_len = n_pos.?.distance(h3_pos.?);
+    try testing.expectApproxEqAbs(@as(f32, 1.0), nh2_len, 0.02);
+    try testing.expectApproxEqAbs(@as(f32, 1.0), nh3_len, 0.02);
+
+    // H-N-CA angle ≈ 109.5° (tetrahedral).
+    const n = n_pos.?;
+    const ca = ca_pos.?;
+    const nh2_vec = h2_pos.?.sub(n).normalize();
+    const nh3_vec = h3_pos.?.sub(n).normalize();
+    const nca_vec = ca.sub(n).normalize();
+    const cos_h2 = nh2_vec.dot(nca_vec);
+    const cos_h3 = nh3_vec.dot(nca_vec);
+    const angle_h2 = std.math.radiansToDegrees(std.math.acos(std.math.clamp(cos_h2, -1.0, 1.0)));
+    const angle_h3 = std.math.radiansToDegrees(std.math.acos(std.math.clamp(cos_h3, -1.0, 1.0)));
+    try testing.expectApproxEqAbs(@as(f32, 109.5), angle_h2, 1.0);
+    try testing.expectApproxEqAbs(@as(f32, 109.5), angle_h3, 1.0);
 
     var h_count: u32 = 0;
     for (mdl.atoms.items) |atom| {
@@ -331,7 +401,7 @@ test "placeNtermNH2Neutral places exactly 2 H atoms with gauche dihedrals" {
     }
     try testing.expectEqual(@as(u32, 2), h_count);
 
-    // No H1 should be placed in neutral mode.
+    // No H1 should be placed in neutral mode (skipping the anti dihedral slot).
     for (mdl.atoms.items) |atom| {
         if (!atom.is_added) continue;
         try testing.expect(!std.mem.eql(u8, atom.nameSlice(), "H1"));

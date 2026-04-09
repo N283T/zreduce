@@ -192,20 +192,17 @@ pub fn addHydrogensWithConfig(
         // Detect terminal residues.
         // The first residue in a chain is always a real N-terminus (gets NH3+/NH2+),
         // even if is_chain_break_before is set due to unobserved leading residues.
-        // Mid-chain residues after a gap are terminal for bond topology but keep
-        // a single backbone amide H (no NH3+/NH2+ protonation) unless the user
-        // requested `--nterm aggressive`.
+        // Mid-chain residues after a gap are terminal for bond topology (→
+        // `is_nterm_for_bonding` drives CCD leaving-atom logic and the peptide-bond
+        // inter-residue list below), but they keep a single backbone amide H by
+        // default. Only `--nterm aggressive` promotes them to full N-termini
+        // for amine placement and charge annotation (→ `treat_as_nterm`).
         const chain = mdl.chains.items[res.chain_idx];
         const is_real_nterm = (res_idx == chain.residue_start);
         const is_break_nterm = res.is_chain_break_before and (res_idx != chain.residue_start);
         const is_nterm_for_bonding = is_real_nterm or is_break_nterm;
-        // Whether this residue should receive N-terminal amine placement
-        // (NH3+/NH2+/NH2). `aggressive` mode additionally treats chain-break
-        // residues as N-termini.
-        const treat_as_nterm = switch (config.nterm_mode) {
-            .auto, .neutral => is_real_nterm,
-            .aggressive => is_real_nterm or is_break_nterm,
-        };
+        const treat_as_nterm = is_real_nterm or
+            (is_break_nterm and config.nterm_mode.treatsBreakAsNterm());
         const is_cterm = (res_idx == chain.residue_end - 1) or
             (res_idx + 1 < n_residues and mdl.residues.items[res_idx + 1].is_chain_break_before);
 
@@ -240,12 +237,20 @@ pub fn addHydrogensWithConfig(
                 }
 
                 // Place the N-terminal amine hydrogens according to the
-                // configured mode. `neutral` falls back to NH2+ on PRO since
-                // the neutral form of a secondary amine is a single H and is
-                // better modeled by the existing NH2Pro geometry than by a
-                // new dedicated primary-amine path.
-                if (treat_as_nterm and has_backbone) {
-                    const is_pro = std.mem.eql(u8, comp_id, "PRO");
+                // configured mode. PRO keeps the NH2+ geometry under every
+                // mode — a true neutral secondary amine (single H) would
+                // need a separate placement path that does not exist today
+                // (see NtermMode.placesPositiveCharge for the matching
+                // chemistry-flag logic).
+                //
+                // PRO needs an explicit gate: PRO's plans contain no backbone
+                // amide H entry (its N is already bonded to CA and CD), so
+                // `has_backbone` is false — without the `is_pro` bypass, the
+                // NH2Pro call below would be dead code and N-terminal PRO
+                // would receive no backbone H at all. This bypass wires up
+                // placement that was always intended but previously skipped.
+                const is_pro = std.mem.eql(u8, comp_id, "PRO");
+                if (treat_as_nterm and (has_backbone or is_pro)) {
                     const nterm = if (is_pro)
                         try terminal.placeNtermNH2Pro(mdl, res, @intCast(res_idx), alt, config.bond_policy.mode)
                     else switch (config.nterm_mode) {
@@ -346,19 +351,21 @@ pub fn applyChemistryWithConfig(mdl: *Model, config: PlacementConfig) void {
         const protonation_state = if (config.protonation) |overrides| overrides.find(mdl, res_idx) else null;
 
         // Detect terminal residues.
-        // N-terminal positive charge applies to residues that receive an
-        // NH3+/NH2+ placement (see dispatch above). In `aggressive` mode this
-        // includes chain-break residues; in `neutral` mode the backbone N stays
-        // donor-only (no POS flag).
-        // C-terminal negative charge applies at chain ends and before chain breaks.
+        // The positive-charge flag on backbone N is driven by the same rule
+        // used for N-terminal H placement (see `addHydrogensWithConfig`):
+        // residues receive the POS_D flag iff they get an NH3+/NH2+ placement.
+        // PRO is the sole exception under `neutral` mode — it keeps the NH2+
+        // geometry (secondary amine at physiological pH) and therefore also
+        // keeps the positive charge flag. The two call sites must stay in sync
+        // or else chemistry annotation will drift from placed hydrogen atoms.
         const chain = mdl.chains.items[res.chain_idx];
         const is_real_nterm = (res_idx == chain.residue_start);
         const is_break_nterm = res.is_chain_break_before and (res_idx != chain.residue_start);
-        const is_positive_nterm = switch (config.nterm_mode) {
-            .auto => is_real_nterm,
-            .aggressive => is_real_nterm or is_break_nterm,
-            .neutral => false,
-        };
+        const treat_as_nterm = is_real_nterm or
+            (is_break_nterm and config.nterm_mode.treatsBreakAsNterm());
+        const is_pro = std.mem.eql(u8, comp_id, "PRO");
+        const is_positive_nterm = treat_as_nterm and
+            config.nterm_mode.placesPositiveCharge(is_pro);
         const is_cterm = (res_idx == chain.residue_end - 1) or
             (res_idx + 1 < n_residues and mdl.residues.items[res_idx + 1].is_chain_break_before);
 

@@ -303,8 +303,9 @@ fn printRunUsage() void {
         \\    --deuterium        Shortcut for --isotope deuterium
         \\    --nterm MODE       N-terminal protonation: auto|aggressive|neutral (default: auto)
         \\                         auto       NH3+/NH2+ on real chain-first residues only (ChimeraX-compatible)
-        \\                         aggressive also NH3+/NH2+ on residues after chain breaks (reduce2 first_in_chain)
-        \\                         neutral    place NH2 (2 H, no +) on non-PRO real N-termini
+        \\                         aggressive also NH3+/NH2+ on chain-break residues (reduce2 first_in_chain)
+        \\                         neutral    NH2 (no + flag) on non-PRO real N-termini; PRO keeps NH2+
+        \\                                    chain-break residues keep the single break-amide H in auto/neutral
         \\    --strip-h          Remove existing H atoms before placement
         \\    --model VALUE      Model selection: 'all' (default) or a model number
         \\

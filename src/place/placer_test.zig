@@ -1267,6 +1267,20 @@ fn countAddedBackboneHOnResidue(mdl: *const Model, residue_idx: u32) BackboneHCo
     return counts;
 }
 
+/// Find the backbone N atom of the given residue and assert its donor and
+/// positive charge flags match the expected values. Fails the test on missing N.
+fn expectBackboneNFlags(mdl: *const Model, residue_idx: u32, expect_donor: bool, expect_positive: bool) !void {
+    for (mdl.atoms.items) |atom| {
+        if (atom.residue_idx != residue_idx) continue;
+        if (atom.is_hydrogen) continue;
+        if (!std.mem.eql(u8, atom.nameSlice(), "N")) continue;
+        try testing.expectEqual(expect_donor, atom.flags.donor);
+        try testing.expectEqual(expect_positive, atom.flags.positive);
+        return;
+    }
+    return error.BackboneNotFound;
+}
+
 test "nterm auto (default) places NH3+ on real N-term only, break-amide on gap" {
     const source = @embedFile("../test_data/gap_chain.cif");
     var mdl = try mmcif.parseModel(testing.allocator, source);
@@ -1275,19 +1289,21 @@ test "nterm auto (default) places NH3+ on real N-term only, break-amide on gap" 
     applyChemistryWithConfig(&mdl, .{});
     _ = try addHydrogensWithConfig(&mdl, null, null, .{});
 
-    // Residue 0: real N-term → H1/H2/H3 (NH3+), no single H
+    // Residue 0: real N-term → H1/H2/H3 (NH3+), no single H, backbone N positive
     const r0 = countAddedBackboneHOnResidue(&mdl, 0);
     try testing.expectEqual(@as(u32, 0), r0.h);
     try testing.expectEqual(@as(u32, 1), r0.h1);
     try testing.expectEqual(@as(u32, 1), r0.h2);
     try testing.expectEqual(@as(u32, 1), r0.h3);
+    try expectBackboneNFlags(&mdl, 0, true, true);
 
-    // Residue 1: post-gap break → single H (break-amide), no NH3+
+    // Residue 1: post-gap break → single H (break-amide), no NH3+, N donor only
     const r1 = countAddedBackboneHOnResidue(&mdl, 1);
     try testing.expectEqual(@as(u32, 1), r1.h);
     try testing.expectEqual(@as(u32, 0), r1.h1);
     try testing.expectEqual(@as(u32, 0), r1.h2);
     try testing.expectEqual(@as(u32, 0), r1.h3);
+    try expectBackboneNFlags(&mdl, 1, true, false);
 }
 
 test "nterm aggressive places NH3+ on both real N-term and chain-break residue" {
@@ -1303,53 +1319,131 @@ test "nterm aggressive places NH3+ on both real N-term and chain-break residue" 
     try testing.expectEqual(@as(u32, 1), r0.h1);
     try testing.expectEqual(@as(u32, 1), r0.h2);
     try testing.expectEqual(@as(u32, 1), r0.h3);
+    try expectBackboneNFlags(&mdl, 0, true, true);
 
-    // In aggressive mode, the post-gap residue also gets NH3+ instead of a single H.
+    // In aggressive mode, the post-gap residue also gets NH3+ and the positive flag.
     const r1 = countAddedBackboneHOnResidue(&mdl, 1);
     try testing.expectEqual(@as(u32, 0), r1.h);
     try testing.expectEqual(@as(u32, 1), r1.h1);
     try testing.expectEqual(@as(u32, 1), r1.h2);
     try testing.expectEqual(@as(u32, 1), r1.h3);
+    try expectBackboneNFlags(&mdl, 1, true, true);
 }
 
-test "nterm neutral places NH2 (H2/H3 only) on real non-PRO N-term" {
-    const source = @embedFile("../test_data/tiny.cif");
+test "nterm neutral: real non-PRO N-term gets NH2, break residue keeps single H" {
+    const source = @embedFile("../test_data/gap_chain.cif");
     var mdl = try mmcif.parseModel(testing.allocator, source);
     defer mdl.deinit();
 
     applyChemistryWithConfig(&mdl, .{ .nterm_mode = .neutral });
     _ = try addHydrogensWithConfig(&mdl, null, null, .{ .nterm_mode = .neutral });
 
+    // Residue 0 (real N-term ALA): only H2/H3, no single H, no H1, donor-only N.
     const r0 = countAddedBackboneHOnResidue(&mdl, 0);
-    // No single backbone H (still skipped) and no H1 — only H2/H3 for NH2 neutral.
+    try testing.expectEqual(@as(u32, 0), r0.h);
+    try testing.expectEqual(@as(u32, 0), r0.h1);
+    try testing.expectEqual(@as(u32, 1), r0.h2);
+    try testing.expectEqual(@as(u32, 1), r0.h3);
+    try expectBackboneNFlags(&mdl, 0, true, false);
+
+    // Residue 1 (post-gap ALA): unchanged from auto — single break-amide H,
+    // no NH2, donor-only N.
+    const r1 = countAddedBackboneHOnResidue(&mdl, 1);
+    try testing.expectEqual(@as(u32, 1), r1.h);
+    try testing.expectEqual(@as(u32, 0), r1.h1);
+    try testing.expectEqual(@as(u32, 0), r1.h2);
+    try testing.expectEqual(@as(u32, 0), r1.h3);
+    try expectBackboneNFlags(&mdl, 1, true, false);
+}
+
+test "nterm neutral on N-terminal PRO keeps NH2+ geometry AND positive flag" {
+    // PRO is the documented exception: neutral mode falls back to the NH2Pro
+    // secondary-amine geometry, and the positive charge flag must follow the
+    // placement to keep chemistry and atom positions consistent.
+    const source =
+        \\data_PRO_NTERM
+        \\#
+        \\loop_
+        \\_atom_site.group_PDB
+        \\_atom_site.id
+        \\_atom_site.type_symbol
+        \\_atom_site.label_atom_id
+        \\_atom_site.label_comp_id
+        \\_atom_site.label_asym_id
+        \\_atom_site.label_seq_id
+        \\_atom_site.Cartn_x
+        \\_atom_site.Cartn_y
+        \\_atom_site.Cartn_z
+        \\_atom_site.occupancy
+        \\_atom_site.B_iso_or_equiv
+        \\_atom_site.label_alt_id
+        \\_atom_site.auth_asym_id
+        \\ATOM 1 N N   PRO A 1 1.000 2.000 3.000 1.00 10.0 . A
+        \\ATOM 2 C CA  PRO A 1 2.000 3.000 4.000 1.00 10.0 . A
+        \\ATOM 3 C C   PRO A 1 3.000 4.000 5.000 1.00 10.0 . A
+        \\ATOM 4 O O   PRO A 1 4.000 5.000 6.000 1.00 10.0 . A
+        \\ATOM 5 C CB  PRO A 1 2.500 2.500 3.500 1.00 10.0 . A
+        \\ATOM 6 C CG  PRO A 1 1.500 2.000 4.500 1.00 10.0 . A
+        \\ATOM 7 C CD  PRO A 1 0.500 3.000 3.500 1.00 10.0 . A
+        \\#
+    ;
+    var mdl = try mmcif.parseModel(testing.allocator, source);
+    defer mdl.deinit();
+
+    applyChemistryWithConfig(&mdl, .{ .nterm_mode = .neutral });
+    _ = try addHydrogensWithConfig(&mdl, null, null, .{ .nterm_mode = .neutral });
+
+    // PRO N-term gets H2/H3 (NH2Pro geometry, 2 H, no H1).
+    const r0 = countAddedBackboneHOnResidue(&mdl, 0);
     try testing.expectEqual(@as(u32, 0), r0.h);
     try testing.expectEqual(@as(u32, 0), r0.h1);
     try testing.expectEqual(@as(u32, 1), r0.h2);
     try testing.expectEqual(@as(u32, 1), r0.h3);
 
-    // Backbone N must NOT carry the positive-charge flag in neutral mode.
-    for (mdl.atoms.items) |atom| {
-        if (atom.residue_idx != 0) continue;
-        if (!std.mem.eql(u8, atom.nameSlice(), "N")) continue;
-        try testing.expect(atom.flags.donor);
-        try testing.expect(!atom.flags.positive);
-    }
+    // The documented exception: PRO keeps the positive charge flag even in
+    // neutral mode because its secondary amine is protonated at physiological
+    // pH. Placement and chemistry must agree.
+    try expectBackboneNFlags(&mdl, 0, true, true);
 }
 
-test "nterm auto keeps positive charge flag on N-terminal backbone N" {
-    // Sanity check: the default mode should still set the N positive flag so
-    // the regression compared to pre-issue-251 behavior is detectable.
-    const source = @embedFile("../test_data/tiny.cif");
+test "nterm aggressive on N-terminal PRO places NH2+ with positive flag" {
+    // PRO at a chain break under aggressive mode — same NH2Pro geometry
+    // and positive flag as at a real N-terminus.
+    const source =
+        \\data_PRO_AGG
+        \\#
+        \\loop_
+        \\_atom_site.group_PDB
+        \\_atom_site.id
+        \\_atom_site.type_symbol
+        \\_atom_site.label_atom_id
+        \\_atom_site.label_comp_id
+        \\_atom_site.label_asym_id
+        \\_atom_site.label_seq_id
+        \\_atom_site.Cartn_x
+        \\_atom_site.Cartn_y
+        \\_atom_site.Cartn_z
+        \\_atom_site.occupancy
+        \\_atom_site.B_iso_or_equiv
+        \\_atom_site.label_alt_id
+        \\_atom_site.auth_asym_id
+        \\ATOM 1 N N   PRO A 1 1.000 2.000 3.000 1.00 10.0 . A
+        \\ATOM 2 C CA  PRO A 1 2.000 3.000 4.000 1.00 10.0 . A
+        \\ATOM 3 C C   PRO A 1 3.000 4.000 5.000 1.00 10.0 . A
+        \\ATOM 4 O O   PRO A 1 4.000 5.000 6.000 1.00 10.0 . A
+        \\ATOM 5 C CB  PRO A 1 2.500 2.500 3.500 1.00 10.0 . A
+        \\ATOM 6 C CG  PRO A 1 1.500 2.000 4.500 1.00 10.0 . A
+        \\ATOM 7 C CD  PRO A 1 0.500 3.000 3.500 1.00 10.0 . A
+        \\#
+    ;
     var mdl = try mmcif.parseModel(testing.allocator, source);
     defer mdl.deinit();
 
-    applyChemistryWithConfig(&mdl, .{});
-    _ = try addHydrogensWithConfig(&mdl, null, null, .{});
+    applyChemistryWithConfig(&mdl, .{ .nterm_mode = .aggressive });
+    _ = try addHydrogensWithConfig(&mdl, null, null, .{ .nterm_mode = .aggressive });
 
-    for (mdl.atoms.items) |atom| {
-        if (atom.residue_idx != 0) continue;
-        if (!std.mem.eql(u8, atom.nameSlice(), "N")) continue;
-        try testing.expect(atom.flags.donor);
-        try testing.expect(atom.flags.positive);
-    }
+    const r0 = countAddedBackboneHOnResidue(&mdl, 0);
+    try testing.expectEqual(@as(u32, 1), r0.h2);
+    try testing.expectEqual(@as(u32, 1), r0.h3);
+    try expectBackboneNFlags(&mdl, 0, true, true);
 }
