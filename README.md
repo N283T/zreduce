@@ -1,5 +1,7 @@
 # zreduce
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 A from-scratch Zig implementation of the [reduce](https://github.com/rlabduke/reduce) hydrogen placement tool for macromolecular structures.
 
 zreduce reads mmCIF structures, adds hydrogen atoms using geometric rules and CCD bond topology, then optimizes rotatable/flippable groups via clique-based search with probe dot-sphere scoring.
@@ -332,9 +334,34 @@ examples/
 
 See [CHANGELOG.md](CHANGELOG.md) for a detailed history of changes.
 
+## Contributing
+
+Contributions are welcome. Please:
+
+1. Open an issue to discuss larger changes before submitting a PR
+2. Follow the existing code style (run `zig fmt .` before committing)
+3. Add tests for new behavior — `zig build test` must pass
+4. Use conventional commit messages (`feat:`, `fix:`, `refactor:`, `docs:`, `test:`, `perf:`, `chore:`)
+5. Keep PRs focused — one logical change per PR
+
+For bug reports, please include the input structure (or a minimal reproduction) and the exact `zreduce` command used.
+
 ## License
 
-TBD
+zreduce is released under the MIT License. See [LICENSE](LICENSE) for details.
+
+### Attribution
+
+zreduce is an independent from-scratch Zig reimplementation. No source code from the
+original [reduce](https://github.com/rlabduke/reduce) tool is used, but the hydrogen
+placement algorithm, scoring heuristics, and bond topology tables it pioneered are
+owed to J. Michael Word, Duke University / UCSF, and contributors.
+
+Please cite the original work if you use zreduce in research:
+
+> Word, et al. (1999) "Asparagine and glutamine: using hydrogen atom contacts in the
+> choice of side-chain amide orientation." J. Mol. Biol. 285, 1735-1747.
+> [doi:10.1006/jmbi.1998.2401](https://doi.org/10.1006/jmbi.1998.2401)
 
 ## References
 
