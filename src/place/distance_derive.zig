@@ -218,7 +218,7 @@ fn addSyntheticHydrogens(
 
             // Generate H atom name: H1, H2, H3, ...
             var name_buf: [8]u8 = undefined;
-            const name_str = std.fmt.bufPrint(&name_buf, "H{d}", .{h_counter}) catch "H";
+            const name_str = std.fmt.bufPrint(&name_buf, "H{d}", .{h_counter}) catch unreachable;
             const copy_len: u4 = @intCast(@min(name_str.len, 4));
             var h_name: [4]u8 = .{ ' ', ' ', ' ', ' ' };
             @memcpy(h_name[0..copy_len], name_str[0..copy_len]);

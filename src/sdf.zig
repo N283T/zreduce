@@ -49,7 +49,10 @@ pub fn parseSdf(allocator: Allocator, source: []const u8) !ComponentDict {
         }
 
         parseMolBlock(allocator, mol_block, &dict) catch |err| {
-            std.log.warn("sdf: skipping malformed molecule block: {s}", .{@errorName(err)});
+            switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => std.log.warn("sdf: skipping malformed molecule block: {s}", .{@errorName(err)}),
+            }
         };
     }
 
@@ -119,7 +122,10 @@ fn parseMolBlock(allocator: Allocator, block: []const u8, dict: *ComponentDict) 
     while (bond_i < n_bonds) : (bond_i += 1) {
         const raw = lines.next() orelse return error.TruncatedBondBlock;
         const line = stripCR(raw);
-        const bond = parseBondLine(line) catch continue; // skip malformed bonds
+        const bond = parseBondLine(line) catch {
+            std.log.debug("sdf: skipping malformed bond line", .{});
+            continue;
+        };
         if (bond.atom_idx_1 >= atoms.items.len or bond.atom_idx_2 >= atoms.items.len) continue;
         try bonds.append(allocator, bond);
     }
@@ -209,7 +215,7 @@ fn parseAtomLine(
     var name_buf: [8]u8 = undefined;
     // Render only the non-space part of elem_key as the element prefix
     const elem_str = std.mem.trimRight(u8, &elem_key, " ");
-    const name_str = std.fmt.bufPrint(&name_buf, "{s}{d}", .{ elem_str, idx }) catch "X";
+    const name_str = std.fmt.bufPrint(&name_buf, "{s}{d}", .{ elem_str, idx }) catch unreachable;
 
     const copy_len = @min(name_str.len, 4);
     atom.name = .{ ' ', ' ', ' ', ' ' };
@@ -296,10 +302,11 @@ fn parseFixedInt(line: []const u8, start: usize, end: usize) !usize {
     return std.fmt.parseInt(usize, field, 10) catch error.InvalidCountsLine;
 }
 
-/// Parse a floating-point field, returning 0.0 on failure.
+/// Parse a floating-point field, returning NaN on failure so that
+/// downstream distance calculations never form spurious bonds.
 fn parseF32Field(field: []const u8) f32 {
     const trimmed = std.mem.trim(u8, field, " \t");
-    return std.fmt.parseFloat(f32, trimmed) catch 0.0;
+    return std.fmt.parseFloat(f32, trimmed) catch std.math.nan(f32);
 }
 
 // ---------------------------------------------------------------------------
