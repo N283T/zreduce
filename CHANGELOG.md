@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- SDF/MOL V2000 parser (`src/sdf.zig`) for providing ligand topology for compounds not in the CCD (#257)
+  - `-s, --sdf PATH` flag on `run` and `batch` subcommands
+  - Multiple molecules per file (separated by `$$$$`), molecule name used as comp_id
+  - `M  CHG` charge parsing, V2000 atom/bond blocks
+- Distance-based bond inference fallback (`src/place/distance_derive.zig`) for residues with no dictionary entry (#257)
+  - Automatic last-resort when no CCD, SDF, or inline dict entry exists
+  - Bond detection via covalent radii (1.3× tolerance, 2.5 Å cap)
+  - Valence-rule bond order promotion (C=O > C=N > C=C priority)
+  - Synthetic hydrogen generation for `ccd_derive.derivePlans()` consumption
+  - Diagnostic output: `note: N residues used distance-based bond inference`
+- Placement fallback chain: hardcoded → inline dict → SDF dict → CCD → distance-based inference (#257)
 - `--nterm MODE` flag on `run` and `batch` to control N-terminal protonation (#251)
   - `auto` (default): NH3+/NH2+ on chain-first residues only, break-amide on gaps (matches ChimeraX addh, unchanged from prior behavior)
   - `aggressive`: NH3+/NH2+ on both chain-first and chain-break residues (matches reduce2 `first_in_chain`)

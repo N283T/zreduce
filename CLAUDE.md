@@ -9,7 +9,7 @@ A Zig implementation of the [reduce](https://github.com/rlabduke/reduce) hydroge
 ```bash
 zig build                           # Debug build
 zig build -Doptimize=ReleaseFast    # Optimized build
-zig build test --summary all        # Run all tests (400+)
+zig build test --summary all        # Run all tests (~490)
 ```
 
 ## Run
@@ -18,6 +18,7 @@ zig build test --summary all        # Run all tests (400+)
 # Single file
 ./zig-out/bin/zreduce run input.cif -o output.cif
 ./zig-out/bin/zreduce run input.cif -d components.cif -o output.cif  # with CCD
+./zig-out/bin/zreduce run input.cif -d components.cif --sdf ligand.sdf -o output.cif  # with SDF
 ./zig-out/bin/zreduce run input.cif -o output.cif --validate         # with diagnostics
 
 # Batch processing (parallel)
@@ -53,6 +54,7 @@ src/
     inline_comp.zig     Inline component dictionary and leaving atom flags
   ccd.zig               CCD component dictionary (streaming parser)
   ccd_binary.zig        Binary format for fast CCD load/save
+  sdf.zig               SDF/MOL V2000 parser (non-CCD ligand topology)
   pdb.zig               PDB format parser (ATOM/HETATM records)
   model.zig             Model module re-exports
   model/                Atom, Residue, Chain, Bond, CellList
@@ -69,6 +71,7 @@ src/
     placer_test.zig     Placement pipeline integration tests
     standard.zig        20 AA placement plans + MoverHint
     ccd_derive.zig      CCD-derived placement plan generation
+    distance_derive.zig Distance-based bond inference fallback
     nucleotide.zig      DNA/RNA nucleotide placement plans
     modified.zig        Modified amino acid placement plans (MSE, SEP, etc.)
     topology.zig        Bond topology tables for 20 AAs
@@ -110,15 +113,15 @@ examples/
 - **Altloc**: `' '` = blank/shared. Conformer-aware: `findAtomPos(mdl, res, name, target_altloc)`.
 - **MoverHint**: Stored on Atom from PlacementPlan. Drives mover generation.
 - **ParentMeta**: Inherits altloc/occupancy/b_factor from parent heavy atom to placed H.
-- **Bond topology**: `topology.zig` for standard AAs, CCD for non-standard.
+- **Bond topology**: `topology.zig` for standard AAs, CCD for non-standard, SDF or distance-based inference as fallback.
 - **Chemistry**: `chemistry.zig` for donor/acceptor/aromatic/charge annotations.
 - **Terminal detection**: chain boundary + `is_chain_break_before` from `_pdbx_poly_seq_scheme`.
 - **Sentinel**: `ABSENT_H_POS = (1000,1000,1000)` for flipper absent H. Use `isAbsentH()`.
 
 ## Testing
 
-- `zig build test` runs all tests (~400)
-- Test fixtures in `src/test_data/`: tiny.cif, tiny.pdb, multi_chain.cif, multi_chain.pdb, multi_model.cif, multi_model_null.cif, multi_model_with_h.cif, ala_with_h.cif, ala_altloc.cif, ala_stretched.cif, ala_cterm.cif, gap_chain.cif, ins_code.cif, asn.cif, his.cif, hetatm.pdb, disulfide.cif, disulfide_with_hbond.cif, branch_link.cif, entity_type.cif, inline_comp.cif, leaving_atom.cif, nterm_disorder.cif
+- `zig build test` runs all tests (~490)
+- Test fixtures in `src/test_data/`: tiny.cif, tiny.pdb, multi_chain.cif, multi_chain.pdb, multi_model.cif, multi_model_null.cif, multi_model_with_h.cif, ala_with_h.cif, ala_altloc.cif, ala_stretched.cif, ala_cterm.cif, gap_chain.cif, ins_code.cif, asn.cif, his.cif, hetatm.pdb, disulfide.cif, disulfide_with_hbond.cif, branch_link.cif, entity_type.cif, inline_comp.cif, leaving_atom.cif, nterm_disorder.cif, unknown_ligand.cif
 - Real-world test data in `examples/data/` (AF models, fold_test2 with DNA/RNA/glycan)
 
 ## Performance
@@ -133,5 +136,5 @@ examples/
 ## Open areas
 
 - CCD dihedral estimation uses fixed heuristics (not computed from ideal coords)
-
+- Distance-based bond inference cannot detect aromatic rings; bond order promotion uses valence heuristics only
 - State-dependent chemistry updates for flip movers are per-orientation flags only
