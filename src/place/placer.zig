@@ -1,7 +1,8 @@
 //! Unified hydrogen placement entry point.
 //!
 //! Adds hydrogens to a Model using standard plans for known residues (20 AA)
-//! and CCD-derived plans for non-standard residues.
+//! and CCD-derived plans for non-standard residues.  When no dictionary entry
+//! exists, falls back to distance-based bond inference.
 
 const std = @import("std");
 const model_mod = @import("../model.zig");
@@ -14,6 +15,7 @@ const standard = @import("standard.zig");
 const nucleotide = @import("nucleotide.zig");
 const modified = @import("modified.zig");
 const ccd_derive = @import("ccd_derive.zig");
+const distance_derive = @import("distance_derive.zig");
 const geometry = @import("geometry.zig");
 const bond_policy = @import("bond_policy.zig");
 const math_mod = @import("../math.zig");
@@ -47,6 +49,7 @@ pub const PlacementResult = struct {
     n_skipped_missing_ref: u32 = 0,
     n_skipped_quality_filter: u32 = 0,
     n_residues: u32 = 0,
+    n_distance_derived: u32 = 0,
 
     pub fn totalSkipped(self: PlacementResult) u32 {
         return self.n_skipped_existing + self.n_skipped_inter_residue + self.n_skipped_missing_ref + self.n_skipped_quality_filter;
@@ -69,6 +72,7 @@ pub const PlacementConfig = struct {
     protonation: ?*const protonation.ProtonationOverrides = null,
     bond_policy: bond_policy.BondPolicy = .{},
     nterm_mode: terminal.NtermMode = .auto,
+    sdf_dict: ?*const ComponentDict = null,
 };
 
 const AltlocSet = struct { locs: [10]u8, count: usize };
@@ -277,9 +281,10 @@ pub fn addHydrogensWithConfig(
 
             result.n_residues += 1;
         } else {
-            // Try inline dict first, then fall back to external CCD (per-component fallback)
+            // Try inline dict first, then SDF dict, then external CCD (per-component fallback)
             const component = if (inline_dict) |d| d.get(comp_id) else null;
-            const effective_component = component orelse if (ccd_dict) |d| d.get(comp_id) else null;
+            const sdf_component = if (config.sdf_dict) |d| d.get(comp_id) else null;
+            const effective_component = component orelse sdf_component orelse if (ccd_dict) |d| d.get(comp_id) else null;
             if (effective_component) |comp| {
                 const existing = try collectAtomNames(mdl.allocator, mdl, res);
                 defer mdl.allocator.free(existing);
@@ -331,6 +336,29 @@ pub fn addHydrogensWithConfig(
                 }
 
                 result.n_residues += 1;
+            } else {
+                // Last resort: infer bonds from coordinates for unknown residues
+                if (try distance_derive.deriveComponentFromCoordinates(mdl.allocator, mdl, res)) |derived| {
+                    defer {
+                        mdl.allocator.free(derived.atoms);
+                        mdl.allocator.free(derived.bonds);
+                        mdl.allocator.free(derived.comp_id);
+                        mdl.allocator.free(derived.comp_type);
+                    }
+
+                    const existing = try collectAtomNames(mdl.allocator, mdl, res);
+                    defer mdl.allocator.free(existing);
+
+                    const plans = try ccd_derive.derivePlans(mdl.allocator, &derived, existing, &.{});
+                    defer mdl.allocator.free(plans);
+
+                    for (plans) |plan| {
+                        result.tally(try execute.executePlan(mdl, res, @intCast(res_idx), &plan, null, ' ', config.bond_policy.mode));
+                    }
+
+                    result.n_residues += 1;
+                    result.n_distance_derived += 1;
+                }
             }
         }
     }

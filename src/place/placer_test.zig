@@ -1536,3 +1536,49 @@ test "N-terminal PRO placement tallies missing_ref when CD is absent" {
     try testing.expectEqual(@as(u32, 0), r0.h2);
     try testing.expectEqual(@as(u32, 0), r0.h3);
 }
+
+test "distance-derive fallback places H on unknown ligand" {
+    const source = @embedFile("../test_data/unknown_ligand.cif");
+    var mdl = try mmcif.parseModel(testing.allocator, source);
+    defer mdl.deinit();
+
+    // No CCD, no SDF → distance-derive path for "XYZ" residue.
+    const result = try addHydrogens(&mdl, null, null);
+
+    // ALA (standard) + XYZ (distance-derived) = 2 residues processed.
+    try testing.expectEqual(@as(u32, 2), result.n_residues);
+    try testing.expect(result.n_placed > 0);
+    try testing.expect(result.n_distance_derived > 0);
+}
+
+test "SDF dict overrides distance-derive fallback" {
+    const sdf_source =
+        \\XYZ
+        \\     test
+        \\  test
+        \\  3  2  0  0  0  0  0  0  0  0999 V2000
+        \\   10.0000    0.0000    0.0000 C   0  0  0  0  0  0  0  0  0  0  0  0
+        \\   11.4300    0.0000    0.0000 O   0  0  0  0  0  0  0  0  0  0  0  0
+        \\   10.0000    1.5400    0.0000 C   0  0  0  0  0  0  0  0  0  0  0  0
+        \\  1  2  1  0
+        \\  1  3  1  0
+        \\M  END
+        \\$$$$
+    ;
+    const sdf_mod = @import("../sdf.zig");
+    var sdf_dict = try sdf_mod.parseSdf(testing.allocator, sdf_source);
+    defer sdf_dict.deinit();
+
+    const cif_source = @embedFile("../test_data/unknown_ligand.cif");
+    var mdl = try mmcif.parseModel(testing.allocator, cif_source);
+    defer mdl.deinit();
+
+    const result = try addHydrogensWithConfig(&mdl, null, null, .{
+        .sdf_dict = &sdf_dict,
+    });
+
+    try testing.expectEqual(@as(u32, 2), result.n_residues);
+    try testing.expect(result.n_placed > 0);
+    // SDF path was used → distance_derived should be 0.
+    try testing.expectEqual(@as(u32, 0), result.n_distance_derived);
+}

@@ -8,6 +8,7 @@ const RunConfig = struct {
     input_path: []const u8,
     output_path: ?[]const u8 = null,
     dict_path: ?[]const u8 = null,
+    sdf_path: ?[]const u8 = null,
     json_path: ?[]const u8 = null,
     no_opt: bool = false,
     no_flip: bool = false,
@@ -31,6 +32,7 @@ const CommonOptions = struct {
     nterm_mode: zreduce.place.NtermMode = .auto,
     protonation_path: ?[]const u8 = null,
     fix_path: ?[]const u8 = null,
+    sdf_path: ?[]const u8 = null,
     strip_h: bool = false,
     model_filter: zreduce.run.ModelFilter = .all,
 };
@@ -157,6 +159,14 @@ fn parseCommonOption(args: []const []const u8, i: *usize, common: *CommonOptions
         }
         common.fix_path = args[i.*];
         return true;
+    } else if (std.mem.eql(u8, arg, "--sdf") or std.mem.eql(u8, arg, "-s")) {
+        i.* += 1;
+        if (i.* >= args.len) {
+            std.debug.print("Error: {s} requires a path argument\n", .{arg});
+            std.process.exit(1);
+        }
+        common.sdf_path = args[i.*];
+        return true;
     } else if (std.mem.eql(u8, arg, "--strip-h")) {
         common.strip_h = true;
         return true;
@@ -251,6 +261,7 @@ fn parseRunArgs(args: []const []const u8) ?RunConfig {
     config.nterm_mode = common.nterm_mode;
     config.protonation_path = common.protonation_path;
     config.fix_path = common.fix_path;
+    config.sdf_path = common.sdf_path;
     config.strip_h = common.strip_h;
     config.model_filter = common.model_filter;
 
@@ -286,6 +297,7 @@ fn printRunUsage() void {
         \\OPTIONS:
         \\    -h, --help         Show this help message
         \\    -d, --dict PATH    CCD dictionary
+        \\    -s, --sdf PATH     SDF/MOL file with ligand topology (for non-CCD compounds)
         \\    -o, --output PATH  Output file (default: stdout)
         \\    --json PATH        Write JSON log to file
         \\    --protonation PATH  Residue protonation override file
@@ -425,6 +437,7 @@ fn parseBatchArgs(args: []const []const u8) ?zreduce.batch.BatchConfig {
     config.nterm_mode = common.nterm_mode;
     config.protonation_path = common.protonation_path;
     config.fix_path = common.fix_path;
+    config.sdf_path = common.sdf_path;
     config.strip_h = common.strip_h;
     config.model_filter = common.model_filter;
     config.json_version = build_options.version;
@@ -439,6 +452,7 @@ fn printBatchUsage() void {
         \\OPTIONS:
         \\    -h, --help         Show this help message
         \\    -d, --dict PATH    CCD dictionary (loaded once)
+        \\    -s, --sdf PATH     SDF/MOL file with ligand topology (for non-CCD compounds)
         \\    -o, --output PATH  Output directory (default: <input>_reduced/)
         \\    -j, --threads N    Thread count (default: auto-detect)
         \\    --jsonl PATH       Aggregated JSONL log file
@@ -599,10 +613,26 @@ fn runSubcommand(allocator: Allocator, args: []const []const u8) void {
     }
     defer if (ccd_dict) |*d| d.deinit();
 
+    // Load SDF topology dictionary (optional)
+    var sdf_dict: ?zreduce.ccd.ComponentDict = null;
+    if (config.sdf_path) |sdf_path| {
+        const sdf_source = zreduce.run.readFile(allocator, sdf_path) catch |err| {
+            std.debug.print("Error: cannot read SDF file '{s}': {s}\n", .{ sdf_path, @errorName(err) });
+            std.process.exit(1);
+        };
+        defer allocator.free(sdf_source);
+        sdf_dict = zreduce.sdf.parseSdf(allocator, sdf_source) catch |err| {
+            std.debug.print("Error: failed to parse SDF file: {s}\n", .{@errorName(err)});
+            std.process.exit(1);
+        };
+    }
+    defer if (sdf_dict) |*d| d.deinit();
+
     const proc_config = zreduce.run.ProcessConfig{
         .input_path = config.input_path,
         .output_path = config.output_path,
         .dict = if (ccd_dict) |*d| d else null,
+        .sdf_dict = if (sdf_dict) |*d| d else null,
         .json_path = config.json_path,
         .json_version = build_options.version,
         .no_opt = config.no_opt,
@@ -638,6 +668,9 @@ fn runSubcommand(allocator: Allocator, args: []const []const u8) void {
         result.n_residues,
         result.totalSkipped(),
     });
+    if (result.n_distance_derived > 0) {
+        std.debug.print("  note: {d} residues used distance-based bond inference (no dictionary entry)\n", .{result.n_distance_derived});
+    }
     if (result.n_skipped_missing_ref > 0) {
         std.debug.print("  warning: {d} H skipped due to missing reference atoms (potential plan bug)\n", .{result.n_skipped_missing_ref});
     }
