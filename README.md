@@ -11,6 +11,8 @@ zreduce reads mmCIF structures, adds hydrogen atoms using geometric rules and CC
 - **mmCIF and PDB** input and output formats
 - **Gzip support** for compressed input files (.cif.gz, .pdb.gz)
 - **CCD-driven** hydrogen placement for non-standard residues (nucleotides, glycans, ligands, modified residues)
+- **SDF/MOL topology** support for compounds not in the CCD (`--sdf` flag)
+- **Distance-based fallback** for unknown residues with no dictionary entry (automatic)
 - **20 standard amino acids** with hardcoded placement plans and bond topology
 - **6 geometry types**: tetrahedral, sp2, dihedral-controlled, planar bisector, fractional angle, linear
 - **Conformer-aware**: altloc handling with per-conformer placement and optimization
@@ -56,6 +58,9 @@ zreduce run input.cif.gz -o output.cif
 # With CCD dictionary (enables non-standard residue H placement + optimization)
 zreduce run input.cif -d components.cif -o output.cif
 
+# With SDF topology for non-CCD compounds
+zreduce run input.cif -d components.cif --sdf ligand.sdf -o output.cif
+
 # Placement only (skip optimization)
 zreduce run input.cif -o output.cif --no-opt
 
@@ -90,7 +95,7 @@ zreduce batch input_dir/ -j 4    # limit to 4 threads
 ### Test
 
 ```bash
-zig build test --summary all    # 400 tests
+zig build test --summary all    # ~490 tests
 ```
 
 ## CLI
@@ -104,6 +109,7 @@ zreduce uses subcommands: `run` for single files, `batch` for directories.
 | `-h, --help` | Show help message |
 | `-o, --output PATH` | Output mmCIF file (default: stdout) |
 | `-d, --dict PATH` | Path to components.cif for non-standard residues |
+| `-s, --sdf PATH` | SDF/MOL file with ligand topology (for non-CCD compounds) |
 | `--json PATH` | Write JSON optimization log |
 | `--protonation PATH` | Residue protonation override file |
 | `--fix PATH` | Force mover states from control file |
@@ -134,6 +140,7 @@ Default `auto` matches the prior behavior — existing pipelines are unaffected.
 | `-h, --help` | Show help message |
 | `-o, --output PATH` | Output directory (default: `<input>_reduced/`) |
 | `-d, --dict PATH` | CCD dictionary (loaded once, shared across files) |
+| `-s, --sdf PATH` | SDF/MOL file with ligand topology (loaded once) |
 | `-j, --threads N` | Thread count (default: auto-detect CPU count) |
 | `--jsonl PATH` | Aggregated JSONL log file |
 | `--protonation PATH` | Residue protonation override file |
@@ -219,6 +226,8 @@ mmCIF input
 +------------------+
 | H Placement      |  Conformer-aware, altloc-consistent
 | Standard + CCD   |  Bond topology for neighbor resolution
+| + SDF fallback   |  User-supplied topology for non-CCD ligands
+| + Distance infer |  Last-resort bond inference from coordinates
 +--------+---------+
          |
          v
@@ -286,6 +295,7 @@ src/
     inline_comp.zig     Inline component dictionary and leaving atom flags
   ccd.zig               CCD component dictionary (streaming parser)
   ccd_binary.zig        Binary format for fast CCD load/save
+  sdf.zig               SDF/MOL V2000 parser (non-CCD ligand topology)
   pdb.zig               PDB format parser (ATOM/HETATM records)
   model.zig             Model module re-exports
   model/                Molecular model structs
@@ -302,6 +312,7 @@ src/
     placer_test.zig     Placement pipeline integration tests
     standard.zig        20 AA placement plans + MoverHint
     ccd_derive.zig      CCD-derived placement plan generation
+    distance_derive.zig Distance-based bond inference fallback
     nucleotide.zig      DNA/RNA nucleotide placement plans
     modified.zig        Modified amino acid placement plans (MSE, SEP, etc.)
     topology.zig        Bond topology tables for 20 AAs
@@ -340,6 +351,7 @@ examples/
 ## Known Limitations
 
 - CCD dihedral estimation uses fixed heuristics (not computed from ideal coords)
+- Distance-based bond inference cannot detect aromatic rings; bond order promotion uses valence heuristics only
 - Gzip I/O uses C zlib as a workaround for a Zig std lib bug ([ziglang/zig#25035](https://github.com/ziglang/zig/issues/25035))
 
 ## Changelog
