@@ -8,6 +8,7 @@ pub const ProcessConfig = struct {
     input_path: []const u8,
     output_path: ?[]const u8 = null, // must be non-null when called from batch workers (stdout is not thread-safe)
     dict: ?*const zreduce.ccd.ComponentDict = null, // shared read-only; caller owns lifetime
+    sdf_dict: ?*const zreduce.ccd.ComponentDict = null, // SDF-derived topology; caller owns lifetime
     json_path: ?[]const u8 = null,
     json_version: []const u8 = "", // version string for JSON log (passed from main)
     no_opt: bool = false,
@@ -33,6 +34,7 @@ pub const ProcessResult = struct {
     n_skipped_inter_residue: u32,
     n_skipped_missing_ref: u32,
     n_skipped_quality_filter: u32 = 0,
+    n_distance_derived: u32 = 0,
     n_movers: u32 = 0,
     n_singletons: u32 = 0,
     n_brute_force: u32 = 0,
@@ -152,6 +154,7 @@ fn processModelShared(
             .bond_policy = config.bond_policy,
             .protonation = protonation_overrides,
             .nterm_mode = config.nterm_mode,
+            .sdf_dict = config.sdf_dict,
         },
     );
 
@@ -161,6 +164,7 @@ fn processModelShared(
     result.n_skipped_inter_residue += place_result.n_skipped_inter_residue;
     result.n_skipped_missing_ref += place_result.n_skipped_missing_ref;
     result.n_skipped_quality_filter += place_result.n_skipped_quality_filter;
+    result.n_distance_derived += place_result.n_distance_derived;
 
     // Generate movers and optimize
     const needs_movers = !config.no_opt or config.fix_path != null or config.dump_movers_path != null;

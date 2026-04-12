@@ -8,6 +8,7 @@ pub const nucleotide = @import("place/nucleotide.zig");
 pub const modified = @import("place/modified.zig");
 pub const topology = @import("place/topology.zig");
 pub const ccd_derive = @import("place/ccd_derive.zig");
+pub const distance_derive = @import("place/distance_derive.zig");
 pub const protonation = @import("place/protonation.zig");
 pub const placer = @import("place/placer.zig");
 pub const lookup = @import("place/lookup.zig");

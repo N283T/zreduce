@@ -14,6 +14,7 @@ pub const BatchConfig = struct {
     input_dir: []const u8,
     output_dir: ?[]const u8 = null, // default: <input_dir>_reduced/
     dict_path: ?[]const u8 = null,
+    sdf_path: ?[]const u8 = null,
     jsonl_path: ?[]const u8 = null,
     n_threads: u32 = 0, // 0 = auto-detect CPU count
     no_opt: bool = false,
@@ -133,6 +134,7 @@ fn processFileInBatch(
     input_dir: []const u8,
     output_dir: []const u8,
     dict: ?*const zreduce.ccd.ComponentDict,
+    sdf_dict_param: ?*const zreduce.ccd.ComponentDict,
     config: *const BatchConfig,
 ) !FileResult {
     const input_path = try std.fs.path.join(allocator, &.{ input_dir, filename });
@@ -157,6 +159,7 @@ fn processFileInBatch(
         .input_path = input_path,
         .output_path = output_path,
         .dict = dict,
+        .sdf_dict = sdf_dict_param,
         .json_version = config.json_version,
         .no_opt = config.no_opt,
         .no_flip = config.no_flip,
@@ -199,6 +202,7 @@ fn runBatchSequential(
     input_dir: []const u8,
     output_dir: []const u8,
     dict: ?*const zreduce.ccd.ComponentDict,
+    sdf_dict_param: ?*const zreduce.ccd.ComponentDict,
     config: *const BatchConfig,
     jsonl_stream: ?*JsonlStreamWriter,
 ) !BatchResult {
@@ -229,6 +233,7 @@ fn runBatchSequential(
             input_dir,
             output_dir,
             dict,
+            sdf_dict_param,
             config,
         ) catch |err| blk: {
             break :blk makeErrorResult(allocator, filename, @errorName(err), 0) catch {
@@ -303,6 +308,7 @@ const ParallelContext = struct {
     output_dir: []const u8,
     config: *const BatchConfig,
     dict: ?*const zreduce.ccd.ComponentDict,
+    sdf_dict: ?*const zreduce.ccd.ComponentDict,
     results: []FileResult,
     result_allocator: Allocator,
     next_file: std.atomic.Value(usize),
@@ -330,6 +336,7 @@ fn parallelWorker(ctx: *ParallelContext) void {
             ctx.input_dir,
             ctx.output_dir,
             ctx.dict,
+            ctx.sdf_dict,
             ctx.config,
         ) catch |err| blk: {
             // Fallback for allocation failure or timer init in processFileInBatch
@@ -370,6 +377,7 @@ fn runBatchParallel(
     input_dir: []const u8,
     output_dir: []const u8,
     dict: ?*const zreduce.ccd.ComponentDict,
+    sdf_dict_param: ?*const zreduce.ccd.ComponentDict,
     config: *const BatchConfig,
     jsonl_stream: ?*JsonlStreamWriter,
 ) !BatchResult {
@@ -387,7 +395,7 @@ fn runBatchParallel(
     // Fall back to sequential for 1 thread or 1 file
     if (files.len <= 1 or n_threads <= 1) {
         allocator.free(file_results);
-        return runBatchSequential(allocator, files, input_dir, output_dir, dict, config, jsonl_stream);
+        return runBatchSequential(allocator, files, input_dir, output_dir, dict, sdf_dict_param, config, jsonl_stream);
     }
 
     var ctx = ParallelContext{
@@ -396,6 +404,7 @@ fn runBatchParallel(
         .output_dir = output_dir,
         .config = config,
         .dict = dict,
+        .sdf_dict = sdf_dict_param,
         .results = file_results,
         .result_allocator = allocator,
         .next_file = std.atomic.Value(usize).init(0),
@@ -530,6 +539,18 @@ pub fn run(allocator: Allocator, config: BatchConfig) !void {
     }
     defer if (ccd_dict) |*d| d.deinit();
 
+    // 1b. Load SDF topology dictionary (once, optional)
+    var sdf_dict: ?zreduce.ccd.ComponentDict = null;
+    if (config.sdf_path) |sdf_path| {
+        const sdf_source = try run_mod.readFile(allocator, sdf_path);
+        defer allocator.free(sdf_source);
+        sdf_dict = zreduce.sdf.parseSdf(allocator, sdf_source) catch |err| {
+            std.debug.print("Error: failed to parse SDF file '{s}': {s}\n", .{ sdf_path, @errorName(err) });
+            return err;
+        };
+    }
+    defer if (sdf_dict) |*d| d.deinit();
+
     // 2. Scan directory
     const files = try scanDirectory(allocator, config.input_dir);
     defer {
@@ -583,6 +604,7 @@ pub fn run(allocator: Allocator, config: BatchConfig) !void {
         config.input_dir,
         output_dir,
         if (ccd_dict) |*d| d else null,
+        if (sdf_dict) |*d| d else null,
         &config,
         jsonl_stream_ptr,
     );
@@ -689,6 +711,7 @@ test "processFileInBatch error propagation for missing file" {
         "missing.cif",
         "/nonexistent",
         "/tmp",
+        null,
         null,
         &config,
     ) catch {
