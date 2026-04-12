@@ -510,10 +510,11 @@ fn writeJsonlLine(writer: anytype, file_result: FileResult) !void {
         .ok => {
             const r = file_result.result.?;
             const time_ms = @as(f64, @floatFromInt(file_result.time_ns)) / 1_000_000.0;
-            try writer.print("\"ok\",\"hydrogens\":{d},\"movers\":{d},\"residues\":{d},\"time_ms\":{d:.1}}}\n", .{
+            try writer.print("\"ok\",\"hydrogens\":{d},\"movers\":{d},\"residues\":{d},\"distance_derived\":{d},\"time_ms\":{d:.1}}}\n", .{
                 r.n_placed,
                 r.n_movers,
                 r.n_residues,
+                r.n_distance_derived,
                 time_ms,
             });
         },
@@ -661,6 +662,7 @@ test "writeJsonlLine ok result" {
     const output = buf.items;
     try std.testing.expect(std.mem.indexOf(u8, output, "\"status\":\"ok\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "\"hydrogens\":100") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "\"distance_derived\":0") != null);
 }
 
 test "writeJsonlLine error result" {
