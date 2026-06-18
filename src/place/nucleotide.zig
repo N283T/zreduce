@@ -338,7 +338,7 @@ test "RNA nucleotides have HO2' rotator" {
         const plans = getPlans(nuc).?;
         var has_ho2 = false;
         for (plans) |p| {
-            const h = std.mem.trimRight(u8, &p.h_name, " ");
+            const h = std.mem.trimEnd(u8, &p.h_name, " ");
             if (std.mem.eql(u8, h, "HO2'") and p.mover_hint == .rotate) has_ho2 = true;
         }
         try std.testing.expect(has_ho2);
@@ -351,7 +351,7 @@ test "DNA nucleotides have H2'' (deoxyribose)" {
         const plans = getPlans(nuc).?;
         var has_h2pp = false;
         for (plans) |p| {
-            const h = std.mem.trimRight(u8, &p.h_name, " ");
+            const h = std.mem.trimEnd(u8, &p.h_name, " ");
             if (std.mem.eql(u8, h, "H2''")) has_h2pp = true;
         }
         try std.testing.expect(has_h2pp);
@@ -362,7 +362,7 @@ test "no polymer linking H in any nucleotide" {
     const all = [_][]const u8{ "DA", "DC", "DG", "DT", "A", "C", "G", "U" };
     for (all) |nuc| {
         for (getPlans(nuc).?) |p| {
-            const h = std.mem.trimRight(u8, &p.h_name, " ");
+            const h = std.mem.trimEnd(u8, &p.h_name, " ");
             try std.testing.expect(!std.mem.eql(u8, h, "HOP2"));
             try std.testing.expect(!std.mem.eql(u8, h, "HOP3"));
             try std.testing.expect(!std.mem.eql(u8, h, "HO3'"));
@@ -387,7 +387,7 @@ test "DNA lacks HO2' and RNA lacks H2''" {
     }
     for (rna) |nuc| {
         for (getPlans(nuc).?) |p| {
-            const h = std.mem.trimRight(u8, &p.h_name, " ");
+            const h = std.mem.trimEnd(u8, &p.h_name, " ");
             try std.testing.expect(!std.mem.eql(u8, h, "H2''"));
         }
     }

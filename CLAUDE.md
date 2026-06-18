@@ -38,7 +38,7 @@ src/
   validate.zig          Post-placement model validation
   math.zig              Vec3, rotation, dihedral
   element.zig           AtomType, VDW radii, AtomFlags, mergeFlags
-  gzip.zig              Gzip I/O via C zlib (workaround for Zig std lib bug)
+  gzip.zig              Gzip I/O via Zig std.compress.flate
   integration_test.zig  End-to-end pipeline integration tests
   real_file_test.zig    End-to-end tests with real PDB structures
   cif.zig               CIF module re-exports
@@ -85,7 +85,7 @@ src/
     water.zig           Water hydrogen placement
   optimize/             Optimization engine
     optimize.zig        Optimize module re-exports
-    optimizer.zig       Clique-based search + fine angular search + multithreaded optimization
+    optimizer.zig       Clique-based search + fine angular search
     scoring.zig         CellList-based scoring with SoA layout + centroid early-exit
     scorer.zig          Dot-sphere bump/H-bond scoring
     mover.zig           Mover struct, Orientation, isAbsentH

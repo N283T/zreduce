@@ -11,8 +11,6 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/root.zig"),
         .target = target,
     });
-    mod.link_libc = true;
-    mod.linkSystemLibrary("z", .{});
 
     // CLI executable
     const options = b.addOptions();
@@ -27,8 +25,6 @@ pub fn build(b: *std.Build) void {
             .{ .name = "build_options", .module = options.createModule() },
         },
     });
-    exe_module.link_libc = true;
-    exe_module.linkSystemLibrary("z", .{});
 
     const exe = b.addExecutable(.{
         .name = "zreduce",

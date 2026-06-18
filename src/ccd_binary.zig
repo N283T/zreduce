@@ -228,16 +228,16 @@ pub const ReadError = error{
 pub fn readDict(allocator: Allocator, reader: anytype) ReadError!ComponentDict {
     // Read header
     var magic: [4]u8 = undefined;
-    reader.readNoEof(&magic) catch return error.UnexpectedEof;
+    reader.readSliceAll(&magic) catch return error.UnexpectedEof;
     if (!std.mem.eql(u8, &magic, &MAGIC)) return error.InvalidMagic;
 
-    const version = reader.readByte() catch return error.UnexpectedEof;
+    const version = reader.takeByte() catch return error.UnexpectedEof;
     if (version != FORMAT_VERSION) return error.UnsupportedVersion;
 
     var reserved: [3]u8 = undefined;
-    reader.readNoEof(&reserved) catch return error.UnexpectedEof;
+    reader.readSliceAll(&reserved) catch return error.UnexpectedEof;
 
-    const count = reader.readInt(u32, .little) catch return error.UnexpectedEof;
+    const count = reader.takeInt(u32, .little) catch return error.UnexpectedEof;
     // Sanity check: real CCD has ~40,000 components; 500,000 is a generous upper bound.
     if (count > 500_000) return error.CountTooLarge;
 
@@ -252,38 +252,38 @@ pub fn readDict(allocator: Allocator, reader: anytype) ReadError!ComponentDict {
     var i: u32 = 0;
     while (i < count) : (i += 1) {
         // comp_id
-        const id_len = reader.readByte() catch return error.UnexpectedEof;
+        const id_len = reader.takeByte() catch return error.UnexpectedEof;
         const comp_id = allocator.alloc(u8, id_len) catch return error.OutOfMemory;
         errdefer allocator.free(comp_id);
-        reader.readNoEof(comp_id) catch return error.UnexpectedEof;
+        reader.readSliceAll(comp_id) catch return error.UnexpectedEof;
 
         // comp_type
-        const type_len = reader.readByte() catch return error.UnexpectedEof;
+        const type_len = reader.takeByte() catch return error.UnexpectedEof;
         const comp_type = allocator.alloc(u8, type_len) catch return error.OutOfMemory;
         errdefer allocator.free(comp_type);
-        reader.readNoEof(comp_type) catch return error.UnexpectedEof;
+        reader.readSliceAll(comp_type) catch return error.UnexpectedEof;
 
         // atoms
-        const atom_count = reader.readInt(u16, .little) catch return error.UnexpectedEof;
+        const atom_count = reader.takeInt(u16, .little) catch return error.UnexpectedEof;
         // Sanity check: no real CCD component has more than 1000 atoms.
         if (atom_count > 1000) return error.CountTooLarge;
         const atoms = allocator.alloc(CompAtom, atom_count) catch return error.OutOfMemory;
         errdefer allocator.free(atoms);
         for (atoms) |*atom| {
             var pa: PackedAtom = undefined;
-            reader.readNoEof(std.mem.asBytes(&pa)) catch return error.UnexpectedEof;
+            reader.readSliceAll(std.mem.asBytes(&pa)) catch return error.UnexpectedEof;
             atom.* = pa.toCompAtom();
         }
 
         // bonds
-        const bond_count = reader.readInt(u16, .little) catch return error.UnexpectedEof;
+        const bond_count = reader.takeInt(u16, .little) catch return error.UnexpectedEof;
         // Sanity check: no real CCD component has more than 1000 bonds.
         if (bond_count > 1000) return error.CountTooLarge;
         const bonds = allocator.alloc(CompBond, bond_count) catch return error.OutOfMemory;
         errdefer allocator.free(bonds);
         for (bonds) |*bond| {
             var pb: PackedBond = undefined;
-            reader.readNoEof(std.mem.asBytes(&pb)) catch return error.UnexpectedEof;
+            reader.readSliceAll(std.mem.asBytes(&pb)) catch return error.UnexpectedEof;
             bond.* = pb.toCompBond();
         }
 
@@ -306,8 +306,8 @@ pub fn readDict(allocator: Allocator, reader: anytype) ReadError!ComponentDict {
 /// Load a ComponentDict from raw bytes. Detects binary vs CIF text automatically.
 pub fn loadDict(allocator: Allocator, data: []const u8) !ComponentDict {
     if (isBinaryDict(data)) {
-        var fbs = std.io.fixedBufferStream(data);
-        return readDict(allocator, fbs.reader());
+        var reader: std.Io.Reader = .fixed(data);
+        return readDict(allocator, &reader);
     }
     return ccd.parseComponentDict(allocator, data);
 }
@@ -373,13 +373,13 @@ test "writeDict + readDict: round-trip" {
     });
 
     // Write to buffer
-    var buf: std.ArrayListUnmanaged(u8) = .empty;
-    defer buf.deinit(allocator);
-    try writeDict(buf.writer(allocator), &dict);
+    var buf: std.Io.Writer.Allocating = .init(allocator);
+    defer buf.deinit();
+    try writeDict(&buf.writer, &dict);
 
     // Read back
-    var fbs = std.io.fixedBufferStream(buf.items);
-    var dict2 = try readDict(allocator, fbs.reader());
+    var reader: std.Io.Reader = .fixed(buf.writer.buffered());
+    var dict2 = try readDict(allocator, &reader);
     defer dict2.deinit();
 
     const comp = dict2.get("TST") orelse return error.TestUnexpectedResult;
@@ -428,13 +428,13 @@ test "writeDict: empty dictionary" {
     };
     defer dict.deinit();
 
-    var buf: std.ArrayListUnmanaged(u8) = .empty;
-    defer buf.deinit(allocator);
-    try writeDict(buf.writer(allocator), &dict);
+    var buf: std.Io.Writer.Allocating = .init(allocator);
+    defer buf.deinit();
+    try writeDict(&buf.writer, &dict);
 
-    try testing.expectEqual(HEADER_SIZE, buf.items.len);
+    try testing.expectEqual(HEADER_SIZE, buf.writer.buffered().len);
     // Verify component count field is 0
-    const count = std.mem.readInt(u32, buf.items[8..12], .little);
+    const count = std.mem.readInt(u32, buf.writer.buffered()[8..12], .little);
     try testing.expectEqual(@as(u32, 0), count);
 }
 
@@ -445,8 +445,8 @@ test "readDict: version mismatch" {
     @memset(buf[5..8], 0);
     std.mem.writeInt(u32, buf[8..12], 0, .little);
 
-    var fbs = std.io.fixedBufferStream(&buf);
-    const result = readDict(testing.allocator, fbs.reader());
+    var reader: std.Io.Reader = .fixed(&buf);
+    const result = readDict(testing.allocator, &reader);
     try testing.expectError(error.UnsupportedVersion, result);
 }
 
@@ -457,8 +457,8 @@ test "readDict: invalid magic" {
     @memset(buf[5..8], 0);
     std.mem.writeInt(u32, buf[8..12], 0, .little);
 
-    var fbs = std.io.fixedBufferStream(&buf);
-    const result = readDict(testing.allocator, fbs.reader());
+    var reader: std.Io.Reader = .fixed(&buf);
+    const result = readDict(testing.allocator, &reader);
     try testing.expectError(error.InvalidMagic, result);
 }
 
@@ -470,8 +470,8 @@ test "readDict: truncated data" {
     @memset(buf[5..8], 0);
     std.mem.writeInt(u32, buf[8..12], 1, .little);
 
-    var fbs = std.io.fixedBufferStream(&buf);
-    const result = readDict(testing.allocator, fbs.reader());
+    var reader: std.Io.Reader = .fixed(&buf);
+    const result = readDict(testing.allocator, &reader);
     try testing.expectError(error.UnexpectedEof, result);
 }
 
@@ -538,12 +538,12 @@ test "loadDict: binary input round-trip" {
     });
 
     // Write binary
-    var buf: std.ArrayListUnmanaged(u8) = .empty;
-    defer buf.deinit(allocator);
-    try writeDict(buf.writer(allocator), &dict);
+    var buf: std.Io.Writer.Allocating = .init(allocator);
+    defer buf.deinit();
+    try writeDict(&buf.writer, &dict);
 
     // loadDict should detect binary and parse it
-    var dict2 = try loadDict(allocator, buf.items);
+    var dict2 = try loadDict(allocator, buf.writer.buffered());
     defer dict2.deinit();
 
     const comp = dict2.get("ATP") orelse return error.TestUnexpectedResult;

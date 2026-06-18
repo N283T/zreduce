@@ -3,6 +3,10 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+
+fn defaultIo() std.Io {
+    return std.Io.Threaded.global_single_threaded.io();
+}
 const zreduce = @import("root.zig");
 const run_mod = zreduce.run;
 
@@ -85,8 +89,9 @@ fn isStructureFile(name: []const u8) bool {
 }
 
 pub fn scanDirectory(allocator: Allocator, dir_path: []const u8) ![][]const u8 {
-    var dir = try std.fs.cwd().openDir(dir_path, .{ .iterate = true });
-    defer dir.close();
+    const io = defaultIo();
+    var dir = try std.Io.Dir.cwd().openDir(io, dir_path, .{ .iterate = true });
+    defer dir.close(io);
 
     var names: std.ArrayListUnmanaged([]const u8) = .empty;
     errdefer {
@@ -95,7 +100,7 @@ pub fn scanDirectory(allocator: Allocator, dir_path: []const u8) ![][]const u8 {
     }
 
     var iter = dir.iterate();
-    while (try iter.next()) |entry| {
+    while (try iter.next(io)) |entry| {
         if (entry.kind != .file) continue;
         if (entry.name.len == 0 or entry.name[0] == '.') continue;
         if (!isStructureFile(entry.name)) continue;
@@ -175,14 +180,14 @@ fn processFileInBatch(
         .model_filter = config.model_filter,
     };
 
-    var timer = try std.time.Timer.start();
+    const start = std.Io.Clock.awake.now(defaultIo());
 
     const proc_result = run_mod.processFile(allocator, proc_config) catch |err| {
-        const elapsed = timer.read();
+        const elapsed: u64 = @intCast(start.untilNow(defaultIo(), .awake).toNanoseconds());
         return try makeErrorResult(allocator, filename, @errorName(err), elapsed);
     };
 
-    const elapsed = timer.read();
+    const elapsed: u64 = @intCast(start.untilNow(defaultIo(), .awake).toNanoseconds());
 
     return FileResult{
         .filename = try allocator.dupe(u8, filename),
@@ -275,24 +280,31 @@ fn runBatchSequential(
 /// Mutex-protected JSONL streaming writer. The file handle is borrowed
 /// from the caller and must outlive this writer.
 const JsonlStreamWriter = struct {
-    mutex: std.Thread.Mutex = .{},
-    file: std.fs.File,
+    mutex: std.Io.Mutex = .init,
+    file: std.Io.File,
     write_errors: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
 
     fn writeResult(self: *JsonlStreamWriter, allocator: Allocator, file_result: FileResult) void {
         // Serialize to a buffer first (outside mutex)
-        var line_buf = std.ArrayListUnmanaged(u8).empty;
-        defer line_buf.deinit(allocator);
-        writeJsonlLine(line_buf.writer(allocator), file_result) catch {
+        var line_buf: std.Io.Writer.Allocating = .init(allocator);
+        defer line_buf.deinit();
+        writeJsonlLine(&line_buf.writer, file_result) catch {
             _ = self.write_errors.fetchAdd(1, .monotonic);
             return;
         };
 
         // Write under mutex (unbuffered to avoid stale buffered-writer state)
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        const io = defaultIo();
+        self.mutex.lockUncancelable(io);
+        defer self.mutex.unlock(io);
 
-        self.file.writeAll(line_buf.items) catch {
+        var file_buf: [4096]u8 = undefined;
+        var file_writer = self.file.writer(io, &file_buf);
+        file_writer.interface.writeAll(line_buf.writer.buffered()) catch {
+            _ = self.write_errors.fetchAdd(1, .monotonic);
+            return;
+        };
+        file_writer.interface.flush() catch {
             _ = self.write_errors.fetchAdd(1, .monotonic);
         };
     }
@@ -445,7 +457,7 @@ fn runBatchParallel(
                 while (!pa.done.load(.acquire)) {
                     const processed = pa.ctx.processed_count.load(.acquire);
                     std.debug.print("\rProcessing: {d}/{d}", .{ processed, total });
-                    std.Thread.sleep(100 * std.time.ns_per_ms);
+                    std.Io.sleep(defaultIo(), .fromNanoseconds(100 * std.time.ns_per_ms), .awake) catch {};
                 }
                 std.debug.print("\rProcessing: {d}/{d}\n", .{ total, total });
             }
@@ -531,6 +543,7 @@ fn writeJsonlLine(writer: anytype, file_result: FileResult) !void {
 // ---------------------------------------------------------------------------
 
 pub fn run(allocator: Allocator, config: BatchConfig) !void {
+    const io = defaultIo();
     // 1. Load CCD dictionary (once)
     var ccd_dict: ?zreduce.ccd.ComponentDict = null;
     if (config.dict_path) |dict_path| {
@@ -576,20 +589,20 @@ pub fn run(allocator: Allocator, config: BatchConfig) !void {
     defer if (config.output_dir == null) allocator.free(output_dir);
 
     // 4. Create output directory
-    std.fs.cwd().makePath(output_dir) catch |err| {
+    std.Io.Dir.cwd().createDirPath(io, output_dir) catch |err| {
         std.debug.print("Error: cannot create output directory '{s}': {s}\n", .{ output_dir, @errorName(err) });
         return err;
     };
 
     // 5. Set up JSONL streaming writer (if requested)
-    var jsonl_file: ?std.fs.File = null;
+    var jsonl_file: ?std.Io.File = null;
     var jsonl_file_needs_close = false;
     if (config.jsonl_path) |path| {
-        jsonl_file = try std.fs.cwd().createFile(path, .{});
+        jsonl_file = try std.Io.Dir.cwd().createFile(io, path, .{});
         jsonl_file_needs_close = true;
     }
     defer if (jsonl_file_needs_close) {
-        if (jsonl_file) |f| f.close();
+        if (jsonl_file) |f| f.close(io);
     };
 
     var jsonl_stream_storage: JsonlStreamWriter = if (jsonl_file) |jf|
@@ -650,33 +663,33 @@ test "isStructureFile" {
 }
 
 test "writeJsonlLine ok result" {
-    var buf = std.ArrayListUnmanaged(u8).empty;
-    defer buf.deinit(std.testing.allocator);
+    var buf: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer buf.deinit();
     const r = FileResult{
         .filename = "test.cif",
         .status = .ok,
         .result = .{ .n_placed = 100, .n_residues = 50, .n_skipped_existing = 1, .n_skipped_inter_residue = 1, .n_skipped_missing_ref = 0, .n_movers = 30 },
         .time_ns = 1_500_000_000,
     };
-    try writeJsonlLine(buf.writer(std.testing.allocator), r);
-    const output = buf.items;
-    try std.testing.expect(std.mem.indexOf(u8, output, "\"status\":\"ok\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "\"hydrogens\":100") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "\"distance_derived\":0") != null);
+    try writeJsonlLine(&buf.writer, r);
+    const output = buf.writer.buffered();
+    try std.testing.expect(std.mem.find(u8, output, "\"status\":\"ok\"") != null);
+    try std.testing.expect(std.mem.find(u8, output, "\"hydrogens\":100") != null);
+    try std.testing.expect(std.mem.find(u8, output, "\"distance_derived\":0") != null);
 }
 
 test "writeJsonlLine error result" {
-    var buf = std.ArrayListUnmanaged(u8).empty;
-    defer buf.deinit(std.testing.allocator);
+    var buf: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer buf.deinit();
     const r = FileResult{
         .filename = "bad.cif",
         .status = .err,
         .error_msg = "InvalidSyntax",
     };
-    try writeJsonlLine(buf.writer(std.testing.allocator), r);
-    const output = buf.items;
-    try std.testing.expect(std.mem.indexOf(u8, output, "\"status\":\"error\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "\"error\":\"InvalidSyntax\"") != null);
+    try writeJsonlLine(&buf.writer, r);
+    const output = buf.writer.buffered();
+    try std.testing.expect(std.mem.find(u8, output, "\"status\":\"error\"") != null);
+    try std.testing.expect(std.mem.find(u8, output, "\"error\":\"InvalidSyntax\"") != null);
 }
 
 test "scanDirectory finds cif files" {
@@ -728,9 +741,9 @@ test "processFileInBatch error propagation for missing file" {
 }
 
 test "writeJsonString escapes special characters" {
-    var buf = std.ArrayListUnmanaged(u8).empty;
-    defer buf.deinit(std.testing.allocator);
-    try writeJsonString(buf.writer(std.testing.allocator), "a\"b\\c\nd");
-    const output = buf.items;
+    var buf: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer buf.deinit();
+    try writeJsonString(&buf.writer, "a\"b\\c\nd");
+    const output = buf.writer.buffered();
     try std.testing.expectEqualStrings("\"a\\\"b\\\\c\\nd\"", output);
 }

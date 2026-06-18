@@ -2,6 +2,10 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+
+fn defaultIo() std.Io {
+    return std.Io.Threaded.global_single_threaded.io();
+}
 const zreduce = @import("root.zig");
 
 pub const ProcessConfig = struct {
@@ -65,12 +69,11 @@ pub fn detectFormat(path: []const u8) InputFormat {
 }
 
 pub fn readFile(allocator: Allocator, path: []const u8) ![]const u8 {
+    const io = defaultIo();
     if (std.mem.endsWith(u8, path, ".gz")) {
         return zreduce.gzip.readGzip(allocator, path);
     }
-    const file = try std.fs.cwd().openFile(path, .{});
-    defer file.close();
-    return try file.readToEndAlloc(allocator, 1024 * 1024 * 1024);
+    return try std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .limited(1024 * 1024 * 1024));
 }
 
 /// Remove hydrogen rows from the CIF document's _atom_site loop.
@@ -194,10 +197,11 @@ fn processModelShared(
         }
 
         if (config.dump_movers_path) |dump_path| {
+            const io = defaultIo();
             var dump_buf: [4096]u8 = undefined;
-            const dump_file = try std.fs.cwd().createFile(dump_path, .{});
-            defer dump_file.close();
-            var dump_fw = dump_file.writer(&dump_buf);
+            const dump_file = try std.Io.Dir.cwd().createFile(io, dump_path, .{});
+            defer dump_file.close(io);
+            var dump_fw = dump_file.writer(io, &dump_buf);
             try zreduce.optimize.fix.dumpMovers(&dump_fw.interface, mdl, movers);
             try dump_fw.interface.flush();
         }
@@ -357,7 +361,7 @@ fn processFileMmcif(allocator: Allocator, config: ProcessConfig, source: []const
     };
 
     // Accumulate mover snapshots for JSON log (movers are freed per model)
-    var mover_snapshots = std.ArrayListUnmanaged(zreduce.writer.json_writer.MoverSnapshot){};
+    var mover_snapshots = std.ArrayListUnmanaged(zreduce.writer.json_writer.MoverSnapshot).empty;
     defer mover_snapshots.deinit(allocator);
 
     for (entries.items) |*entry| {
@@ -396,24 +400,24 @@ fn processFileMmcif(allocator: Allocator, config: ProcessConfig, source: []const
     }
 
     // 9. Write output (all models into one file)
+    const io = defaultIo();
     var out_buf: [4096]u8 = undefined;
     if (config.output_path) |out_path| {
         if (std.mem.endsWith(u8, out_path, ".gz")) {
             var gw = try zreduce.gzip.GzipWriter.init(allocator, out_path);
             errdefer gw.close() catch {};
-            const aw = gw.anyWriter();
-            try zreduce.writer.mmcif_writer.writeMultiModelWithDocumentWithPolicy(&aw, entries.items, &doc, config.bond_policy);
+            try zreduce.writer.mmcif_writer.writeMultiModelWithDocumentWithPolicy(gw.writer(), entries.items, &doc, config.bond_policy);
             try gw.close();
         } else {
-            const file = try std.fs.cwd().createFile(out_path, .{});
-            defer file.close();
-            var fw = file.writer(&out_buf);
+            const file = try std.Io.Dir.cwd().createFile(io, out_path, .{});
+            defer file.close(io);
+            var fw = file.writer(io, &out_buf);
             try zreduce.writer.mmcif_writer.writeMultiModelWithDocumentWithPolicy(&fw.interface, entries.items, &doc, config.bond_policy);
             try fw.interface.flush();
         }
     } else {
-        const stdout = std.fs.File.stdout();
-        var sw = stdout.writer(&out_buf);
+        const stdout = std.Io.File.stdout();
+        var sw = stdout.writer(io, &out_buf);
         try zreduce.writer.mmcif_writer.writeMultiModelWithDocumentWithPolicy(&sw.interface, entries.items, &doc, config.bond_policy);
         try sw.interface.flush();
     }
@@ -421,9 +425,9 @@ fn processFileMmcif(allocator: Allocator, config: ProcessConfig, source: []const
     // 10. Write JSON log (optional, all models)
     if (config.json_path) |json_path| {
         var json_buf: [4096]u8 = undefined;
-        const file = try std.fs.cwd().createFile(json_path, .{});
-        defer file.close();
-        var jw = file.writer(&json_buf);
+        const file = try std.Io.Dir.cwd().createFile(io, json_path, .{});
+        defer file.close(io);
+        var jw = file.writer(io, &json_buf);
         var total_added: u32 = 0;
         for (entries.items) |entry| total_added += countAddedHydrogens(&entry.model);
         try zreduce.writer.json_writer.writeMultiModelLog(
@@ -483,7 +487,7 @@ fn processFilePdb(allocator: Allocator, config: ProcessConfig, source: []const u
         .n_skipped_missing_ref = 0,
     };
 
-    var mover_snapshots = std.ArrayListUnmanaged(zreduce.writer.json_writer.MoverSnapshot){};
+    var mover_snapshots = std.ArrayListUnmanaged(zreduce.writer.json_writer.MoverSnapshot).empty;
     defer mover_snapshots.deinit(allocator);
 
     for (pdb_result.entries.items) |*entry| {
@@ -517,33 +521,33 @@ fn processFilePdb(allocator: Allocator, config: ProcessConfig, source: []const u
     }
 
     // Write output
+    const io = defaultIo();
     var out_buf: [4096]u8 = undefined;
     if (config.output_path) |out_path| {
         if (std.mem.endsWith(u8, out_path, ".gz")) {
             var gw = try zreduce.gzip.GzipWriter.init(allocator, out_path);
             errdefer gw.close() catch {};
-            const aw = gw.anyWriter();
-            try zreduce.writer.pdb_writer.writeMultiModel(&aw, pdb_result.entries.items, pdb_result.header_records.items, config.bond_policy.output_isotope);
+            try zreduce.writer.pdb_writer.writeMultiModel(gw.writer(), pdb_result.entries.items, pdb_result.header_records.items, config.bond_policy.output_isotope);
             try gw.close();
         } else {
-            const file = try std.fs.cwd().createFile(out_path, .{});
-            defer file.close();
-            var fw = file.writer(&out_buf);
+            const file = try std.Io.Dir.cwd().createFile(io, out_path, .{});
+            defer file.close(io);
+            var fw = file.writer(io, &out_buf);
             try zreduce.writer.pdb_writer.writeMultiModel(&fw.interface, pdb_result.entries.items, pdb_result.header_records.items, config.bond_policy.output_isotope);
             try fw.interface.flush();
         }
     } else {
-        const stdout = std.fs.File.stdout();
-        var sw = stdout.writer(&out_buf);
+        const stdout = std.Io.File.stdout();
+        var sw = stdout.writer(io, &out_buf);
         try zreduce.writer.pdb_writer.writeMultiModel(&sw.interface, pdb_result.entries.items, pdb_result.header_records.items, config.bond_policy.output_isotope);
         try sw.interface.flush();
     }
 
     if (config.json_path) |json_path| {
         var json_buf: [4096]u8 = undefined;
-        const file = try std.fs.cwd().createFile(json_path, .{});
-        defer file.close();
-        var jw = file.writer(&json_buf);
+        const file = try std.Io.Dir.cwd().createFile(io, json_path, .{});
+        defer file.close(io);
+        var jw = file.writer(io, &json_buf);
         var total_added: u32 = 0;
         for (pdb_result.entries.items) |entry| total_added += countAddedHydrogens(&entry.model);
         try zreduce.writer.json_writer.writeMultiModelLog(
@@ -697,11 +701,12 @@ test "processFile processes tiny.cif via mmcif path" {
 
     // Write the tiny.cif fixture to a temp file
     const cif_content = @embedFile("test_data/tiny.cif");
-    try tmp_dir.dir.writeFile(.{ .sub_path = "tiny.cif", .data = cif_content });
+    const io = std.testing.io;
+    try tmp_dir.dir.writeFile(io, .{ .sub_path = "tiny.cif", .data = cif_content });
 
-    const input_path = try tmp_dir.dir.realpathAlloc(allocator, "tiny.cif");
+    const input_path = try tmp_dir.dir.realPathFileAlloc(io, "tiny.cif", allocator);
     defer allocator.free(input_path);
-    const output_path = try tmp_dir.dir.realpathAlloc(allocator, ".");
+    const output_path = try tmp_dir.dir.realPathFileAlloc(io, ".", allocator);
     defer allocator.free(output_path);
     const out_cif = try std.fmt.allocPrint(allocator, "{s}/out.cif", .{output_path});
     defer allocator.free(out_cif);
@@ -719,8 +724,8 @@ test "processFile processes tiny.cif via mmcif path" {
     try std.testing.expectEqual(@as(u32, 1), result.n_residues);
 
     // Output file must exist
-    const out_file = try tmp_dir.dir.openFile("out.cif", .{});
-    out_file.close();
+    const out_file = try tmp_dir.dir.openFile(io, "out.cif", .{});
+    out_file.close(io);
 }
 
 test "processFile processes tiny.pdb via pdb path" {
@@ -730,11 +735,12 @@ test "processFile processes tiny.pdb via pdb path" {
     defer tmp_dir.cleanup();
 
     const pdb_content = @embedFile("test_data/tiny.pdb");
-    try tmp_dir.dir.writeFile(.{ .sub_path = "tiny.pdb", .data = pdb_content });
+    const io = std.testing.io;
+    try tmp_dir.dir.writeFile(io, .{ .sub_path = "tiny.pdb", .data = pdb_content });
 
-    const input_path = try tmp_dir.dir.realpathAlloc(allocator, "tiny.pdb");
+    const input_path = try tmp_dir.dir.realPathFileAlloc(io, "tiny.pdb", allocator);
     defer allocator.free(input_path);
-    const output_path = try tmp_dir.dir.realpathAlloc(allocator, ".");
+    const output_path = try tmp_dir.dir.realPathFileAlloc(io, ".", allocator);
     defer allocator.free(output_path);
     const out_pdb = try std.fmt.allocPrint(allocator, "{s}/out.pdb", .{output_path});
     defer allocator.free(out_pdb);
@@ -750,8 +756,8 @@ test "processFile processes tiny.pdb via pdb path" {
     try std.testing.expect(result.n_placed > 0);
     try std.testing.expectEqual(@as(u32, 1), result.n_residues);
 
-    const out_file = try tmp_dir.dir.openFile("out.pdb", .{});
-    out_file.close();
+    const out_file = try tmp_dir.dir.openFile(io, "out.pdb", .{});
+    out_file.close(io);
 }
 
 test "processFile strip_h removes existing hydrogens before placement" {
@@ -762,11 +768,12 @@ test "processFile strip_h removes existing hydrogens before placement" {
 
     // ala_with_h.cif already contains a pre-placed HA — strip_h should remove it
     const cif_content = @embedFile("test_data/ala_with_h.cif");
-    try tmp_dir.dir.writeFile(.{ .sub_path = "ala_with_h.cif", .data = cif_content });
+    const io = std.testing.io;
+    try tmp_dir.dir.writeFile(io, .{ .sub_path = "ala_with_h.cif", .data = cif_content });
 
-    const input_path = try tmp_dir.dir.realpathAlloc(allocator, "ala_with_h.cif");
+    const input_path = try tmp_dir.dir.realPathFileAlloc(io, "ala_with_h.cif", allocator);
     defer allocator.free(input_path);
-    const out_dir = try tmp_dir.dir.realpathAlloc(allocator, ".");
+    const out_dir = try tmp_dir.dir.realPathFileAlloc(io, ".", allocator);
     defer allocator.free(out_dir);
     const out_path = try std.fmt.allocPrint(allocator, "{s}/out.cif", .{out_dir});
     defer allocator.free(out_path);

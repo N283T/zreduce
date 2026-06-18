@@ -55,12 +55,12 @@ pub fn deriveComponentFromCoordinates(
     res: Residue,
 ) !?Component {
     // ── Step 1: collect eligible heavy atoms ────────────────────────────────
-    var comp_atoms = std.ArrayListUnmanaged(CompAtom){};
+    var comp_atoms = std.ArrayListUnmanaged(CompAtom).empty;
     defer comp_atoms.deinit(allocator);
 
     // Map from local CompAtom index → model atom index within the residue slice.
     // We only need this during construction; not stored in the Component.
-    var local_to_model = std.ArrayListUnmanaged(u32){};
+    var local_to_model = std.ArrayListUnmanaged(u32).empty;
     defer local_to_model.deinit(allocator);
 
     const res_atoms = mdl.residueAtoms(res);
@@ -84,7 +84,7 @@ pub fn deriveComponentFromCoordinates(
     if (comp_atoms.items.len < 2) return null;
 
     // ── Step 2: detect bonds by covalent radius sum ─────────────────────────
-    var comp_bonds = std.ArrayListUnmanaged(CompBond){};
+    var comp_bonds = std.ArrayListUnmanaged(CompBond).empty;
     defer comp_bonds.deinit(allocator);
 
     const n = comp_atoms.items.len;

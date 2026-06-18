@@ -134,8 +134,8 @@ pub fn addHydrogensWithConfig(
     };
 
     if (config.water.enabled) blk: {
-        var positions = std.ArrayListUnmanaged(Vec3f32){};
-        var atom_idx_map = std.ArrayListUnmanaged(u32){};
+        var positions = std.ArrayListUnmanaged(Vec3f32).empty;
+        var atom_idx_map = std.ArrayListUnmanaged(u32).empty;
         errdefer positions.deinit(mdl.allocator);
         errdefer atom_idx_map.deinit(mdl.allocator);
 
@@ -471,7 +471,7 @@ fn addImplicitPeptideBondAtoms(
 
     if (!(has_n and has_ca and has_c)) return try allocator.dupe([4]u8, explicit_ir);
 
-    var list = std.ArrayListUnmanaged([4]u8){};
+    var list = std.ArrayListUnmanaged([4]u8).empty;
     defer list.deinit(allocator);
     try list.appendSlice(allocator, explicit_ir);
 
@@ -500,7 +500,7 @@ fn collectAtomNames(allocator: std.mem.Allocator, mdl: *const Model, res: Residu
 /// produces multiple entries (one per bond), giving correct valence accounting.
 fn collectInterResidueAtomNames(allocator: std.mem.Allocator, mdl: *const Model, res: Residue) ![]const [4]u8 {
     const bond_mod = @import("../model/bond.zig");
-    var names = std.ArrayListUnmanaged([4]u8){};
+    var names = std.ArrayListUnmanaged([4]u8).empty;
     defer names.deinit(allocator);
     for (mdl.bonds.items) |bond| {
         if (bond.source == bond_mod.BondSource.struct_conn or bond.source == bond_mod.BondSource.branch_link) {

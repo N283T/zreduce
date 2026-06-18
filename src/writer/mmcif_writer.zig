@@ -690,37 +690,37 @@ fn writePaddedCell(writer: anytype, val: []const u8, min_width: usize) !void {
 /// Write a CIF value with quoting, then pad to min_width.
 fn writePaddedCifValue(writer: anytype, val: []const u8, min_width: usize) !void {
     var buf: [256]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
-    writeCifValueInLoop(fbs.writer(), val) catch {
+    var w: std.Io.Writer = .fixed(&buf);
+    writeCifValueInLoop(&w, val) catch {
         // Value too large for buffer — write directly without padding
         try writeCifValueInLoop(writer, val);
         return;
     };
-    try writePaddedCell(writer, fbs.getWritten(), min_width);
+    try writePaddedCell(writer, w.buffered(), min_width);
 }
 
 /// Write an integer value padded to min_width.
 fn writePaddedInt(writer: anytype, val: anytype, min_width: usize) !void {
     var buf: [20]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
-    fbs.writer().print("{d}", .{val}) catch unreachable;
-    try writePaddedCell(writer, fbs.getWritten(), min_width);
+    var w: std.Io.Writer = .fixed(&buf);
+    w.print("{d}", .{val}) catch unreachable;
+    try writePaddedCell(writer, w.buffered(), min_width);
 }
 
 /// Write a float3 value padded to min_width.
 fn writePaddedFloat3(writer: anytype, val: f32, min_width: usize) !void {
     var buf: [64]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
-    format.writeFixedFloat3(fbs.writer(), val) catch unreachable;
-    try writePaddedCell(writer, fbs.getWritten(), min_width);
+    var w: std.Io.Writer = .fixed(&buf);
+    format.writeFixedFloat3(&w, val) catch unreachable;
+    try writePaddedCell(writer, w.buffered(), min_width);
 }
 
 /// Write a float2 value padded to min_width.
 fn writePaddedFloat2(writer: anytype, val: f32, min_width: usize) !void {
     var buf: [64]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
-    format.writeFixedFloat2(fbs.writer(), val) catch unreachable;
-    try writePaddedCell(writer, fbs.getWritten(), min_width);
+    var w: std.Io.Writer = .fixed(&buf);
+    format.writeFixedFloat2(&w, val) catch unreachable;
+    try writePaddedCell(writer, w.buffered(), min_width);
 }
 
 // ── Optimization log ──────────────────────────────────────────────────────────
@@ -793,16 +793,16 @@ test "write mmCIF round-trip" {
     ca_atom.residue_idx = 0;
     try mdl.atoms.append(mdl.allocator, ca_atom);
 
-    var buf = std.ArrayList(u8).empty;
-    defer buf.deinit(testing.allocator);
+    var buf: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer buf.deinit();
 
-    try write(buf.writer(testing.allocator), &mdl, "TEST");
+    try write(&buf.writer, &mdl, "TEST");
 
-    const output = buf.items;
-    try testing.expect(std.mem.indexOf(u8, output, "data_TEST") != null);
-    try testing.expect(std.mem.indexOf(u8, output, "_atom_site.Cartn_x") != null);
-    try testing.expect(std.mem.indexOf(u8, output, "ALA") != null);
-    try testing.expect(std.mem.indexOf(u8, output, "ATOM") != null);
+    const output = buf.writer.buffered();
+    try testing.expect(std.mem.find(u8, output, "data_TEST") != null);
+    try testing.expect(std.mem.find(u8, output, "_atom_site.Cartn_x") != null);
+    try testing.expect(std.mem.find(u8, output, "ALA") != null);
+    try testing.expect(std.mem.find(u8, output, "ATOM") != null);
 }
 
 test "writeWithDocument preserves multiline pair and loop values" {
@@ -851,11 +851,11 @@ test "writeWithDocument preserves multiline pair and loop values" {
     defer mdl.deinit();
     _ = try place.addHydrogens(&mdl, null, null);
 
-    var buf: std.ArrayListUnmanaged(u8) = .empty;
-    defer buf.deinit(testing.allocator);
-    try writeWithDocument(buf.writer(testing.allocator), &mdl, &doc);
+    var buf: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer buf.deinit();
+    try writeWithDocument(&buf.writer, &mdl, &doc);
 
-    var reparsed = try cif.readString(testing.allocator, buf.items);
+    var reparsed = try cif.readString(testing.allocator, buf.writer.buffered());
     defer reparsed.deinit();
 
     const block = &reparsed.blocks.items[0];
@@ -881,11 +881,11 @@ test "writeWithDocument preserves added hydrogen altloc" {
     place.applyChemistry(&mdl);
     _ = try place.addHydrogens(&mdl, null, null);
 
-    var buf: std.ArrayListUnmanaged(u8) = .empty;
-    defer buf.deinit(testing.allocator);
-    try writeWithDocument(buf.writer(testing.allocator), &mdl, &doc);
+    var buf: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer buf.deinit();
+    try writeWithDocument(&buf.writer, &mdl, &doc);
 
-    var reparsed = try cif.readString(testing.allocator, buf.items);
+    var reparsed = try cif.readString(testing.allocator, buf.writer.buffered());
     defer reparsed.deinit();
 
     const block = &reparsed.blocks.items[0];
@@ -914,13 +914,13 @@ test "writeWithPolicy outputs D for added hydrogens when isotope is deuterium" {
     defer mdl.deinit();
     _ = try place.addHydrogens(&mdl, null, null);
 
-    var out: std.ArrayListUnmanaged(u8) = .empty;
-    defer out.deinit(testing.allocator);
-    try writeWithPolicy(out.writer(testing.allocator), &mdl, "TEST", .{
+    var out: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer out.deinit();
+    try writeWithPolicy(&out.writer, &mdl, "TEST", .{
         .output_isotope = .deuterium,
     });
 
-    var doc = try cif.readString(testing.allocator, out.items);
+    var doc = try cif.readString(testing.allocator, out.writer.buffered());
     defer doc.deinit();
 
     const block = &doc.blocks.items[0];
@@ -949,13 +949,13 @@ test "writeWithDocumentWithPolicy outputs D in preserving mode" {
     defer mdl.deinit();
     _ = try place.addHydrogens(&mdl, null, null);
 
-    var out: std.ArrayListUnmanaged(u8) = .empty;
-    defer out.deinit(testing.allocator);
-    try writeWithDocumentWithPolicy(out.writer(testing.allocator), &mdl, &doc, .{
+    var out: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer out.deinit();
+    try writeWithDocumentWithPolicy(&out.writer, &mdl, &doc, .{
         .output_isotope = .deuterium,
     });
 
-    var parsed = try cif.readString(testing.allocator, out.items);
+    var parsed = try cif.readString(testing.allocator, out.writer.buffered());
     defer parsed.deinit();
 
     const block = &parsed.blocks.items[0];
@@ -983,13 +983,13 @@ test "deuterium mode preserves existing H atoms as H" {
     defer mdl.deinit();
     _ = try place.addHydrogens(&mdl, null, null);
 
-    var out: std.ArrayListUnmanaged(u8) = .empty;
-    defer out.deinit(testing.allocator);
-    try writeWithPolicy(out.writer(testing.allocator), &mdl, "TEST", .{
+    var out: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer out.deinit();
+    try writeWithPolicy(&out.writer, &mdl, "TEST", .{
         .output_isotope = .deuterium,
     });
 
-    var doc = try cif.readString(testing.allocator, out.items);
+    var doc = try cif.readString(testing.allocator, out.writer.buffered());
     defer doc.deinit();
 
     const block = &doc.blocks.items[0];
@@ -1050,12 +1050,12 @@ test "writeAtomSitePreserving serial numbers are contiguous even with out-of-ran
     // Extend the residue's atom range beyond loop length to simulate gap
     mdl.residues.items[0].atom_end = 4; // only 2 rows exist in loop
 
-    var buf: std.ArrayListUnmanaged(u8) = .empty;
-    defer buf.deinit(testing.allocator);
-    try writeWithDocument(buf.writer(testing.allocator), &mdl, &doc);
+    var buf: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer buf.deinit();
+    try writeWithDocument(&buf.writer, &mdl, &doc);
 
     // Parse output and verify serial numbers are 1 and 2 (no gap)
-    var reparsed = try cif.readString(testing.allocator, buf.items);
+    var reparsed = try cif.readString(testing.allocator, buf.writer.buffered());
     defer reparsed.deinit();
     const block = &reparsed.blocks.items[0];
     const atom_site = block.findLoop("_atom_site.id").?;
@@ -1074,11 +1074,11 @@ test "writeWithDocument preserves bare null alt ids on original rows" {
     var mdl = try mmcif.parseModel(testing.allocator, source);
     defer mdl.deinit();
 
-    var buf: std.ArrayListUnmanaged(u8) = .empty;
-    defer buf.deinit(testing.allocator);
-    try writeWithDocument(buf.writer(testing.allocator), &mdl, &doc);
+    var buf: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer buf.deinit();
+    try writeWithDocument(&buf.writer, &mdl, &doc);
 
-    try testing.expect(std.mem.indexOf(u8, buf.items, "'.'") == null);
+    try testing.expect(std.mem.find(u8, buf.writer.buffered(), "'.'") == null);
 }
 
 test "writeZreduceLog produces expected output" {
@@ -1119,15 +1119,15 @@ test "writeZreduceLog produces expected output" {
         .allocator = allocator,
     }};
 
-    var buf = std.ArrayList(u8).empty;
-    defer buf.deinit(allocator);
+    var buf: std.Io.Writer.Allocating = .init(allocator);
+    defer buf.deinit();
 
-    try writeZreduceLog(buf.writer(allocator), &movers, &residues, &chains);
+    try writeZreduceLog(&buf.writer, &movers, &residues, &chains);
 
-    const output = buf.items;
-    try testing.expect(std.mem.indexOf(u8, output, "_zreduce_log.residue_id") != null);
-    try testing.expect(std.mem.indexOf(u8, output, "flip_amide") != null);
-    try testing.expect(std.mem.indexOf(u8, output, "A.ASN.5") != null);
+    const output = buf.writer.buffered();
+    try testing.expect(std.mem.find(u8, output, "_zreduce_log.residue_id") != null);
+    try testing.expect(std.mem.find(u8, output, "flip_amide") != null);
+    try testing.expect(std.mem.find(u8, output, "A.ASN.5") != null);
 }
 
 test "writeMultiModelWithDocumentWithPolicy round-trip preserves model numbers" {
@@ -1145,18 +1145,18 @@ test "writeMultiModelWithDocumentWithPolicy round-trip preserves model numbers" 
     }
 
     // Write multi-model output
-    var buf = std.ArrayList(u8).empty;
-    defer buf.deinit(allocator);
+    var buf: std.Io.Writer.Allocating = .init(allocator);
+    defer buf.deinit();
 
-    try writeMultiModelWithDocumentWithPolicy(buf.writer(allocator), entries.items, &doc, .{});
+    try writeMultiModelWithDocumentWithPolicy(&buf.writer, entries.items, &doc, .{});
 
-    const output = buf.items;
+    const output = buf.writer.buffered();
 
     // Verify both model numbers appear in output
     const model1_count = blk: {
         var count: usize = 0;
         var pos: usize = 0;
-        while (std.mem.indexOfPos(u8, output, pos, " 1\n")) |idx| {
+        while (std.mem.findPos(u8, output, pos, " 1\n")) |idx| {
             count += 1;
             pos = idx + 1;
         }

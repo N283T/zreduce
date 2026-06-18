@@ -181,14 +181,14 @@ fn outputIsotopeStr(isotope: bond_policy_mod.OutputIsotope) []const u8 {
 }
 
 test "write JSON log" {
-    var buf: std.ArrayListUnmanaged(u8) = .empty;
-    defer buf.deinit(testing.allocator);
+    var buf: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer buf.deinit();
 
-    try writeLog(buf.writer(testing.allocator), "0.1.0", "test.cif", 42, .{}, &.{}, &.{}, &.{});
+    try writeLog(&buf.writer, "0.1.0", "test.cif", 42, .{}, &.{}, &.{}, &.{});
 
-    const output = buf.items;
-    try testing.expect(std.mem.indexOf(u8, output, "\"version\": \"0.1.0\"") != null);
-    try testing.expect(std.mem.indexOf(u8, output, "\"hydrogens_added\": 42") != null);
-    try testing.expect(std.mem.indexOf(u8, output, "\"bond_mode\": \"neutron\"") != null);
-    try testing.expect(std.mem.indexOf(u8, output, "\"output_isotope\": \"hydrogen\"") != null);
+    const output = buf.writer.buffered();
+    try testing.expect(std.mem.find(u8, output, "\"version\": \"0.1.0\"") != null);
+    try testing.expect(std.mem.find(u8, output, "\"hydrogens_added\": 42") != null);
+    try testing.expect(std.mem.find(u8, output, "\"bond_mode\": \"neutron\"") != null);
+    try testing.expect(std.mem.find(u8, output, "\"output_isotope\": \"hydrogen\"") != null);
 }

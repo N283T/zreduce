@@ -64,9 +64,9 @@ fn formatAtomNamePdb(trimmed: []const u8, elem_sym: []const u8) [4]u8 {
 /// Format a coordinate (8.3f) right-justified into an 8-char field.
 fn writeCoord(writer: anytype, val: f32) !void {
     var buf: [32]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
-    try writeFixedFloat3(fbs.writer(), val);
-    const s = fbs.getWritten();
+    var w: std.Io.Writer = .fixed(&buf);
+    try writeFixedFloat3(&w, val);
+    const s = w.buffered();
     if (s.len <= 8) {
         // Right-justify in 8 chars
         for (0..8 - s.len) |_| try writer.writeByte(' ');
@@ -80,9 +80,9 @@ fn writeCoord(writer: anytype, val: f32) !void {
 /// Format occupancy/b-factor (6.2f) right-justified into a 6-char field.
 fn writeOccupancy(writer: anytype, val: f32) !void {
     var buf: [32]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
-    try writeFixedFloat2(fbs.writer(), val);
-    const s = fbs.getWritten();
+    var w: std.Io.Writer = .fixed(&buf);
+    try writeFixedFloat2(&w, val);
+    const s = w.buffered();
     if (s.len <= 6) {
         // Right-justify in 6 chars
         for (0..6 - s.len) |_| try writer.writeByte(' ');
@@ -314,7 +314,7 @@ pub fn writeMultiModel(
         switch (rec) {
             .raw_line => |line| {
                 // Skip END record in header — we'll write our own at the end
-                if (line.len >= 3 and std.mem.eql(u8, std.mem.trimRight(u8, line, " "), "END")) continue;
+                if (line.len >= 3 and std.mem.eql(u8, std.mem.trimEnd(u8, line, " "), "END")) continue;
                 try writer.print("{s}\n", .{line});
             },
             .atom_site => {},
@@ -475,14 +475,14 @@ test "write tiny PDB round-trip" {
     var result = try pdb_parse_mod.parse(testing.allocator, source);
     defer result.deinit(testing.allocator);
 
-    var buf = std.ArrayList(u8).empty;
-    defer buf.deinit(testing.allocator);
-    const w = buf.writer(testing.allocator);
+    var buf: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer buf.deinit();
+    const w = &buf.writer;
     try writeModel(w, &result.model, result.records.items, .hydrogen);
-    const output = buf.items;
+    const output = buf.writer.buffered();
 
     // Should contain HEADER passthrough
-    try testing.expect(std.mem.indexOf(u8, output, "HEADER") != null);
+    try testing.expect(std.mem.find(u8, output, "HEADER") != null);
 
     // Should contain 5 ATOM lines
     var atom_count: usize = 0;
@@ -493,7 +493,7 @@ test "write tiny PDB round-trip" {
     try testing.expectEqual(@as(usize, 5), atom_count);
 
     // Should end with END
-    try testing.expect(std.mem.indexOf(u8, output, "END") != null);
+    try testing.expect(std.mem.find(u8, output, "END") != null);
 }
 
 test "PDB writer preserves coordinates" {
@@ -502,13 +502,13 @@ test "PDB writer preserves coordinates" {
     var result = try pdb_parse_mod.parse(testing.allocator, source);
     defer result.deinit(testing.allocator);
 
-    var buf = std.ArrayList(u8).empty;
-    defer buf.deinit(testing.allocator);
-    const w = buf.writer(testing.allocator);
+    var buf: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer buf.deinit();
+    const w = &buf.writer;
     try writeModel(w, &result.model, result.records.items, .hydrogen);
 
     // Re-parse the output
-    var mdl2 = try pdb_parse_mod.parseModel(testing.allocator, buf.items);
+    var mdl2 = try pdb_parse_mod.parseModel(testing.allocator, buf.writer.buffered());
     defer mdl2.deinit();
 
     try testing.expectEqual(result.model.atoms.items.len, mdl2.atoms.items.len);
@@ -525,11 +525,11 @@ test "PDB writer multi-chain with TER records" {
     var result = try pdb_parse_mod.parse(testing.allocator, source);
     defer result.deinit(testing.allocator);
 
-    var buf = std.ArrayList(u8).empty;
-    defer buf.deinit(testing.allocator);
-    const w = buf.writer(testing.allocator);
+    var buf: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer buf.deinit();
+    const w = &buf.writer;
     try writeModel(w, &result.model, result.records.items, .hydrogen);
-    const output = buf.items;
+    const output = buf.writer.buffered();
 
     // Count ATOM lines: 8 chain A + 4 chain B = 12
     var atom_count: usize = 0;
@@ -549,11 +549,11 @@ test "PDB writer HETATM records" {
     var result = try pdb_parse_mod.parse(testing.allocator, source);
     defer result.deinit(testing.allocator);
 
-    var buf = std.ArrayList(u8).empty;
-    defer buf.deinit(testing.allocator);
-    const w = buf.writer(testing.allocator);
+    var buf: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer buf.deinit();
+    const w = &buf.writer;
     try writeModel(w, &result.model, result.records.items, .hydrogen);
-    const output = buf.items;
+    const output = buf.writer.buffered();
 
     var atom_count: usize = 0;
     var hetatm_count: usize = 0;

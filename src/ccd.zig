@@ -110,8 +110,8 @@ const Builder = struct {
     allocator: Allocator,
     comp_id: ?[]const u8 = null, // slice into source
     comp_type: []const u8 = "", // slice into source
-    atoms: std.ArrayListUnmanaged(CompAtom) = .{},
-    bonds: std.ArrayListUnmanaged(CompBond) = .{},
+    atoms: std.ArrayListUnmanaged(CompAtom) = .empty,
+    bonds: std.ArrayListUnmanaged(CompBond) = .empty,
 
     fn deinit(self: *Builder) void {
         self.atoms.deinit(self.allocator);
@@ -252,7 +252,7 @@ pub fn parseComponentDict(allocator: Allocator, source: []const u8) !ComponentDi
 /// Parse a loop_ block. Returns the first non-value token after the loop (may be eof).
 fn parseLoop(tok: *Tokenizer, source: []const u8, builder: *Builder) !Token {
     // --- Phase 1: collect tags ---
-    var tags = std.ArrayListUnmanaged([]const u8){};
+    var tags = std.ArrayListUnmanaged([]const u8).empty;
     defer tags.deinit(builder.allocator);
 
     var first_non_tag: Token = undefined;
@@ -299,7 +299,7 @@ fn parseLoop(tok: *Tokenizer, source: []const u8, builder: *Builder) !Token {
 
     // --- Phase 3: consume values row by row ---
     // Collect one row at a time (ncols values)
-    var row = std.ArrayListUnmanaged([]const u8){};
+    var row = std.ArrayListUnmanaged([]const u8).empty;
     defer row.deinit(builder.allocator);
 
     var next_tok = first_non_tag;

@@ -35,7 +35,7 @@ pub fn parseSdf(allocator: Allocator, source: []const u8) !ComponentDict {
 
     var remaining = source;
     while (remaining.len > 0) {
-        const mol_end = std.mem.indexOf(u8, remaining, "$$$$") orelse remaining.len;
+        const mol_end = std.mem.find(u8, remaining, "$$$$") orelse remaining.len;
         const mol_block = remaining[0..mol_end];
 
         // Advance past the $$$$ separator (and trailing newline if present)
@@ -98,7 +98,7 @@ fn parseMolBlock(allocator: Allocator, block: []const u8, dict: *ComponentDict) 
     if (n_bonds > 999) return error.TooManyBonds;
 
     // --- Atom block ---
-    var atoms = std.ArrayListUnmanaged(CompAtom){};
+    var atoms = std.ArrayListUnmanaged(CompAtom).empty;
     defer atoms.deinit(allocator);
 
     // Track per-element counters for name generation.
@@ -115,7 +115,7 @@ fn parseMolBlock(allocator: Allocator, block: []const u8, dict: *ComponentDict) 
     }
 
     // --- Bond block ---
-    var bonds = std.ArrayListUnmanaged(CompBond){};
+    var bonds = std.ArrayListUnmanaged(CompBond).empty;
     defer bonds.deinit(allocator);
 
     var bond_i: usize = 0;
@@ -214,7 +214,7 @@ fn parseAtomLine(
     // Build name string: e.g. "C1", "N12" — left-justified in 4 chars
     var name_buf: [8]u8 = undefined;
     // Render only the non-space part of elem_key as the element prefix
-    const elem_str = std.mem.trimRight(u8, &elem_key, " ");
+    const elem_str = std.mem.trimEnd(u8, &elem_key, " ");
     const name_str = std.fmt.bufPrint(&name_buf, "{s}{d}", .{ elem_str, idx }) catch unreachable;
 
     const copy_len = @min(name_str.len, 4);
