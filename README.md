@@ -2,164 +2,104 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-A from-scratch Zig implementation of the [reduce](https://github.com/rlabduke/reduce) hydrogen placement tool for macromolecular structures.
+zreduce is a Zig implementation of the [reduce](https://github.com/rlabduke/reduce)
+hydrogen placement tool for macromolecular structures. It reads mmCIF/PDB files,
+adds hydrogens, optimizes supported rotatable/flippable groups, and writes mmCIF
+or PDB output.
 
-zreduce reads mmCIF structures, adds hydrogen atoms using geometric rules and CCD bond topology, then optimizes rotatable/flippable groups via clique-based search with probe dot-sphere scoring.
+Detailed design and feature documentation will live in separate docs.
 
-## Features
-
-- **mmCIF and PDB** input and output formats
-- **Gzip support** for compressed input files (.cif.gz, .pdb.gz)
-- **CCD-driven** hydrogen placement for non-standard residues (nucleotides, glycans, ligands, modified residues)
-- **SDF/MOL topology** support for compounds not in the CCD (`--sdf` flag)
-- **Distance-based fallback** for unknown residues with no dictionary entry (automatic)
-- **20 standard amino acids** with hardcoded placement plans and bond topology
-- **6 geometry types**: tetrahedral, sp2, dihedral-controlled, planar bisector, fractional angle, linear
-- **Conformer-aware**: altloc handling with per-conformer placement and optimization
-- **Residue-specific chemistry**: donor/acceptor/aromatic/charge annotations for scoring
-- **Chain-break detection**: from `_pdbx_poly_seq_scheme` for correct terminal chemistry
-- **Dot-sphere scoring** with bump/H-bond classification (matching original reduce constants)
-- **Clique-based optimization**: singleton, brute-force, iterative greedy, with fine angular search
-- **Rotation movers**: OH/SH (12 orientations), NH3+ (3), methyl (3) — standard + CCD-derived
-- **Flip movers**: Asn/Gln amide flip (2 orientations), His ring flip (6 orientations)
-- **CellList spatial index**: O(N) scoring instead of O(N^2)
-- **SIMD acceleration**: Vec3 operations via `@Vector(4, T)`, fast exp approximation
-- **Batch processing**: parallel file-level processing with atomic work-stealing
-- **Model validation**: sentinel detection, NaN/Inf coordinate checks
-- **Zero-copy CIF parser** with streaming CCD support (~40K components)
-
-## Quick Start
-
-### Requirements
+## Requirements
 
 - [Zig](https://ziglang.org/) 0.16+
 
-### Build
+## Build and test
 
 ```bash
-zig build                           # Debug
-zig build -Doptimize=ReleaseFast    # Optimized (recommended for real structures)
+zig build
+zig build -Doptimize=ReleaseFast
+zig build test --summary all
 ```
 
-### Run
+The optimized executable is written to `zig-out/bin/zreduce`.
+
+## Usage
 
 ```bash
-# Single file processing (mmCIF)
+# Single structure
 zreduce run input.cif -o output.cif
-
-# PDB format input
 zreduce run input.pdb -o output.pdb
 
-# Gzip-compressed input
+# Compressed input and output
 zreduce run input.cif.gz -o output.cif
+zreduce batch input_dir/ -o output_dir/ --gz
 
-# With CCD dictionary (enables non-standard residue H placement + optimization)
+# Use a CCD dictionary and optional ligand topology
 zreduce run input.cif -d components.cif -o output.cif
-
-# With SDF topology for non-CCD compounds
 zreduce run input.cif -d components.cif --sdf ligand.sdf -o output.cif
 
-# Placement only (skip optimization)
+# Placement controls
 zreduce run input.cif -o output.cif --no-opt
-
-# Disable flips (keep rotators only)
 zreduce run input.cif -o output.cif --no-flip
-
-# With validation diagnostics
-zreduce run input.cif -o output.cif --validate
-
-# Add water hydrogens with occupancy/B-factor filtering
 zreduce run input.cif -o output.cif --water
-zreduce run input.cif -o output.cif --water-phantom
-zreduce run input.cif -o output.cif --water --water-occ-cutoff 0.5 --water-b-cutoff 30
+zreduce run input.cif -o output.cif --strip-h
 
-# Write JSON optimization log
+# Diagnostics and control files
+zreduce run input.cif -o output.cif --validate
 zreduce run input.cif -o output.cif --json log.json
-
-# Force residue protonation states from a control file
 zreduce run input.cif -o output.cif --protonation protonation.txt
-
-# Dump mover IDs / allowed states, then force selected movers
 zreduce run input.cif --dump-movers movers.txt --no-opt
 zreduce run input.cif -o output.cif --fix fix.txt
 
-# Batch processing (parallel)
+# Batch processing
 zreduce batch input_dir/ -o output_dir/
-zreduce batch input_dir/ -d components.cif --jsonl log.jsonl --protonation protonation.txt
-zreduce batch input_dir/ -d components.cif --fix fix.txt
-zreduce batch input_dir/ -j 4    # limit to 4 threads
+zreduce batch input_dir/ -d components.cif --jsonl log.jsonl
+zreduce batch input_dir/ -j 4
+
+# Precompile a CCD dictionary
+zreduce compile-dict components.cif -o components.zccd
 ```
 
-### Test
+## Commands
 
-```bash
-zig build test --summary all    # ~490 tests
+```text
+zreduce run [OPTIONS] <input.cif|input.pdb>
+zreduce batch [OPTIONS] <input_dir>
+zreduce compile-dict [OPTIONS] <input.cif>
 ```
 
-## CLI
+Use `zreduce <command> --help` for the full option list.
 
-zreduce uses subcommands: `run` for single files, `batch` for directories.
+Common `run` and `batch` options:
 
-### `zreduce run` — single file
-
-| Flag | Description |
-|------|-------------|
-| `-h, --help` | Show help message |
-| `-o, --output PATH` | Output mmCIF file (default: stdout) |
-| `-d, --dict PATH` | Path to components.cif for non-standard residues |
-| `-s, --sdf PATH` | SDF/MOL file with ligand topology (for non-CCD compounds) |
-| `--json PATH` | Write JSON optimization log |
+| Option | Description |
+| --- | --- |
+| `-d, --dict PATH` | CCD dictionary |
+| `-s, --sdf PATH` | SDF/MOL ligand topology |
+| `-o, --output PATH` | Output file or directory |
+| `--json PATH` / `--jsonl PATH` | Single-file JSON log / batch JSONL log |
 | `--protonation PATH` | Residue protonation override file |
-| `--fix PATH` | Force mover states from control file |
-| `--dump-movers PATH` | Write available mover IDs/states to file |
-| `--no-opt` | Skip optimization (placement only) |
-| `--no-flip` | Disable Asn/Gln/His flips |
-| `--validate` | Print detailed validation diagnostics |
-| `--water` | Add water hydrogens |
-| `--water-phantom` | Allow zero-occupancy phantom water hydrogens |
-| `--water-occ-cutoff N` | Skip waters with occupancy below `N` |
-| `--water-b-cutoff N` | Skip waters with B-factor above `N` |
-| `--nterm MODE` | N-terminal protonation: `auto` (default), `aggressive`, or `neutral` |
-
-#### `--nterm` modes
-
-| Mode | Behavior | Equivalent |
-|------|----------|------------|
-| `auto` | NH3+ (or NH2+ on PRO) only on real chain-first residues; residues after an observed chain break keep a single backbone amide H | ChimeraX `addh` / current default |
-| `aggressive` | NH3+/NH2+ on both chain-first AND chain-break residues | reduce2 `first_in_chain` mode |
-| `neutral` | Non-PRO real N-termini get a neutral NH2 (H2, H3) with no positive charge flag. PRO is an exception: it keeps the default NH2+ (the secondary amine is protonated at physiological pH) and retains the positive charge flag. Chain-break residues in `neutral` mode still keep a single break-amide H — use `aggressive` if you want them promoted. | reduce2 `no_charge` (approximate) |
-
-Default `auto` matches the prior behavior — existing pipelines are unaffected.
-
-### `zreduce batch` — directory
-
-| Flag | Description |
-|------|-------------|
-| `-h, --help` | Show help message |
-| `-o, --output PATH` | Output directory (default: `<input>_reduced/`) |
-| `-d, --dict PATH` | CCD dictionary (loaded once, shared across files) |
-| `-s, --sdf PATH` | SDF/MOL file with ligand topology (loaded once) |
-| `-j, --threads N` | Thread count (default: auto-detect CPU count) |
-| `--jsonl PATH` | Aggregated JSONL log file |
-| `--protonation PATH` | Residue protonation override file |
-| `--fix PATH` | Force mover states from control file |
+| `--fix PATH` | Force mover states from a control file |
 | `--no-opt` | Skip optimization |
-| `--no-flip` | Disable flips |
-| `--quiet` | Suppress progress output |
+| `--no-flip` | Disable Asn/Gln/His flips |
 | `--water` | Add water hydrogens |
-| `--water-phantom` | Allow zero-occupancy phantom water hydrogens |
-| `--water-occ-cutoff N` | Skip waters with occupancy below `N` |
-| `--water-b-cutoff N` | Skip waters with B-factor above `N` |
-| `--nterm MODE` | N-terminal protonation: `auto` (default), `aggressive`, or `neutral` (see `run` table above) |
+| `--strip-h` | Remove existing hydrogens before placement |
+| `--bond-mode MODE` | `neutron` or `xray` bond lengths |
+| `--isotope NAME` | `hydrogen`/`h` or `deuterium`/`d` |
+| `--nterm MODE` | `auto`, `aggressive`, or `neutral` |
+| `--model VALUE` | `all` or a model number |
 
-### Global flags
+Batch-only options:
 
-| Flag | Description |
-|------|-------------|
-| `-h, --help` | Show help and subcommand list |
-| `-V, --version` | Show version |
+| Option | Description |
+| --- | --- |
+| `-j, --threads N` | Thread count |
+| `--quiet` | Suppress progress output |
+| `--gz` | Write gzip-compressed output (`.cif.gz`) |
 
-### Protonation Override File
+## Control files
+
+### Protonation overrides
 
 One override per line:
 
@@ -180,7 +120,7 @@ Supported states:
 - `LYS`: `CHARGED`, `NEUTRAL`
 - `CYS`: `THIOL`, `THIOLATE`
 
-### Fix Override File
+### Mover fixes
 
 One override per line:
 
@@ -195,178 +135,16 @@ Targets and values:
 
 - `amide`: `ORIGINAL`, `FLIP`
 - `his`: `HIE`, `HID`, `HIE_FLIP`, `HID_FLIP`
-- rotators: center atom name plus coarse orientation index
-  Example: `SER OG 6`, `ALA CB 2`, `LYS NZ 1`
-
-## Architecture
-
-```
-mmCIF input
-    |
-    v
-+------------------+
-| CIF Parser       |  Zero-copy tokenizer + parser
-+--------+---------+
-         |
-         v
-+------------------+
-| CCD Loader       |  Streaming parser for components.cif
-+--------+---------+
-         |
-         v
-+------------------+
-| Model Build      |  Atom[], Residue[], Chain[]
-| + Chemistry      |  Donor/acceptor/aromatic/charge annotations
-| + Chain Breaks   |  From _pdbx_poly_seq_scheme
-+--------+---------+
-         |
-         v
-+------------------+
-| H Placement      |  Conformer-aware, altloc-consistent
-| Standard + CCD   |  Bond topology for neighbor resolution
-| + SDF fallback   |  User-supplied topology for non-CCD ligands
-| + Distance infer |  Last-resort bond inference from coordinates
-+--------+---------+
-         |
-         v
-+------------------+
-| Mover Generation |  Standard plans + CCD topology fallback
-+--------+---------+
-         |
-         v
-+------------------+
-| Optimizer        |  CellList scoring + clique search
-| + Fine Search    |  Angular refinement around coarse best
-+--------+---------+
-         |
-         v
-+------------------+
-| Validation       |  Sentinel, NaN/Inf checks
-+--------+---------+
-         |
-         v
-+------------------+
-| Output Writer    |  mmCIF / PDB with H atoms + JSON log
-+------------------+
-
-Batch mode wraps the above pipeline with file-level parallelism:
-  Directory scan → Thread pool → processFile per file → JSONL log
-```
-
-## Performance
-
-Benchmarked on Apple Silicon (ReleaseFast):
-
-| Structure | Residues | Movers | Time |
-|-----------|----------|--------|------|
-| AF small protein | 16 | 12 | 0.008s |
-| AF medium protein | 309 | 299 | 0.03s |
-| AF large protein | 1486 | 1320 | 0.39s |
-| AF extra-large protein | 2339 | 2434 | 1.0s |
-
-Batch processing: 4370 E. coli proteome structures in 72s (10.5x CPU utilization).
-
-## Project Structure
-
-```
-src/
-  main.zig              CLI entry point (subcommand dispatch: run/batch)
-  run.zig               Single-file processing pipeline
-  batch.zig             Batch processing (parallel, JSONL log)
-  root.zig              Library re-exports
-  validate.zig          Post-placement model validation
-  math.zig              Vec3(T), rotation, dihedral
-  element.zig           AtomType, VDW radii, AtomFlags
-  gzip.zig              Gzip I/O via Zig std.compress.flate
-  integration_test.zig  End-to-end pipeline integration tests
-  real_file_test.zig    End-to-end tests with real PDB structures
-  cif.zig               CIF module re-exports
-  cif/                  CIF parser subsystem
-    char_table.zig      Character classification table
-    parser.zig          CIF document parser
-    tokenizer.zig       Zero-copy CIF tokenizer
-    types.zig           CIF data types (Document, Block, Loop, Pair)
-    value.zig           CIF value helpers (null, float, int parsing)
-  mmcif.zig             atom_site + poly_seq_scheme + unobs atoms
-  mmcif/
-    conn.zig            _struct_conn and _pdbx_entity_branch_link parsing
-    inline_comp.zig     Inline component dictionary and leaving atom flags
-  ccd.zig               CCD component dictionary (streaming parser)
-  ccd_binary.zig        Binary format for fast CCD load/save
-  sdf.zig               SDF/MOL V2000 parser (non-CCD ligand topology)
-  pdb.zig               PDB format parser (ATOM/HETATM records)
-  model.zig             Model module re-exports
-  model/                Molecular model structs
-    atom.zig            Atom struct and helpers
-    bond.zig            Bond struct
-    chain.zig           Chain struct
-    fixed_string.zig    Fixed-capacity space-padded PDB-style identifiers
-    model.zig           Aggregate model container
-    neighbor.zig        Spatial cell list for neighbor lookups
-    residue.zig         Residue struct
-  place.zig             Place module re-exports
-  place/                Hydrogen placement
-    placer.zig          Unified placer (conformer-aware)
-    placer_test.zig     Placement pipeline integration tests
-    standard.zig        20 AA placement plans + MoverHint
-    ccd_derive.zig      CCD-derived placement plan generation
-    distance_derive.zig Distance-based bond inference fallback
-    nucleotide.zig      DNA/RNA nucleotide placement plans
-    modified.zig        Modified amino acid placement plans (MSE, SEP, etc.)
-    topology.zig        Bond topology tables for 20 AAs
-    chemistry.zig       Chemical annotations (donor/acceptor/aromatic/charge)
-    geometry.zig        Hydrogen placement geometry functions (Types 1-6)
-    execute.zig         Plan execution and geometry dispatch
-    lookup.zig          Atom lookup utilities for placement
-    bond_policy.zig     Bond length policies (X-ray vs neutron)
-    protonation.zig     Protonation state overrides
-    terminal.zig        N-terminal and 3'-terminal H placement
-    water.zig           Water hydrogen placement
-  optimize/             Optimization engine
-    optimize.zig        Optimize module re-exports
-    optimizer.zig       Clique search + fine angular search
-    scoring.zig         CellList-based scoring with SoA layout
-    mover_gen.zig       Mover generation (standard + CCD)
-    scorer.zig          Dot-sphere scoring
-    rotator.zig         Rotation movers (OH/SH, NH3+, methyl)
-    flipper.zig         Flip movers (Asn/Gln amide, His ring)
-    mover.zig           Mover struct, Orientation, isAbsentH
-    fix.zig             Mover state override from fix file
-    clique.zig          Interaction graph + connected components
-    dot_sphere.zig      Concentric ring dot generation
-  writer.zig            Writer module re-exports
-  writer/               Output writers
-    mmcif_writer.zig    mmCIF format output
-    pdb_writer.zig      PDB format output
-    json_writer.zig     JSON optimization log output
-    format.zig          Value formatting and fixed-point float helpers
-  test_data/            Test CIF/PDB fixtures
-examples/
-  data/                 Input structures (AF models, fold_test2)
-  result/               zreduce output
-```
-
-## Known Limitations
-
-- CCD dihedral estimation uses fixed heuristics (not computed from ideal coords)
-- Distance-based bond inference cannot detect aromatic rings; bond order promotion uses valence heuristics only
-- Optimizer-internal parallelism is currently disabled during the Zig 0.16 migration; batch mode still uses file-level parallelism.
+- rotators: center atom name plus coarse orientation index, for example `SER OG 6`
 
 ## Changelog
 
-See [CHANGELOG.md](CHANGELOG.md) for a detailed history of changes.
+See [CHANGELOG.md](CHANGELOG.md) for release history.
 
 ## Contributing
 
-Contributions are welcome. Please:
-
-1. Open an issue to discuss larger changes before submitting a PR
-2. Follow the existing code style (run `zig fmt .` before committing)
-3. Add tests for new behavior — `zig build test` must pass
-4. Use conventional commit messages (`feat:`, `fix:`, `refactor:`, `docs:`, `test:`, `perf:`, `chore:`)
-5. Keep PRs focused — one logical change per PR
-
-For bug reports, please include the input structure (or a minimal reproduction) and the exact `zreduce` command used.
+Contributions are welcome. Please keep changes focused, follow the existing code
+style, and run `zig fmt .` plus `zig build test` before submitting a PR.
 
 ## License
 
@@ -374,15 +152,15 @@ zreduce is released under the MIT License. See [LICENSE](LICENSE) for details.
 
 ### Attribution
 
-zreduce is an independent from-scratch Zig reimplementation. No source code from the
-original [reduce](https://github.com/rlabduke/reduce) tool is used, but the hydrogen
-placement algorithm, scoring heuristics, and bond topology tables it pioneered are
-owed to J. Michael Word, Duke University / UCSF, and contributors.
+zreduce is an independent from-scratch Zig reimplementation. No source code from
+the original [reduce](https://github.com/rlabduke/reduce) tool is used, but the
+hydrogen placement algorithm, scoring heuristics, and bond topology tables it
+pioneered are owed to J. Michael Word, Duke University / UCSF, and contributors.
 
 Please cite the original work if you use zreduce in research:
 
-> Word, et al. (1999) "Asparagine and glutamine: using hydrogen atom contacts in the
-> choice of side-chain amide orientation." J. Mol. Biol. 285, 1735-1747.
+> Word, et al. (1999) "Asparagine and glutamine: using hydrogen atom contacts in
+> the choice of side-chain amide orientation." J. Mol. Biol. 285, 1735-1747.
 > [doi:10.1006/jmbi.1998.2401](https://doi.org/10.1006/jmbi.1998.2401)
 
 ## References
