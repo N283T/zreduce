@@ -3,7 +3,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
-// In Zig 0.15, std.ArrayList is the unmanaged variant (no stored allocator).
+// In Zig 0.16, std.ArrayList is the unmanaged variant (no stored allocator).
 // append/deinit all take an explicit Allocator argument.
 
 // ---------------------------------------------------------------------------

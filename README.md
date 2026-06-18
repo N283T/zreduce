@@ -23,7 +23,6 @@ zreduce reads mmCIF structures, adds hydrogen atoms using geometric rules and CC
 - **Rotation movers**: OH/SH (12 orientations), NH3+ (3), methyl (3) — standard + CCD-derived
 - **Flip movers**: Asn/Gln amide flip (2 orientations), His ring flip (6 orientations)
 - **CellList spatial index**: O(N) scoring instead of O(N^2)
-- **Multithreaded optimization**: parallel singleton and fine-search via thread pool
 - **SIMD acceleration**: Vec3 operations via `@Vector(4, T)`, fast exp approximation
 - **Batch processing**: parallel file-level processing with atomic work-stealing
 - **Model validation**: sentinel detection, NaN/Inf coordinate checks
@@ -33,8 +32,7 @@ zreduce reads mmCIF structures, adds hydrogen atoms using geometric rules and CC
 
 ### Requirements
 
-- [Zig](https://ziglang.org/) 0.14+ (tested with 0.15.x)
-- zlib (linked as system library for gzip I/O)
+- [Zig](https://ziglang.org/) 0.16+
 
 ### Build
 
@@ -279,7 +277,7 @@ src/
   validate.zig          Post-placement model validation
   math.zig              Vec3(T), rotation, dihedral
   element.zig           AtomType, VDW radii, AtomFlags
-  gzip.zig              Gzip I/O via C zlib (workaround for Zig std lib bug)
+  gzip.zig              Gzip I/O via Zig std.compress.flate
   integration_test.zig  End-to-end pipeline integration tests
   real_file_test.zig    End-to-end tests with real PDB structures
   cif.zig               CIF module re-exports
@@ -326,7 +324,7 @@ src/
     water.zig           Water hydrogen placement
   optimize/             Optimization engine
     optimize.zig        Optimize module re-exports
-    optimizer.zig       Clique search + fine search + multithreaded optimization
+    optimizer.zig       Clique search + fine angular search
     scoring.zig         CellList-based scoring with SoA layout
     mover_gen.zig       Mover generation (standard + CCD)
     scorer.zig          Dot-sphere scoring
@@ -352,7 +350,7 @@ examples/
 
 - CCD dihedral estimation uses fixed heuristics (not computed from ideal coords)
 - Distance-based bond inference cannot detect aromatic rings; bond order promotion uses valence heuristics only
-- Gzip I/O uses C zlib as a workaround for a Zig std lib bug ([ziglang/zig#25035](https://github.com/ziglang/zig/issues/25035))
+- Optimizer-internal parallelism is currently disabled during the Zig 0.16 migration; batch mode still uses file-level parallelism.
 
 ## Changelog
 

@@ -136,7 +136,7 @@ fn runPlaceAndOptimize(
 /// Assert a single H position matches a pinned baseline within tolerance.
 fn assertHPos(h_pos: []const HPos, name: []const u8, ex: f32, ey: f32, ez: f32, tol: f32) !void {
     for (h_pos) |h| {
-        if (!std.mem.eql(u8, std.mem.trimRight(u8, &h.name, " "), name)) continue;
+        if (!std.mem.eql(u8, std.mem.trimEnd(u8, &h.name, " "), name)) continue;
         const dx = @abs(h.x - ex);
         const dy = @abs(h.y - ey);
         const dz = @abs(h.z - ez);

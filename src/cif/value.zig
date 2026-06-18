@@ -18,7 +18,7 @@ pub fn asString(v: []const u8) []const u8 {
 pub fn asFloat(v: []const u8) ?f32 {
     if (isNull(v)) return null;
     // Strip uncertainty suffix "(N...)" if present
-    const src = if (std.mem.indexOfScalar(u8, v, '(')) |paren_idx|
+    const src = if (std.mem.findScalar(u8, v, '(')) |paren_idx|
         v[0..paren_idx]
     else
         v;

@@ -41,7 +41,7 @@ pub fn derivePlans(
     existing_atom_names: []const [4]u8,
     inter_residue_atoms: []const [4]u8,
 ) ![]PlacementPlan {
-    var plans = std.ArrayListUnmanaged(PlacementPlan){};
+    var plans = std.ArrayListUnmanaged(PlacementPlan).empty;
     errdefer plans.deinit(allocator);
 
     for (component.atoms, 0..) |atom, atom_idx| {

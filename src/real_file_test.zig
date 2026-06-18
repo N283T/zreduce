@@ -126,12 +126,12 @@ fn countChainBreaks(mdl: *const zreduce.model.Model) u32 {
 
 /// Check that the output is valid mmCIF (write and re-parse).
 fn verifyOutputRoundTrip(allocator: std.mem.Allocator, mdl: *const zreduce.model.Model) !void {
-    var buf: std.ArrayListUnmanaged(u8) = .empty;
-    defer buf.deinit(allocator);
-    try zreduce.writer.mmcif_writer.write(buf.writer(allocator), mdl, "TEST");
+    var buf: std.Io.Writer.Allocating = .init(allocator);
+    defer buf.deinit();
+    try zreduce.writer.mmcif_writer.write(&buf.writer, mdl, "TEST");
 
     // Re-parse to verify valid CIF
-    var doc2 = try cif.readString(allocator, buf.items);
+    var doc2 = try cif.readString(allocator, buf.writer.buffered());
     defer doc2.deinit();
     try testing.expect(doc2.blocks.items.len > 0);
     const loop = doc2.blocks.items[0].findLoop("_atom_site.Cartn_x");

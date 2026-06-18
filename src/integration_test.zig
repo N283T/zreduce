@@ -23,12 +23,12 @@ test "end-to-end: tiny.cif placement" {
     try testing.expect(model.atoms.items.len > 5); // 5 heavy + H atoms
 
     // Write output and verify it's valid CIF
-    var buf: std.ArrayListUnmanaged(u8) = .empty;
-    defer buf.deinit(testing.allocator);
-    try writer.mmcif_writer.write(buf.writer(testing.allocator), &model, "TEST");
+    var buf: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer buf.deinit();
+    try writer.mmcif_writer.write(&buf.writer, &model, "TEST");
 
-    // Re-parse the output (slices in doc point into buf.items, so buf must stay alive)
-    var doc = try cif.readString(testing.allocator, buf.items);
+    // Re-parse the output (slices in doc point into buf.writer.buffered(), so buf must stay alive)
+    var doc = try cif.readString(testing.allocator, buf.writer.buffered());
     defer doc.deinit();
     try testing.expect(doc.blocks.items.len > 0);
 
@@ -132,11 +132,11 @@ test "end-to-end: JSON log output" {
     const result = try place.addHydrogens(&model, null, null);
     const n_added: u32 = @intCast(model.atoms.items.len - 5);
 
-    var buf: std.ArrayListUnmanaged(u8) = .empty;
-    defer buf.deinit(testing.allocator);
+    var buf: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer buf.deinit();
 
     try writer.json_writer.writeLog(
-        buf.writer(testing.allocator),
+        &buf.writer,
         "0.1.0",
         "tiny.cif",
         n_added,
@@ -146,9 +146,9 @@ test "end-to-end: JSON log output" {
         model.chains.items,
     );
 
-    const output = buf.items;
-    try testing.expect(std.mem.indexOf(u8, output, "\"version\"") != null);
-    try testing.expect(std.mem.indexOf(u8, output, "\"hydrogens_added\"") != null);
+    const output = buf.writer.buffered();
+    try testing.expect(std.mem.find(u8, output, "\"version\"") != null);
+    try testing.expect(std.mem.find(u8, output, "\"hydrogens_added\"") != null);
     _ = result;
 }
 
@@ -218,25 +218,25 @@ test "end-to-end: HIS sentinel cleanup matches output and JSON count" {
         if (atom.is_added and atom.is_hydrogen) final_h_count += 1;
     }
 
-    var cif_buf: std.ArrayListUnmanaged(u8) = .empty;
-    defer cif_buf.deinit(testing.allocator);
-    try writer.mmcif_writer.write(cif_buf.writer(testing.allocator), &model, "HIS");
+    var cif_buf: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer cif_buf.deinit();
+    try writer.mmcif_writer.write(&cif_buf.writer, &model, "HIS");
 
     var h_rows: u32 = 0;
-    var lines = std.mem.tokenizeScalar(u8, cif_buf.items, '\n');
+    var lines = std.mem.tokenizeScalar(u8, cif_buf.writer.buffered(), '\n');
     while (lines.next()) |line| {
         if (!std.mem.startsWith(u8, line, "ATOM ")) continue;
-        if (std.mem.indexOf(u8, line, " H ")) |_| {
+        if (std.mem.find(u8, line, " H ")) |_| {
             h_rows += 1;
         }
     }
 
     try testing.expectEqual(final_h_count, h_rows);
 
-    var json_buf: std.ArrayListUnmanaged(u8) = .empty;
-    defer json_buf.deinit(testing.allocator);
+    var json_buf: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer json_buf.deinit();
     try writer.json_writer.writeLog(
-        json_buf.writer(testing.allocator),
+        &json_buf.writer,
         "0.1.0",
         "his.cif",
         final_h_count,
@@ -245,5 +245,5 @@ test "end-to-end: HIS sentinel cleanup matches output and JSON count" {
         model.residues.items,
         model.chains.items,
     );
-    try testing.expect(std.mem.indexOf(u8, json_buf.items, "\"hydrogens_added\": 9") != null);
+    try testing.expect(std.mem.find(u8, json_buf.writer.buffered(), "\"hydrogens_added\": 9") != null);
 }

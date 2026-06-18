@@ -43,7 +43,7 @@ pub const ValidationResult = struct {
 /// Validate a model after placement and optimization.
 /// Returns a list of issues found. Caller must call deinit on the result.
 pub fn validateModel(allocator: std.mem.Allocator, mdl: *const Model) !ValidationResult {
-    var issues = std.ArrayListUnmanaged(Issue){};
+    var issues = std.ArrayListUnmanaged(Issue).empty;
     errdefer issues.deinit(allocator);
 
     for (mdl.atoms.items, 0..) |atom, idx| {

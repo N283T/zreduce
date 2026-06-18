@@ -226,7 +226,7 @@ pub fn parseModelsFromBlock(allocator: Allocator, block: *const cif.Block, filte
         return MmcifError.MissingCoordinateField;
     }
 
-    var entries = std.ArrayListUnmanaged(ModelEntry){};
+    var entries = std.ArrayListUnmanaged(ModelEntry).empty;
     errdefer {
         for (entries.items) |*e| e.model.deinit();
         entries.deinit(allocator);

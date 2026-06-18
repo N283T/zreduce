@@ -454,7 +454,7 @@ pub fn placeWaterHydrogens(
     const half_angle: f32 = 52.25;
 
     // Scratch buffer reused across altlocs and helper calls to avoid repeated allocs.
-    var tmp = std.ArrayListUnmanaged(u32){};
+    var tmp = std.ArrayListUnmanaged(u32).empty;
     defer tmp.deinit(mdl.allocator);
 
     for (targets) |alt| {

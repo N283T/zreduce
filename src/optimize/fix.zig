@@ -1,4 +1,8 @@
 const std = @import("std");
+
+fn defaultIo() std.Io {
+    return std.Io.Threaded.global_single_threaded.io();
+}
 const model_mod = @import("../model.zig");
 const mover_mod = @import("mover.zig");
 const fixed_string = @import("../model/fixed_string.zig");
@@ -80,15 +84,18 @@ pub const FixOverrides = struct {
 };
 
 pub fn parseFile(allocator: std.mem.Allocator, path: []const u8) !FixOverrides {
-    const file = try std.fs.cwd().openFile(path, .{});
-    defer file.close();
-    const source = try file.readToEndAlloc(allocator, 1024 * 1024);
+    const io = defaultIo();
+    const file = try std.Io.Dir.cwd().openFile(io, path, .{});
+    defer file.close(io);
+    var read_buf: [4096]u8 = undefined;
+    var reader = file.reader(io, &read_buf);
+    const source = try reader.interface.readAlloc(allocator, 1024 * 1024);
     defer allocator.free(source);
     return parseString(allocator, source);
 }
 
 pub fn parseString(allocator: std.mem.Allocator, source: []const u8) !FixOverrides {
-    var entries = std.ArrayListUnmanaged(Entry){};
+    var entries = std.ArrayListUnmanaged(Entry).empty;
     errdefer {
         for (entries.items) |entry| {
             allocator.free(entry.selector.chain_id);
@@ -405,10 +412,10 @@ test "dump movers lists symbolic states" {
         testing.allocator.free(movers);
     }
 
-    var buf: std.ArrayListUnmanaged(u8) = .empty;
-    defer buf.deinit(testing.allocator);
-    try dumpMovers(buf.writer(testing.allocator), &mdl, movers);
-    try testing.expect(std.mem.indexOf(u8, buf.items, "A:1 HIS his 0 HIE|HID|HIE_FLIP|HID_FLIP") != null);
+    var buf: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer buf.deinit();
+    try dumpMovers(&buf.writer, &mdl, movers);
+    try testing.expect(std.mem.find(u8, buf.writer.buffered(), "A:1 HIS his 0 HIE|HID|HIE_FLIP|HID_FLIP") != null);
 }
 
 test "applyFixes rejects out-of-range orientation" {

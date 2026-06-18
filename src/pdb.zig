@@ -388,7 +388,7 @@ pub fn parse(allocator: Allocator, source: []const u8) PdbError!PdbParseResult {
     var state = ParseState.init(allocator);
     errdefer state.deinit();
 
-    var records = std.ArrayListUnmanaged(PdbRecord){};
+    var records = std.ArrayListUnmanaged(PdbRecord).empty;
     errdefer records.deinit(allocator);
 
     var in_model_block = false;
@@ -480,19 +480,19 @@ pub fn parseModel(allocator: Allocator, source: []const u8) PdbError!Model {
 /// Parse a multi-model PDB file, returning one PdbModelEntry per model.
 /// For single-model files (no MODEL records), returns one entry.
 pub fn parseAll(allocator: Allocator, source: []const u8, filter: ModelFilter) PdbError!PdbMultiModelResult {
-    var entries = std.ArrayListUnmanaged(PdbModelEntry){};
+    var entries = std.ArrayListUnmanaged(PdbModelEntry).empty;
     errdefer {
         for (entries.items) |*e| e.deinit(allocator);
         entries.deinit(allocator);
     }
 
-    var header_records = std.ArrayListUnmanaged(PdbRecord){};
+    var header_records = std.ArrayListUnmanaged(PdbRecord).empty;
     errdefer header_records.deinit(allocator);
 
     var state = ParseState.init(allocator);
     errdefer state.deinit();
 
-    var cur_records = std.ArrayListUnmanaged(PdbRecord){};
+    var cur_records = std.ArrayListUnmanaged(PdbRecord).empty;
     errdefer cur_records.deinit(allocator);
 
     var in_model_block = false;
@@ -532,7 +532,7 @@ pub fn parseAll(allocator: Allocator, source: []const u8, filter: ModelFilter) P
                 in_model_block = true;
                 cur_model_num = model_num;
                 state = ParseState.init(allocator);
-                cur_records = .{};
+                cur_records = .empty;
             }
             continue;
         }
@@ -551,7 +551,7 @@ pub fn parseAll(allocator: Allocator, source: []const u8, filter: ModelFilter) P
 
                 // Reset for next model (don't deinit — ownership transferred)
                 state = ParseState.init(allocator);
-                cur_records = .{};
+                cur_records = .empty;
                 in_model_block = false;
 
                 // For .first, stop after one model
@@ -609,7 +609,7 @@ pub fn parseAll(allocator: Allocator, source: []const u8, filter: ModelFilter) P
             .records = cur_records,
         });
         state = ParseState.init(allocator);
-        cur_records = .{};
+        cur_records = .empty;
     }
 
     // Clean up spare state

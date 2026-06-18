@@ -288,235 +288,229 @@ test "elementSymbol returns correct symbols" {
 
 test "writeFixedFloat3 formats coordinates correctly" {
     var buf: [32]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
-    const w = fbs.writer();
+    var w: std.Io.Writer = .fixed(&buf);
 
     // Zero
-    fbs.reset();
-    try writeFixedFloat3(w, 0.0);
-    try testing.expectEqualStrings("0.000", fbs.getWritten());
+    w = .fixed(&buf);
+    try writeFixedFloat3(&w, 0.0);
+    try testing.expectEqualStrings("0.000", w.buffered());
 
     // Positive integer-valued
-    fbs.reset();
-    try writeFixedFloat3(w, 12.0);
-    try testing.expectEqualStrings("12.000", fbs.getWritten());
+    w = .fixed(&buf);
+    try writeFixedFloat3(&w, 12.0);
+    try testing.expectEqualStrings("12.000", w.buffered());
 
     // Positive with decimals
-    fbs.reset();
-    try writeFixedFloat3(w, 1.5);
-    try testing.expectEqualStrings("1.500", fbs.getWritten());
+    w = .fixed(&buf);
+    try writeFixedFloat3(&w, 1.5);
+    try testing.expectEqualStrings("1.500", w.buffered());
 
     // Rounding: 123.4567 -> 123.457
-    fbs.reset();
-    try writeFixedFloat3(w, 123.4567);
-    try testing.expectEqualStrings("123.457", fbs.getWritten());
+    w = .fixed(&buf);
+    try writeFixedFloat3(&w, 123.4567);
+    try testing.expectEqualStrings("123.457", w.buffered());
 
     // Negative value
-    fbs.reset();
-    try writeFixedFloat3(w, -4.321);
-    try testing.expectEqualStrings("-4.321", fbs.getWritten());
+    w = .fixed(&buf);
+    try writeFixedFloat3(&w, -4.321);
+    try testing.expectEqualStrings("-4.321", w.buffered());
 
     // Small negative near zero: -0.001
-    fbs.reset();
-    try writeFixedFloat3(w, -0.001);
-    try testing.expectEqualStrings("-0.001", fbs.getWritten());
+    w = .fixed(&buf);
+    try writeFixedFloat3(&w, -0.001);
+    try testing.expectEqualStrings("-0.001", w.buffered());
 
     // Leading zeros in fractional part: 1.005
-    fbs.reset();
-    try writeFixedFloat3(w, 1.005);
-    try testing.expectEqualStrings("1.005", fbs.getWritten());
+    w = .fixed(&buf);
+    try writeFixedFloat3(&w, 1.005);
+    try testing.expectEqualStrings("1.005", w.buffered());
 
     // Two leading zeros in fractional: 1.001
-    fbs.reset();
-    try writeFixedFloat3(w, 1.001);
-    try testing.expectEqualStrings("1.001", fbs.getWritten());
+    w = .fixed(&buf);
+    try writeFixedFloat3(&w, 1.001);
+    try testing.expectEqualStrings("1.001", w.buffered());
 }
 
 test "writeFixedFloat2 formats occupancy/b-factor correctly" {
     var buf: [32]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
-    const w = fbs.writer();
+    var w: std.Io.Writer = .fixed(&buf);
 
     // Zero
-    fbs.reset();
-    try writeFixedFloat2(w, 0.0);
-    try testing.expectEqualStrings("0.00", fbs.getWritten());
+    w = .fixed(&buf);
+    try writeFixedFloat2(&w, 0.0);
+    try testing.expectEqualStrings("0.00", w.buffered());
 
     // 1.0 (common occupancy)
-    fbs.reset();
-    try writeFixedFloat2(w, 1.0);
-    try testing.expectEqualStrings("1.00", fbs.getWritten());
+    w = .fixed(&buf);
+    try writeFixedFloat2(&w, 1.0);
+    try testing.expectEqualStrings("1.00", w.buffered());
 
     // 0.5 (half occupancy)
-    fbs.reset();
-    try writeFixedFloat2(w, 0.5);
-    try testing.expectEqualStrings("0.50", fbs.getWritten());
+    w = .fixed(&buf);
+    try writeFixedFloat2(&w, 0.5);
+    try testing.expectEqualStrings("0.50", w.buffered());
 
     // Rounding: 10.456 -> 10.46
-    fbs.reset();
-    try writeFixedFloat2(w, 10.456);
-    try testing.expectEqualStrings("10.46", fbs.getWritten());
+    w = .fixed(&buf);
+    try writeFixedFloat2(&w, 10.456);
+    try testing.expectEqualStrings("10.46", w.buffered());
 
     // Negative value
-    fbs.reset();
-    try writeFixedFloat2(w, -3.14);
-    try testing.expectEqualStrings("-3.14", fbs.getWritten());
+    w = .fixed(&buf);
+    try writeFixedFloat2(&w, -3.14);
+    try testing.expectEqualStrings("-3.14", w.buffered());
 
     // Leading zero in fractional part: 20.05
-    fbs.reset();
-    try writeFixedFloat2(w, 20.05);
-    try testing.expectEqualStrings("20.05", fbs.getWritten());
+    w = .fixed(&buf);
+    try writeFixedFloat2(&w, 20.05);
+    try testing.expectEqualStrings("20.05", w.buffered());
 
     // Large b-factor
-    fbs.reset();
-    try writeFixedFloat2(w, 99.99);
-    try testing.expectEqualStrings("99.99", fbs.getWritten());
+    w = .fixed(&buf);
+    try writeFixedFloat2(&w, 99.99);
+    try testing.expectEqualStrings("99.99", w.buffered());
 }
 
 test "writeFixedFloat3 does not panic on NaN, Inf, or overflow" {
     var buf: [64]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
-    const w = fbs.writer();
+    var w: std.Io.Writer = .fixed(&buf);
 
     // NaN falls back to std.fmt (must not panic)
-    fbs.reset();
-    try writeFixedFloat3(w, std.math.nan(f32));
-    try testing.expect(fbs.getWritten().len > 0);
+    w = .fixed(&buf);
+    try writeFixedFloat3(&w, std.math.nan(f32));
+    try testing.expect(w.buffered().len > 0);
 
     // Positive infinity falls back
-    fbs.reset();
-    try writeFixedFloat3(w, std.math.inf(f32));
-    try testing.expect(fbs.getWritten().len > 0);
+    w = .fixed(&buf);
+    try writeFixedFloat3(&w, std.math.inf(f32));
+    try testing.expect(w.buffered().len > 0);
 
     // Negative infinity falls back
-    fbs.reset();
-    try writeFixedFloat3(w, -std.math.inf(f32));
-    try testing.expect(fbs.getWritten().len > 0);
+    w = .fixed(&buf);
+    try writeFixedFloat3(&w, -std.math.inf(f32));
+    try testing.expect(w.buffered().len > 0);
 
     // Very large value (1e20) falls back
-    fbs.reset();
-    try writeFixedFloat3(w, 1.0e20);
-    try testing.expect(fbs.getWritten().len > 0);
+    w = .fixed(&buf);
+    try writeFixedFloat3(&w, 1.0e20);
+    try testing.expect(w.buffered().len > 0);
 }
 
 test "writeFixedFloat2 does not panic on NaN, Inf, or overflow" {
     var buf: [64]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
-    const w = fbs.writer();
+    var w: std.Io.Writer = .fixed(&buf);
 
     // NaN falls back to std.fmt (must not panic)
-    fbs.reset();
-    try writeFixedFloat2(w, std.math.nan(f32));
-    try testing.expect(fbs.getWritten().len > 0);
+    w = .fixed(&buf);
+    try writeFixedFloat2(&w, std.math.nan(f32));
+    try testing.expect(w.buffered().len > 0);
 
     // Positive infinity falls back
-    fbs.reset();
-    try writeFixedFloat2(w, std.math.inf(f32));
-    try testing.expect(fbs.getWritten().len > 0);
+    w = .fixed(&buf);
+    try writeFixedFloat2(&w, std.math.inf(f32));
+    try testing.expect(w.buffered().len > 0);
 
     // Negative infinity falls back
-    fbs.reset();
-    try writeFixedFloat2(w, -std.math.inf(f32));
-    try testing.expect(fbs.getWritten().len > 0);
+    w = .fixed(&buf);
+    try writeFixedFloat2(&w, -std.math.inf(f32));
+    try testing.expect(w.buffered().len > 0);
 
     // Very large value (1e20) falls back
-    fbs.reset();
-    try writeFixedFloat2(w, 1.0e20);
-    try testing.expect(fbs.getWritten().len > 0);
+    w = .fixed(&buf);
+    try writeFixedFloat2(&w, 1.0e20);
+    try testing.expect(w.buffered().len > 0);
 }
 
 test "writeCifValue quotes special-char-prefixed values" {
     // Test that values starting with [, ], {, } get quoted
     const cases = [_][]const u8{ "[bracket", "]close", "{brace", "}close" };
     for (cases) |input| {
-        var buf = std.ArrayList(u8).empty;
-        defer buf.deinit(testing.allocator);
-        try writeCifValue(buf.writer(testing.allocator), input);
-        const output = buf.items;
+        var buf: std.Io.Writer.Allocating = .init(testing.allocator);
+        defer buf.deinit();
+        try writeCifValue(&buf.writer, input);
+        const output = buf.writer.buffered();
         // All should be quoted (start with ' or ")
         try testing.expect(output[0] == '\'' or output[0] == '"');
     }
     // Plain value should NOT be quoted
     {
-        var buf = std.ArrayList(u8).empty;
-        defer buf.deinit(testing.allocator);
-        try writeCifValue(buf.writer(testing.allocator), "hello");
-        try testing.expectEqualStrings("hello", buf.items);
+        var buf: std.Io.Writer.Allocating = .init(testing.allocator);
+        defer buf.deinit();
+        try writeCifValue(&buf.writer, "hello");
+        try testing.expectEqualStrings("hello", buf.writer.buffered());
     }
     // CIF null markers must remain bare for round-tripping preserved data.
     for ([_][]const u8{ ".", "?" }) |marker| {
-        var buf = std.ArrayList(u8).empty;
-        defer buf.deinit(testing.allocator);
-        try writeCifValue(buf.writer(testing.allocator), marker);
-        try testing.expectEqualStrings(marker, buf.items);
+        var buf: std.Io.Writer.Allocating = .init(testing.allocator);
+        defer buf.deinit();
+        try writeCifValue(&buf.writer, marker);
+        try testing.expectEqualStrings(marker, buf.writer.buffered());
     }
 }
 
 test "writeCifValue uses semicolon field when value has both quote types" {
     const val = "it's a \"test\"";
-    var buf = std.ArrayList(u8).empty;
-    defer buf.deinit(testing.allocator);
-    try writeCifValue(buf.writer(testing.allocator), val);
+    var buf: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer buf.deinit();
+    try writeCifValue(&buf.writer, val);
     // Should start with newline+semicolon and end with newline+semicolon+newline
-    try testing.expect(std.mem.startsWith(u8, buf.items, "\n;"));
-    try testing.expect(std.mem.endsWith(u8, buf.items, ";\n"));
+    try testing.expect(std.mem.startsWith(u8, buf.writer.buffered(), "\n;"));
+    try testing.expect(std.mem.endsWith(u8, buf.writer.buffered(), ";\n"));
     // The original value must be preserved verbatim
-    try testing.expect(std.mem.indexOf(u8, buf.items, val) != null);
+    try testing.expect(std.mem.find(u8, buf.writer.buffered(), val) != null);
 }
 
 test "writeCifValueInLoop avoids semicolon field when value has both quote types" {
     const val = "it's a \"test\"";
-    var buf = std.ArrayList(u8).empty;
-    defer buf.deinit(testing.allocator);
-    try writeCifValueInLoop(buf.writer(testing.allocator), val);
+    var buf: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer buf.deinit();
+    try writeCifValueInLoop(&buf.writer, val);
     // Must NOT produce a semicolon text field (no leading newline+semicolon)
-    try testing.expect(!std.mem.startsWith(u8, buf.items, "\n;"));
+    try testing.expect(!std.mem.startsWith(u8, buf.writer.buffered(), "\n;"));
     // Must be wrapped in double-quotes
-    try testing.expect(std.mem.startsWith(u8, buf.items, "\""));
-    try testing.expect(std.mem.endsWith(u8, buf.items, "\""));
+    try testing.expect(std.mem.startsWith(u8, buf.writer.buffered(), "\""));
+    try testing.expect(std.mem.endsWith(u8, buf.writer.buffered(), "\""));
     // Internal double-quote should have been replaced (no raw " inside)
-    const inner = buf.items[1 .. buf.items.len - 1];
-    try testing.expect(std.mem.indexOf(u8, inner, "\"") == null);
+    const inner = buf.writer.buffered()[1 .. buf.writer.buffered().len - 1];
+    try testing.expect(std.mem.find(u8, inner, "\"") == null);
 }
 
 test "writeFixedFloat3 no negative zero" {
     var buf: [32]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
-    const w = fbs.writer();
+    var w: std.Io.Writer = .fixed(&buf);
 
     // -0.0004 rounds to 0 → must output "0.000", not "-0.000"
-    fbs.reset();
-    try writeFixedFloat3(w, -0.0004);
-    try testing.expectEqualStrings("0.000", fbs.getWritten());
+    w = .fixed(&buf);
+    try writeFixedFloat3(&w, -0.0004);
+    try testing.expectEqualStrings("0.000", w.buffered());
 
     // -0.0 → "0.000"
-    fbs.reset();
-    try writeFixedFloat3(w, -0.0);
-    try testing.expectEqualStrings("0.000", fbs.getWritten());
+    w = .fixed(&buf);
+    try writeFixedFloat3(&w, -0.0);
+    try testing.expectEqualStrings("0.000", w.buffered());
 
     // A genuine small negative should still carry the minus sign
-    fbs.reset();
-    try writeFixedFloat3(w, -0.001);
-    try testing.expectEqualStrings("-0.001", fbs.getWritten());
+    w = .fixed(&buf);
+    try writeFixedFloat3(&w, -0.001);
+    try testing.expectEqualStrings("-0.001", w.buffered());
 }
 
 test "writeFixedFloat2 no negative zero" {
     var buf: [32]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
-    const w = fbs.writer();
+    var w: std.Io.Writer = .fixed(&buf);
 
     // -0.004 rounds to 0 → must output "0.00", not "-0.00"
-    fbs.reset();
-    try writeFixedFloat2(w, -0.004);
-    try testing.expectEqualStrings("0.00", fbs.getWritten());
+    w = .fixed(&buf);
+    try writeFixedFloat2(&w, -0.004);
+    try testing.expectEqualStrings("0.00", w.buffered());
 
     // -0.0 → "0.00"
-    fbs.reset();
-    try writeFixedFloat2(w, -0.0);
-    try testing.expectEqualStrings("0.00", fbs.getWritten());
+    w = .fixed(&buf);
+    try writeFixedFloat2(&w, -0.0);
+    try testing.expectEqualStrings("0.00", w.buffered());
 
     // A genuine small negative should still carry the minus sign
-    fbs.reset();
-    try writeFixedFloat2(w, -0.01);
-    try testing.expectEqualStrings("-0.01", fbs.getWritten());
+    w = .fixed(&buf);
+    try writeFixedFloat2(&w, -0.01);
+    try testing.expectEqualStrings("-0.01", w.buffered());
 }

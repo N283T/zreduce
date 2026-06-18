@@ -1,4 +1,8 @@
 const std = @import("std");
+
+fn defaultIo() std.Io {
+    return std.Io.Threaded.global_single_threaded.io();
+}
 const model_mod = @import("../model.zig");
 const fixed_string = @import("../model/fixed_string.zig");
 
@@ -101,15 +105,18 @@ pub const ProtonationOverrides = struct {
 };
 
 pub fn parseFile(allocator: std.mem.Allocator, path: []const u8) !ProtonationOverrides {
-    const file = try std.fs.cwd().openFile(path, .{});
-    defer file.close();
-    const source = try file.readToEndAlloc(allocator, 1024 * 1024);
+    const io = defaultIo();
+    const file = try std.Io.Dir.cwd().openFile(io, path, .{});
+    defer file.close(io);
+    var read_buf: [4096]u8 = undefined;
+    var reader = file.reader(io, &read_buf);
+    const source = try reader.interface.readAlloc(allocator, 1024 * 1024);
     defer allocator.free(source);
     return parseString(allocator, source);
 }
 
 pub fn parseString(allocator: std.mem.Allocator, source: []const u8) !ProtonationOverrides {
-    var entries = std.ArrayListUnmanaged(Entry){};
+    var entries = std.ArrayListUnmanaged(Entry).empty;
     errdefer {
         for (entries.items) |entry| allocator.free(entry.selector.chain_id);
         entries.deinit(allocator);
@@ -204,7 +211,7 @@ fn parseSelector(allocator: std.mem.Allocator, token: []const u8) !ResidueSelect
 fn parseState(comp_tok: []const u8, state_tok: []const u8) !ResidueState {
     var comp_buf: [3]u8 = .{ ' ', ' ', ' ' };
     for (comp_tok[0..@min(comp_tok.len, 3)], 0..) |c, i| comp_buf[i] = std.ascii.toUpper(c);
-    const comp_id = std.mem.trimRight(u8, &comp_buf, " ");
+    const comp_id = std.mem.trimEnd(u8, &comp_buf, " ");
 
     if (std.mem.eql(u8, comp_id, "HIS")) {
         if (std.ascii.eqlIgnoreCase(state_tok, "AUTO")) return .{ .his = .auto };

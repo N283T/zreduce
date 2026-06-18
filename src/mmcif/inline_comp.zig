@@ -94,7 +94,7 @@ pub fn parseInlineComponents(allocator: Allocator, block: *const cif.Block) !?cc
             }
 
             const gop = try atom_groups.getOrPut(comp_id);
-            if (!gop.found_existing) gop.value_ptr.* = .{};
+            if (!gop.found_existing) gop.value_ptr.* = .empty;
             try gop.value_ptr.append(allocator, atom);
         }
     }
@@ -141,7 +141,7 @@ pub fn parseInlineComponents(allocator: Allocator, block: *const cif.Block) !?cc
                 false;
 
             const gop = try bond_groups.getOrPut(comp_id);
-            if (!gop.found_existing) gop.value_ptr.* = .{};
+            if (!gop.found_existing) gop.value_ptr.* = .empty;
             try gop.value_ptr.append(allocator, RawBond{
                 .atom1 = atom1,
                 .atom2 = atom2,
@@ -185,7 +185,7 @@ pub fn parseInlineComponents(allocator: Allocator, block: *const cif.Block) !?cc
         errdefer allocator.free(owned_atoms);
 
         // Resolve bonds to index-based CompBond.
-        var resolved_bonds = std.ArrayListUnmanaged(ccd_mod.CompBond){};
+        var resolved_bonds = std.ArrayListUnmanaged(ccd_mod.CompBond).empty;
         defer resolved_bonds.deinit(allocator);
 
         if (bond_groups.get(comp_id)) |raw_bond_list| {

@@ -20,7 +20,7 @@ const scoreMover = scoring_mod.scoreMover;
 const scoreMoverWithPositions = scoring_mod.scoreMoverWithPositions;
 
 pub const OptConfig = struct {
-    n_threads: u32 = 0, // 0 = auto-detect CPU count; batch mode sets to 1
+    n_threads: u32 = 0, // Reserved for future optimizer-internal parallelism.
     brute_force_limit: u64 = 100_000,
     interaction_cutoff: f32 = 6.0, // Angstrom -- max distance for mover interaction
     scoring_params: scorer_mod.ScoringParams = .{},
@@ -33,41 +33,6 @@ pub const OptResult = struct {
     total_cliques: u32 = 0,
 };
 
-/// Arguments shared by parallel singleton and fine-search tasks.
-/// Reused for both phases so a single thread pool handles the whole optimization.
-const ParallelTaskArgs = struct {
-    movers: []Mover,
-    mover_idx: u32,
-    model: *Model,
-    config: OptConfig,
-    score_ctx: *const ScoreContext,
-    allocator: Allocator,
-    /// Output field for fine-search: set by fineSearchMover to the best fine positions
-    /// (allocated with `allocator`), or null if the coarse best is retained.
-    /// The main thread applies and frees this after all tasks join.
-    best_fine_positions: ?[]math_mod.Vec3(f32) = null,
-};
-
-/// Thread pool work function for singleton optimization.
-/// Uses scoreMoverWithPositions to avoid writing to the shared model during scoring,
-/// eliminating data races when multiple singletons run concurrently.
-/// Only writes `best_orientation` (a per-mover field with no cross-mover aliasing).
-fn parallelSingleton(args: *const ParallelTaskArgs) void {
-    var scratch = std.ArrayListUnmanaged(u32).empty;
-    defer scratch.deinit(args.allocator);
-    optimizeSingleton(args.movers, args.mover_idx, args.model, args.config, args.score_ctx, args.allocator, &scratch);
-}
-
-/// Thread pool work function for fine search.
-/// Uses scoreMoverWithPositions to avoid writing to the shared model during scoring.
-/// Stores the best fine positions in args.best_fine_positions (if better than coarse best);
-/// the main thread applies and frees them after all tasks join, avoiding write-write races.
-fn parallelFineSearch(args: *ParallelTaskArgs) void {
-    var scratch = std.ArrayListUnmanaged(u32).empty;
-    defer scratch.deinit(args.allocator);
-    fineSearchMover(args.allocator, args.movers, args.mover_idx, args.model, args.config, args.score_ctx, &scratch, &args.best_fine_positions);
-}
-
 /// Optimize all movers: find best orientations using clique-based search.
 pub fn optimize(
     allocator: Allocator,
@@ -77,10 +42,6 @@ pub fn optimize(
 ) !OptResult {
     var result = OptResult{};
 
-    const n_threads: u32 = if (config.n_threads > 0)
-        config.n_threads
-    else
-        @intCast(@min(std.Thread.getCpuCount() catch 1, 8));
 
     var score_ctx = try buildScoreContext(allocator, movers, model.atoms.items);
     defer score_ctx.deinit(allocator);
@@ -106,7 +67,7 @@ pub fn optimize(
 
     result.total_cliques = @intCast(cliques.len);
 
-    // Collect singleton mover indices for parallel dispatch after sequential cliques.
+    // Collect singleton mover indices for a dedicated pass after sequential cliques.
     var singleton_indices = std.ArrayListUnmanaged(u32).empty;
     defer singleton_indices.deinit(allocator);
     // Pre-allocate worst-case capacity so that the OOM fallback path's append
@@ -116,7 +77,7 @@ pub fn optimize(
     for (cliques) |clq| {
         if (allFixed(movers, clq)) continue;
         if (clq.len == 1) {
-            // Defer singletons for parallel dispatch below.
+            // Defer singletons for the singleton pass below.
             try singleton_indices.append(allocator, clq[0]);
             result.n_singletons += 1;
         } else if (totalStates(movers, clq) <= config.brute_force_limit) {
@@ -137,45 +98,13 @@ pub fn optimize(
         }
     }
 
-    // Dispatch singleton optimization in parallel (or sequentially when not worth the overhead).
+    // Dispatch singleton optimization sequentially.
+    // TODO: restore optimizer-internal parallelism with std.Io.Group after the Zig 0.16 migration.
     // Thread safety: optimizeSingleton uses scoreMoverWithPositions which reads other movers'
     // atoms from model.atoms but does NOT write to model.atoms during scoring. The only
     // write is to m.best_orientation (a per-mover field; each thread owns a distinct mover).
-    const use_parallel_singleton = n_threads > 1 and singleton_indices.items.len > 1;
-    const use_parallel_fine = n_threads > 1 and movers.len > 1;
-    const need_pool = use_parallel_singleton or use_parallel_fine;
-
-    // Allocate one pool and reuse it for both the singleton and fine-search phases.
-    var pool: std.Thread.Pool = undefined;
-    if (need_pool) {
-        try pool.init(.{ .allocator = allocator, .n_jobs = n_threads });
-    }
-    defer if (need_pool) pool.deinit();
-
-    if (use_parallel_singleton) {
-        // Build per-task arg structs (one per singleton) on the heap so thread lifetimes are safe.
-        const singleton_args = try allocator.alloc(ParallelTaskArgs, singleton_indices.items.len);
-        defer allocator.free(singleton_args);
-        for (singleton_indices.items, 0..) |mi, i| {
-            singleton_args[i] = .{
-                .movers = movers,
-                .mover_idx = mi,
-                .model = model,
-                .config = config,
-                .score_ctx = &score_ctx,
-                .allocator = allocator,
-            };
-        }
-
-        var wg = std.Thread.WaitGroup{};
-        for (singleton_args) |*args| {
-            pool.spawnWg(&wg, parallelSingleton, .{args});
-        }
-        wg.wait();
-    } else {
-        for (singleton_indices.items) |mi| {
-            optimizeSingleton(movers, mi, model, config, &score_ctx, allocator, &scratch);
-        }
+    for (singleton_indices.items) |mi| {
+        optimizeSingleton(movers, mi, model, config, &score_ctx, allocator, &scratch);
     }
 
     // Apply best coarse orientations
@@ -184,54 +113,14 @@ pub fn optimize(
         m.current_orientation = m.best_orientation;
     }
 
-    // Fine search phase: refine each mover around its coarse best, in parallel when worthwhile.
-    // The gate uses n_threads > 1 and movers.len > 1 (independent of singleton count).
-    // Thread safety: fineSearchMover uses scoreMoverWithPositions; the only write to
-    // model.atoms happens after all threads join (the sequential apply-best loop below).
-    // Note: fine search parallelism is integration-tested via the full benchmark
-    // (examples/data structures with 500+ movers) rather than in unit tests, since
-    // constructing movers with fine orientations requires significant test infrastructure.
-    if (use_parallel_fine) {
-        const fine_args = try allocator.alloc(ParallelTaskArgs, movers.len);
-        defer allocator.free(fine_args);
-        for (0..movers.len) |mi| {
-            fine_args[mi] = .{
-                .movers = movers,
-                .mover_idx = @intCast(mi),
-                .model = model,
-                .config = config,
-                .score_ctx = &score_ctx,
-                .allocator = allocator,
-                // best_fine_positions defaults to null; set by parallelFineSearch.
-            };
-        }
-
-        var wg = std.Thread.WaitGroup{};
-        for (fine_args) |*args| {
-            pool.spawnWg(&wg, parallelFineSearch, .{args});
-        }
-        wg.wait();
-
-        // Apply fine-search results sequentially after all threads have joined.
-        // This avoids write-write races on model.atoms during parallel scoring.
-        for (fine_args) |*args| {
-            if (args.best_fine_positions) |positions| {
-                defer allocator.free(positions);
-                const mi = args.mover_idx;
-                for (movers[mi].atom_indices, 0..) |ai, j| {
-                    model.atoms.items[ai].pos = positions[j];
-                }
-            }
-        }
-    } else {
-        for (0..movers.len) |mi| {
-            var best_fine_positions: ?[]math_mod.Vec3(f32) = null;
-            fineSearchMover(allocator, movers, @intCast(mi), model, config, &score_ctx, &scratch, &best_fine_positions);
-            if (best_fine_positions) |positions| {
-                defer allocator.free(positions);
-                for (movers[mi].atom_indices, 0..) |ai, j| {
-                    model.atoms.items[ai].pos = positions[j];
-                }
+    // Fine search phase: refine each mover around its coarse best.
+    for (0..movers.len) |mi| {
+        var best_fine_positions: ?[]math_mod.Vec3(f32) = null;
+        fineSearchMover(allocator, movers, @intCast(mi), model, config, &score_ctx, &scratch, &best_fine_positions);
+        if (best_fine_positions) |positions| {
+            defer allocator.free(positions);
+            for (movers[mi].atom_indices, 0..) |ai, j| {
+                model.atoms.items[ai].pos = positions[j];
             }
         }
     }
@@ -986,7 +875,7 @@ test "mover-vs-mover clash scoring picks correct orientations" {
     try testing.expectEqual(@as(u16, 1), movers[1].best_orientation);
 }
 
-test "optimize() with multiple independent singletons uses parallel path and gets correct results" {
+test "optimize() with multiple independent singletons gets correct results" {
     // Place N independent movers far apart (200 Å apart on y-axis) so they form N singleton cliques.
     // Each mover has its own nearby obstacle:
     //   obstacle_i at (0, y_i, 0) with VDW 1.7

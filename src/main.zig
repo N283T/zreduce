@@ -4,6 +4,10 @@ const build_options = @import("build_options");
 
 const Allocator = std.mem.Allocator;
 
+fn defaultIo() std.Io {
+    return std.Io.Threaded.global_single_threaded.io();
+}
+
 const RunConfig = struct {
     input_path: []const u8,
     output_path: ?[]const u8 = null,
@@ -324,12 +328,10 @@ fn printRunUsage() void {
     , .{});
 }
 
-pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+pub fn main(init: std.process.Init) !void {
+    const allocator = init.gpa;
 
-    const args = std.process.argsAlloc(std.heap.page_allocator) catch {
+    const args = init.minimal.args.toSlice(init.arena.allocator()) catch {
         std.debug.print("Fatal: cannot read process arguments\n", .{});
         std.process.exit(2);
     };
@@ -538,6 +540,7 @@ fn printCompileDictUsage() void {
 }
 
 fn compileDictSubcommand(allocator: Allocator, args: []const []const u8) void {
+    const io = defaultIo();
     const config = parseCompileDictArgs(args) orelse return;
 
     // Read input
@@ -562,22 +565,22 @@ fn compileDictSubcommand(allocator: Allocator, args: []const []const u8) void {
 
     // Write binary
     const output_path = config.output_path.?;
-    const file = std.fs.cwd().createFile(output_path, .{}) catch |err| {
+    const file = std.Io.Dir.cwd().createFile(io, output_path, .{}) catch |err| {
         std.debug.print("Error: cannot create '{s}': {s}\n", .{ output_path, @errorName(err) });
         std.process.exit(1);
     };
-    defer file.close();
+    defer file.close(io);
 
     var write_buf: [65536]u8 = undefined;
-    var file_writer = file.writer(&write_buf);
+    var file_writer = file.writer(io, &write_buf);
     zreduce.ccd_binary.writeDict(&file_writer.interface, &dict) catch |err| {
         std.debug.print("Error: failed to write binary dictionary: {s}\n", .{@errorName(err)});
-        std.fs.cwd().deleteFile(output_path) catch {};
+        std.Io.Dir.cwd().deleteFile(io, output_path) catch {};
         std.process.exit(1);
     };
     file_writer.interface.flush() catch |err| {
         std.debug.print("Error: failed to flush output: {s}\n", .{@errorName(err)});
-        std.fs.cwd().deleteFile(output_path) catch {};
+        std.Io.Dir.cwd().deleteFile(io, output_path) catch {};
         std.process.exit(1);
     };
 
